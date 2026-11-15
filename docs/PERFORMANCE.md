@@ -4,7 +4,7 @@ RoadMind is designed to minimize its load on BeamNG.drive.
 
 ## Current target budgets
 
-| Subsystem | Workload | Update rate | Ray directions / second |
+| Subsystem | Workload | Update rate | Scene raycast queries / second |
 |---|---:|---:|---:|
 | Forward LiDAR | 51 rays | 4 Hz | 204 |
 | Five radars | 17 rays total | 2 Hz | 34 |
@@ -13,7 +13,7 @@ RoadMind is designed to minimize its load on BeamNG.drive.
 | IMU / GNSS / odometry | vehicle-state sampling | 5 Hz | 0 |
 | **Total** | | | **310** |
 
-A ray direction may use one static and one dynamic query. The rough upper bound is therefore about 620 raycast calls per second. This is a workload estimate, not a measured CPU percentage.
+Each ray direction currently produces one Game Engine scene-raycast query. The target workload is about 310 queries per second. This is a workload estimate, not a measured CPU percentage.
 
 ## Scheduling
 
@@ -23,7 +23,7 @@ A ray direction may use one static and one dynamic query. The rough upper bound 
 - Camera poses, IMU, GNSS-like position and odometry refresh at 5 Hz.
 - The complete suite is disabled until the player activates it.
 - Sensor data is cached between updates.
-- The Game Engine renderer redraws cached data but performs no raycasts.
+- Game Engine scene raycasts run only on incoming sensor-scan updates; the render loop redraws cached data and performs no raycasts.
 
 ## Rendering budget
 
