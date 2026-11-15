@@ -8,7 +8,7 @@ The page reads the selected game language and displays Russian or English. Chang
 
 | Profile | LiDAR | Radar | Ultrasonic | Estimated scene queries/s |
 |---|---|---|---|---:|
-| Economy (default) | 9 rays × 1 Hz | 1 ray per radar × 1 Hz | 1 ray per sensor × 1 Hz | 26 |
+| Economy (default) | 9 rays × 1 Hz | Disabled | Disabled | 9 |
 | Balanced | 26 rays × 2 Hz | up to 2 rays per radar × 1 Hz | 1 ray per sensor × 1 Hz | 74 |
 | High | 51 rays × 4 Hz | 17 rays × 2 Hz | 3 rays per sensor × 2 Hz | 310 |
 
@@ -25,4 +25,4 @@ Hiding a 3D overlay does not stop its sensor scans. Turn off the sensor group it
 
 ## Defaults
 
-RoadMind starts with scanning off. When started, the default profile is Economy (about 26 scene queries/s). Only the LiDAR overlay is visible initially; radar, ultrasonic, camera and localization overlays are hidden to keep debug drawing light.
+RoadMind starts with scanning off. When started, the default Economy profile runs only the forward LiDAR (about 9 scene queries/s). Radar and ultrasonic are disabled until enabled manually or by switching to Balanced/High. Only the LiDAR overlay is visible initially; radar, ultrasonic, camera and localization overlays are hidden to keep debug drawing light.
