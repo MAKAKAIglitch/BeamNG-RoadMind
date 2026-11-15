@@ -8,13 +8,13 @@ local MAX_FRAME_AGE = 1.1
 local SETTINGS_FILE = "/settings/roadmind.json"
 
 local DEFAULT_SETTINGS = {
-  preset = "balanced",
-  lidarEnabled = true, lidarQuality = "balanced", lidarHz = 2, lidarRange = 65,
-  radarEnabled = true, radarDensity = "medium", radarHz = 1,
+  preset = "economy",
+  lidarEnabled = true, lidarQuality = "low", lidarHz = 1, lidarRange = 45,
+  radarEnabled = true, radarDensity = "low", radarHz = 1,
   ultrasonicEnabled = true, ultrasonicDensity = "single", ultrasonicHz = 1,
-  poseHz = 4,
-  showLidar = true, showRadar = true, showUltrasonic = true,
-  showCameras = false, showLocalization = true
+  poseHz = 2,
+  showLidar = true, showRadar = false, showUltrasonic = false,
+  showCameras = false, showLocalization = false
 }
 
 local PRESETS = {
