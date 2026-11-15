@@ -10,8 +10,8 @@ local CONFIG = {
     minRange = 0.35,
     horizontalFov = math.rad(120),
     verticalFov = math.rad(16),
-    horizontalSamples = 17,
-    verticalSamples = 3,
+    horizontalSamples = 9,
+    verticalSamples = 1,
     interval = 0.25,
     forwardOffset = 0.85,
     lateralOffset = 0,
@@ -28,6 +28,7 @@ local CONFIG = {
 local sensorSettings = {
   lidarEnabled = true,
   lidarQuality = "low",
+  lidarPointCount = 9,
   lidarHz = 1,
   lidarRange = 45,
   radarEnabled = false,
@@ -265,6 +266,8 @@ local function scanLidar(frame)
     horizontalFov = math.deg(cfg.horizontalFov),
     verticalFov = math.deg(cfg.verticalFov),
     range = cfg.maxRange,
+    forward = vectorToPreciseTable(mount.direction),
+    right = vectorToPreciseTable(mount.right),
     rays = rays,
     rayCount = #rays
   }
@@ -546,6 +549,11 @@ local function applySensorSettings(source)
     sensorSettings.ultrasonicDensity = source.ultrasonicDensity
   end
 
+  if type(source.lidarPointCount) == "number" and source.lidarPointCount >= 9
+      and source.lidarPointCount <= 129 then
+    sensorSettings.lidarPointCount = math.floor((source.lidarPointCount - 9) / 4 + 0.5) * 4 + 9
+  end
+
   if source.lidarHz == 1 or source.lidarHz == 2 or source.lidarHz == 4 then
     sensorSettings.lidarHz = source.lidarHz
   end
@@ -562,12 +570,12 @@ local function applySensorSettings(source)
   end
 
   local lidarResolution = {
-    low = {horizontal = 9, vertical = 1},
-    balanced = {horizontal = 13, vertical = 2},
-    high = {horizontal = 17, vertical = 3}
+    low = {vertical = 1},
+    balanced = {vertical = 2},
+    high = {vertical = 3}
   }
   local resolution = lidarResolution[sensorSettings.lidarQuality]
-  CONFIG.lidar.horizontalSamples = resolution.horizontal
+  CONFIG.lidar.horizontalSamples = sensorSettings.lidarPointCount
   CONFIG.lidar.verticalSamples = resolution.vertical
   CONFIG.lidar.maxRange = sensorSettings.lidarRange
   CONFIG.lidar.interval = 1 / sensorSettings.lidarHz
