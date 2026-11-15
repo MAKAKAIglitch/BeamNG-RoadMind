@@ -6,13 +6,13 @@ This document describes the current Drive-compatible sensor layout and the exact
 
 | System | Quantity | Placement | Coverage / range | Update |
 |---|---:|---|---|---:|
-| Forward LiDAR | 1 | Front center | 120° × 16°, 65 m | 4 Hz |
+| Forward LiDAR | 1 | Front roof / windshield area | 120° × 16°, 65 m | 4 Hz |
 | Front long-range radar | 1 | Front center | 28° horizontal, 160 m | 2 Hz |
 | Corner radars | 4 | Front-left/right, rear-left/right | 58°, 50–65 m | 2 Hz |
 | Front ultrasonic | 4 | Front bumper | 5 m, 3-ray beam | 2 Hz |
 | Rear ultrasonic | 4 | Rear bumper | 5 m, 3-ray beam | 2 Hz |
 | Corner ultrasonic | 4 | Vehicle corners | 5 m, 3-ray beam | 2 Hz |
-| Cameras | 7 | Front, sides, rear and rear corners | Individual frustums, 22–85 m visualization range | 5 Hz pose refresh |
+| Cameras | 7 | Windshield, side mirrors, rear glass and rear corners | Individual frustums, 22–85 m visualization range | 5 Hz pose refresh |
 | IMU | 1 | Near vehicle center | Acceleration signals + estimated yaw rate | 5 Hz |
 | GNSS-like position | 1 | Roof | BeamNG world position and altitude | 5 Hz |
 | Wheel odometry | 1 data source | Vehicle electrics | Wheel speed and odometer | 5 Hz sample |

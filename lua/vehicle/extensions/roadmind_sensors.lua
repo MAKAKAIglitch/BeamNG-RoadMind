@@ -13,9 +13,9 @@ local CONFIG = {
     horizontalSamples = 17,
     verticalSamples = 3,
     interval = 0.25,
-    forwardOffset = 2.15,
+    forwardOffset = 0.85,
     lateralOffset = 0,
-    upOffset = 0.78
+    upOffset = 1.35
   },
 
   radarInterval = 0.5,
@@ -29,10 +29,10 @@ local CONFIG = {
 -- getDirectionVector() and getDirectionVectorUp().
 local RADARS = {
   {name = "Front long-range", forward = 2.15, lateral = 0, up = 0.48, yaw = 0, fov = 28, range = 160, rays = 5},
-  {name = "Front left corner", forward = 1.65, lateral = -0.88, up = 0.48, yaw = -52, fov = 58, range = 65, rays = 3},
-  {name = "Front right corner", forward = 1.65, lateral = 0.88, up = 0.48, yaw = 52, fov = 58, range = 65, rays = 3},
-  {name = "Rear left corner", forward = -1.65, lateral = -0.88, up = 0.48, yaw = -128, fov = 58, range = 50, rays = 3},
-  {name = "Rear right corner", forward = -1.65, lateral = 0.88, up = 0.48, yaw = 128, fov = 58, range = 50, rays = 3}
+  {name = "Front left corner", forward = 1.90, lateral = -0.98, up = 0.50, yaw = -52, fov = 58, range = 65, rays = 3},
+  {name = "Front right corner", forward = 1.90, lateral = 0.98, up = 0.50, yaw = 52, fov = 58, range = 65, rays = 3},
+  {name = "Rear left corner", forward = -1.90, lateral = -0.98, up = 0.50, yaw = -128, fov = 58, range = 50, rays = 3},
+  {name = "Rear right corner", forward = -1.90, lateral = 0.98, up = 0.50, yaw = 128, fov = 58, range = 50, rays = 3}
 }
 
 local ULTRASONICS = {
@@ -55,13 +55,13 @@ local ULTRASONICS = {
 -- Camera frustums are geometric coverage visualizations. BeamNG.drive's
 -- regular mod Lua API does not provide the BeamNG.tech RGB camera stream.
 local CAMERAS = {
-  {name = "Front narrow", forward = 2.05, lateral = 0, up = 0.82, yaw = 0, hfov = 38, vfov = 24, range = 85},
-  {name = "Front wide", forward = 2.05, lateral = 0, up = 0.76, yaw = 0, hfov = 120, vfov = 62, range = 32},
-  {name = "Left side", forward = 0.35, lateral = -0.96, up = 0.78, yaw = -90, hfov = 100, vfov = 58, range = 24},
-  {name = "Right side", forward = 0.35, lateral = 0.96, up = 0.78, yaw = 90, hfov = 100, vfov = 58, range = 24},
-  {name = "Rear wide", forward = -2.05, lateral = 0, up = 0.80, yaw = 180, hfov = 120, vfov = 62, range = 30},
-  {name = "Rear left", forward = -1.45, lateral = -0.86, up = 0.80, yaw = -140, hfov = 90, vfov = 55, range = 22},
-  {name = "Rear right", forward = -1.45, lateral = 0.86, up = 0.80, yaw = 140, hfov = 90, vfov = 55, range = 22}
+  {name = "Front narrow", forward = 1.20, lateral = 0, up = 1.18, yaw = 0, hfov = 38, vfov = 24, range = 85},
+  {name = "Front wide", forward = 1.10, lateral = 0, up = 1.12, yaw = 0, hfov = 120, vfov = 62, range = 32},
+  {name = "Left side", forward = 0.25, lateral = -1.02, up = 1.02, yaw = -90, hfov = 100, vfov = 58, range = 24},
+  {name = "Right side", forward = 0.25, lateral = 1.02, up = 1.02, yaw = 90, hfov = 100, vfov = 58, range = 24},
+  {name = "Rear wide", forward = -1.60, lateral = 0, up = 1.15, yaw = 180, hfov = 120, vfov = 62, range = 30},
+  {name = "Rear left", forward = -1.25, lateral = -0.92, up = 1.05, yaw = -140, hfov = 90, vfov = 55, range = 22},
+  {name = "Rear right", forward = -1.25, lateral = 0.92, up = 1.05, yaw = 140, hfov = 90, vfov = 55, range = 22}
 }
 
 local state = {
