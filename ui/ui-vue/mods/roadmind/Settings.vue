@@ -152,7 +152,7 @@
 </template>
 
 <script setup>
-import { onMounted, onBeforeUnmount, ref } from "vue"
+import { computed, onMounted, onBeforeUnmount, ref } from "vue"
 import { lua } from "@/bridge"
 import {
   BngButton,
