@@ -1,6 +1,6 @@
 # RoadMind settings
 
-Open the in-game page at **ESC → System → Mods → RoadMind** in BeamNG.drive 0.39+.
+Open the in-game page at **ESC → Mods → RoadMind** in BeamNG.drive 0.39+.
 
 The page reads the selected game language and displays Russian or English. Changes are saved to `/settings/roadmind.json` and applied to the active vehicle while scanning is enabled.
 
