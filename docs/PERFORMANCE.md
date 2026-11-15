@@ -8,11 +8,11 @@ The settings page is available at **ESC → System → Mods → RoadMind** in Be
 
 | Profile | LiDAR | Radar | Ultrasonic | Estimated queries/s |
 |---|---|---|---|---:|
-| Economy | 9 rays × 1 Hz | 5 rays × 1 Hz | 12 rays × 1 Hz | **26** |
-| Balanced (default) | 26 rays × 2 Hz | 10 rays × 1 Hz | 12 rays × 1 Hz | **74** |
+| Economy (default) | 9 rays × 1 Hz | 5 rays × 1 Hz | 12 rays × 1 Hz | **26** |
+| Balanced | 26 rays × 2 Hz | 10 rays × 1 Hz | 12 rays × 1 Hz | **74** |
 | High | 51 rays × 4 Hz | 17 rays × 2 Hz | 36 rays × 2 Hz | **310** |
 
-The page also allows each sensor group to be disabled, LiDAR range to be changed (30–160 m), and individual 3D overlays to be hidden. Hiding an overlay does not disable the underlying scan; disable the sensor itself to reduce raycast work.
+The default is Economy and only the LiDAR overlay is drawn. Radar and ultrasonic scans remain available at low rates, but their overlays, camera frustums and localization markers start hidden. The page also allows each sensor group to be disabled, LiDAR range to be changed (30–160 m), and individual 3D overlays to be shown. Hiding an overlay does not disable the underlying scan; disable the sensor itself to reduce raycast work.
 
 These figures are calculated from configured ray counts and frequencies. They are not measured FPS or CPU percentages.
 
