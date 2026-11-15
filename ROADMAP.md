@@ -25,7 +25,9 @@ Status: **virtual sensor-suite prototype; in-game BeamNG validation is required.
 - [ ] Calibrate all virtual sensor positions against vehicle dimensions.
 - [ ] Validate radar object hits and relative-speed estimates in traffic.
 - [ ] Validate ultrasonic coverage against curbs, posts and parked vehicles.
-- [ ] Add per-sensor enable/disable controls and scan-health indicators.
+- [x] Add per-sensor enable/disable controls and scan-density profiles.
+- [x] Add bilingual pause-menu settings with saved performance profiles.
+- [ ] Add scan-health indicators and measured CPU/FPS profiling.
 - [ ] Measure CPU overhead on light and dense maps.
 
 **Acceptance criteria:** one key displays the complete virtual sensor layout; all measurement sources are identified honestly; scanning stops when the suite is disabled.
@@ -36,7 +38,7 @@ Status: **virtual sensor-suite prototype; in-game BeamNG validation is required.
 - [ ] Add point filtering for ground, overhead geometry and self-hits.
 - [ ] Add radar return association and short-term target tracking.
 - [ ] Add confidence and data-age fields to every sensor.
-- [ ] Add optional low/medium/high sensor-density profiles.
+- [x] Add optional low/medium/high sensor-density profiles.
 - [ ] Add repeatable sensor test scenes and debug exports.
 
 ## Phase 4 — Road understanding and route input
@@ -89,7 +91,8 @@ Status: **virtual sensor-suite prototype; in-game BeamNG validation is required.
 ## Performance principles
 
 - No raycasts on every render frame.
-- Current target budget: 310 ray directions per second.
+- Balanced profile target: about 74 scene-raycast queries per second; Economy: 26; High: 310.
+- These are calculated query budgets, not measured FPS or CPU results.
 - Hard caps on rays, points and trajectory candidates.
 - Radar and ultrasonic scans run at lower rates than LiDAR.
 - Camera frustums are geometry only; no image rendering in the base Drive build.
