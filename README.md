@@ -50,8 +50,7 @@ These boundaries are kept explicit so a simulated geometric measurement is not m
 
 ## Performance
 
-- Economy: about 26 scene-raycast queries/s.
-- Economy (default): about 26 queries/s.
+- Economy (default): about 9 scene-raycast queries/s (LiDAR only; radar and ultrasonic are off).
 - Balanced: about 74 queries/s.
 - High: about 310 queries/s.
 - Individual sensors can be disabled; the 3D overlays can also be hidden. By default, only the LiDAR overlay is drawn.
