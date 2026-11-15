@@ -274,8 +274,8 @@ function callRoadMind(method, args = []) {
       return
     }
 
-    const command = "extensions.roadmind." + method + "("
-      + args.map(luaLiteral).join(", ") + ")"
+    const command = "extensions.load('roadmind'); return extensions.roadmind."
+      + method + "(" + args.map(luaLiteral).join(", ") + ")"
 
     try {
       engineLua(command, resolve)
