@@ -19,7 +19,7 @@ This document describes the current Drive-compatible sensor layout and the exact
 
 ## LiDAR
 
-The forward LiDAR samples 17 horizontal azimuths and 3 vertical elevations (51 ray directions). Each ray checks static geometry and dynamic objects, keeping the nearest valid return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
+The forward LiDAR samples 17 horizontal azimuths and 3 vertical elevations (51 ray directions). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
 
 The scanner is intentionally forward-facing, not a 360° roof scanner.
 
@@ -31,13 +31,13 @@ Five radar units approximate a modern front-and-corner layout:
 - Front-left and front-right corner units.
 - Rear-left and rear-right corner units.
 
-Each radar samples a small horizontal ray fan. Returns contain range, world hit position, dynamic/static hint, object identifier when exposed by BeamNG, and an estimated radial speed when the hit object exposes velocity.
+Each radar samples a small horizontal ray fan. Returns contain range and world hit position. Stable target IDs and radial velocity are not extracted yet.
 
 This is a kinematic raycast proxy. It does not simulate RF propagation, frequency-modulated chirps, antenna arrays, RCS, multipath or Doppler processing.
 
 ## Ultrasonic
 
-Twelve short-range units cover the front, rear and corners. Each sensor uses three rays around its center direction and returns the nearest hit up to 5 m. This creates a compact cone approximation suitable for visual parking/close-obstacle feedback.
+Twelve short-range units cover the front, rear and corners. Each sensor uses three Game Engine scene-raycasts around its center direction and returns the nearest hit up to 5 m. This creates a compact cone approximation suitable for visual parking/close-obstacle feedback.
 
 The model does not simulate acoustic wave propagation, surface absorption or material-dependent sensitivity.
 
