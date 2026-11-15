@@ -8,6 +8,7 @@
 - Add live LiDAR resolution, range and scan-rate controls.
 - Add independent radar and ultrasonic density, frequency and enable controls.
 - Add independent 3D overlay visibility controls.
+- Default to the Economy profile and the LiDAR overlay only to reduce overhead.
 - Keep sensor scanning disabled until explicitly started.
 
 - Move scene raycasts to Game Engine Lua, where BeamNG exposes `castRay`.
