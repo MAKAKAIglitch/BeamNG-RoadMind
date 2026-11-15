@@ -6,7 +6,7 @@ RoadMind is a layered sensor and driving stack for BeamNG.drive.
 
 Location: lua/vehicle/extensions/roadmind_sensors.lua
 
-The Vehicle Lua extension owns all measurement work:
+The Vehicle Lua extension owns vehicle-local sensor geometry and scan scheduling:
 
 - Forward LiDAR: 51 rays, 4 Hz, 120° horizontal FOV, 65 m.
 - Five radar ray fans: 17 directions total, 2 Hz.
@@ -15,7 +15,7 @@ The Vehicle Lua extension owns all measurement work:
 - IMU-like acceleration and estimated yaw rate, refreshed at 5 Hz.
 - GNSS-like world position and vehicle odometry signals, refreshed at 5 Hz.
 
-The raycast scheduler is rate-limited. The extension serializes cached results to Game Engine Lua. It never performs raycasts from the renderer.
+The extension serializes only the rays for sensors whose scan interval has elapsed. It does not call the Game Engine-only `castRay` API.
 
 ## Game Engine Lua coordinator and renderer
 
@@ -24,11 +24,12 @@ Location: lua/ge/extensions/roadmind.lua
 The Game Engine Lua extension:
 
 - Attaches the sensor backend to the active player vehicle when the sensor-suite binding is enabled.
-- Receives the latest serialized sensor frame.
+- Receives the latest serialized sensor frame and performs scheduled scene raycasts through `castRay`.
+- Merges raycast hits into the latest sensor frame.
 - Draws LiDAR returns, radar returns, ultrasonic close-range returns, camera frustums, IMU and GNSS mount markers using the game's world debug drawer.
 - Redraws cached geometry each graphics frame because debug primitives are transient.
 
-The render loop does not perform new raycasts.
+Scene raycasts run only on incoming scan updates, not on every render frame.
 
 ## Input
 
