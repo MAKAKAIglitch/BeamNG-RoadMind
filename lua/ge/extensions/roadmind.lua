@@ -20,6 +20,17 @@ local function boolString(value)
   return value and "true" or "false"
 end
 
+local function safeField(object, key)
+  if not object then return nil end
+  local ok, value = pcall(function() return object[key] end)
+  if ok then return value end
+  return nil
+end
+
+local function round2(value)
+  return math.floor((value or 0) * 100 + 0.5) / 100
+end
+
 local function getVehicleId(vehicle)
   if not vehicle or type(vehicle.getID) ~= "function" then
     return nil
@@ -342,26 +353,157 @@ function M.toggleVisualization()
   return state.visualizationEnabled
 end
 
+local function raycastBeam(beam, fallbackOrigin, fallbackRange)
+  if type(castRay) ~= "function" or type(beam) ~= "table" then return nil end
+
+  local originData = beam.origin or fallbackOrigin
+  local directionData = beam.direction
+  local maxRange = type(beam.range) == "number" and beam.range or fallbackRange
+  local minRange = type(beam.minRange) == "number" and beam.minRange or 0
+
+  if type(originData) ~= "table" or type(directionData) ~= "table"
+      or type(originData.x) ~= "number" or type(originData.y) ~= "number"
+      or type(originData.z) ~= "number" or type(directionData.x) ~= "number"
+      or type(directionData.y) ~= "number" or type(directionData.z) ~= "number"
+      or type(maxRange) ~= "number" or maxRange <= minRange or minRange < 0 then
+    return nil
+  end
+
+  local origin = vec3(originData.x, originData.y, originData.z)
+  local direction = vec3(directionData.x, directionData.y, directionData.z)
+  local directionLength = direction:length()
+  if directionLength < 0.00001 then return nil end
+
+  direction = direction / directionLength
+  local target = origin + direction * maxRange
+  -- Game Engine Lua castRay returns nil on a miss or a hit with dist/pt.
+  local ok, hit = pcall(castRay, origin, target, true, true)
+  if not ok or not hit then return nil end
+
+  local distance = safeField(hit, "dist")
+  if type(distance) ~= "number" or distance < minRange or distance > maxRange then
+    return nil
+  end
+
+  local point = nil
+  local pointData = safeField(hit, "pt")
+  if pointData then
+    local x, y, z = safeField(pointData, "x"), safeField(pointData, "y"), safeField(pointData, "z")
+    if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+      point = vec3(x, y, z)
+    end
+  end
+  if not point then point = origin + direction * distance end
+
+  return {
+    x = round2(point.x),
+    y = round2(point.y),
+    z = round2(point.z),
+    distance = round2(distance)
+  }
+end
+
+local function processLidar(lidar)
+  if type(lidar) ~= "table" then return {rays = {}, pointCount = 0} end
+  local returns = {}
+  local beams = lidar.rays or {}
+  for i = 1, #beams do
+    local hit = raycastBeam(beams[i], lidar.origin, lidar.range)
+    if hit then
+      hit.hit = true
+      returns[#returns + 1] = hit
+    end
+  end
+  return {
+    name = lidar.name,
+    origin = lidar.origin,
+    horizontalFov = lidar.horizontalFov,
+    verticalFov = lidar.verticalFov,
+    range = lidar.range,
+    rays = returns,
+    pointCount = #returns,
+    rayCount = #beams
+  }
+end
+
+local function processRadar(radar)
+  if type(radar) ~= "table" then return {mounts = {}, returns = {}} end
+  local returns = {}
+  local beams = radar.beams or {}
+  for i = 1, #beams do
+    local beam = beams[i]
+    local hit = raycastBeam(beam, nil, beam.range)
+    if hit then
+      hit.name = beam.name
+      hit.origin = beam.origin
+      returns[#returns + 1] = hit
+    end
+  end
+  return {mounts = radar.mounts or {}, returns = returns, updateHz = radar.updateHz}
+end
+
+local function processUltrasonic(ultrasonic)
+  if type(ultrasonic) ~= "table" then return {mounts = {}, returns = {}} end
+  local nearestBySensor, sensorOrder = {}, {}
+  local beams = ultrasonic.beams or {}
+  for i = 1, #beams do
+    local beam = beams[i]
+    local hit = raycastBeam(beam, nil, beam.range)
+    if hit then
+      local current = nearestBySensor[beam.name]
+      if not current then sensorOrder[#sensorOrder + 1] = beam.name end
+      if not current or hit.distance < current.distance then
+        hit.name = beam.name
+        hit.origin = beam.origin
+        nearestBySensor[beam.name] = hit
+      end
+    end
+  end
+  local returns = {}
+  for i = 1, #sensorOrder do
+    local hit = nearestBySensor[sensorOrder[i]]
+    if hit then returns[#returns + 1] = hit end
+  end
+  return {mounts = ultrasonic.mounts or {}, returns = returns, updateHz = ultrasonic.updateHz}
+end
+
+local function mergeSensorFrame(frame)
+  local updates = frame.updatedSensors or {}
+  local latest = state.latestData or {
+    enabled = true,
+    lidar = {rays = {}, pointCount = 0},
+    radar = {mounts = {}, returns = {}},
+    ultrasonic = {mounts = {}, returns = {}},
+    cameras = {}
+  }
+  latest.enabled = frame.enabled == true
+  latest.sequence = frame.sequence
+
+  if updates.lidar == true then latest.lidar = processLidar(frame.lidar) end
+  if updates.radar == true then latest.radar = processRadar(frame.radar) end
+  if updates.ultrasonic == true then latest.ultrasonic = processUltrasonic(frame.ultrasonic) end
+  if type(frame.cameras) == "table" then latest.cameras = frame.cameras end
+  if type(frame.localization) == "table" then latest.localization = frame.localization end
+  if type(frame.mounts) == "table" then latest.mounts = frame.mounts end
+  if type(frame.vehicleVelocity) == "table" then latest.vehicleVelocity = frame.vehicleVelocity end
+
+  state.latestData = latest
+  state.frameAge = 0
+end
+
 function M.onSensorData(encodedFrame)
-  if not state.visualizationEnabled
-      or type(encodedFrame) ~= "string"
-      or type(jsonDecode) ~= "function" then
-    return
-  end
-
+  if not state.visualizationEnabled or type(encodedFrame) ~= "string"
+      or type(jsonDecode) ~= "function" then return end
   local ok, frame = pcall(jsonDecode, encodedFrame)
-  if not ok or type(frame) ~= "table" then
-    return
-  end
-
+  if not ok or type(frame) ~= "table" then return end
   if frame.enabled == false then
     resetFrame()
     return
   end
-
-  state.latestData = frame
-  state.frameAge = 0
+  mergeSensorFrame(frame)
 end
+
+
 
 function M.onUpdate(dt)
   dt = tonumber(dt) or 0
