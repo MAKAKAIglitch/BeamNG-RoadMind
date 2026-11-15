@@ -9,38 +9,45 @@ local SETTINGS_FILE = "/settings/roadmind.json"
 
 local DEFAULT_SETTINGS = {
   preset = "economy",
-  lidarEnabled = true, lidarQuality = "low", lidarHz = 1, lidarRange = 45,
+  lidarEnabled = true, lidarQuality = "low", lidarPointCount = 9, lidarHz = 1, lidarRange = 45,
   radarEnabled = false, radarDensity = "low", radarHz = 1,
   ultrasonicEnabled = false, ultrasonicDensity = "single", ultrasonicHz = 1,
   poseHz = 2,
+  lidarPersistenceEnabled = false,
   showLidar = true, showRadar = false, showUltrasonic = false,
-  showCameras = false, showLocalization = false
+  showCameras = false, showLocalization = false, showDetectedVehicles = true
 }
 
 local PRESETS = {
   economy = {
-    lidarEnabled = true, lidarQuality = "low", lidarHz = 1, lidarRange = 45,
+    lidarEnabled = true, lidarQuality = "low", lidarPointCount = 9, lidarHz = 1, lidarRange = 45,
     radarEnabled = false, radarDensity = "low", radarHz = 1,
     ultrasonicEnabled = false, ultrasonicDensity = "single", ultrasonicHz = 1, poseHz = 2
   },
   balanced = {
-    lidarEnabled = true, lidarQuality = "balanced", lidarHz = 2, lidarRange = 65,
+    lidarEnabled = true, lidarQuality = "balanced", lidarPointCount = 13, lidarHz = 2, lidarRange = 65,
     radarEnabled = true, radarDensity = "medium", radarHz = 1,
     ultrasonicEnabled = true, ultrasonicDensity = "single", ultrasonicHz = 1, poseHz = 4
   },
   high = {
-    lidarEnabled = true, lidarQuality = "high", lidarHz = 4, lidarRange = 65,
+    lidarEnabled = true, lidarQuality = "high", lidarPointCount = 17, lidarHz = 4, lidarRange = 65,
     radarEnabled = true, radarDensity = "high", radarHz = 2,
     ultrasonicEnabled = true, ultrasonicDensity = "wide", ultrasonicHz = 2, poseHz = 5
   }
 }
 
 local SENSOR_SETTING_KEYS = {
-  lidarEnabled = true, lidarQuality = true, lidarHz = true, lidarRange = true,
+  lidarEnabled = true, lidarQuality = true, lidarPointCount = true, lidarHz = true, lidarRange = true,
   radarEnabled = true, radarDensity = true, radarHz = true,
   ultrasonicEnabled = true, ultrasonicDensity = true, ultrasonicHz = true,
   poseHz = true, showCameras = true, showLocalization = true
 }
+
+local MAX_PERSISTENT_LIDAR_POINTS = 1800
+local PERSISTENT_POINT_CELL_SIZE = 0.35
+local ROUTE_MAX_SPEED_MPS = 8.0
+local ROUTE_STOP_DISTANCE = 8.0
+local ROUTE_RESUME_DISTANCE = 14.0
 
 local state = {
   activeVehicleId = nil,
@@ -48,7 +55,14 @@ local state = {
   visualizationEnabled = false,
   settings = nil,
   latestData = nil,
-  frameAge = math.huge
+  frameAge = math.huge,
+  lidarPointCloud = {},
+  lidarPointCells = {},
+  lidarPointWriteIndex = 1,
+  routePilotEnabled = false,
+  routePilotStarted = false,
+  routeSafetyStopped = false,
+  routePilotVehicleId = nil
 }
 
 local checkTimer = 0
@@ -60,6 +74,14 @@ end
 local function safeField(object, key)
   if not object then return nil end
   local ok, value = pcall(function() return object[key] end)
+  if ok then return value end
+  return nil
+end
+
+local function safeCall(object, methodName, ...)
+  local method = safeField(object, methodName)
+  if type(method) ~= "function" then return nil end
+  local ok, value = pcall(method, object, ...)
   if ok then return value end
   return nil
 end
@@ -88,6 +110,32 @@ local function queueVehicleCommand(vehicle, command)
 
   local ok = pcall(vehicle.queueLuaCommand, vehicle, command)
   return ok
+end
+
+local function startNativeRouteAI(vehicle)
+  if not vehicle then return false end
+  local speed = string.format("%.2f", ROUTE_MAX_SPEED_MPS)
+  return queueVehicleCommand(vehicle,
+    "if ai then " ..
+    "if ai.setAggression then ai.setAggression(0.35) end; " ..
+    "if ai.setSpeedMode then ai.setSpeedMode('limit') end; " ..
+    "if ai.setSpeed then ai.setSpeed(" .. speed .. ") end; " ..
+    "if ai.setAvoidCars then ai.setAvoidCars(true) end; " ..
+    "ai.setMode('span') end"
+  )
+end
+
+local function stopNativeRouteAI(vehicle)
+  if not vehicle then return false end
+  return queueVehicleCommand(vehicle,
+    "if ai and ai.setMode then ai.setMode('stopping') end"
+  )
+end
+
+local function clearPersistentLidarPoints()
+  state.lidarPointCloud = {}
+  state.lidarPointCells = {}
+  state.lidarPointWriteIndex = 1
 end
 
 local function vehicleSettingsCommand()
@@ -134,14 +182,20 @@ end
 
 local function detachPreviousVehicle()
   if state.activeVehicle then
+    if state.routePilotEnabled then stopNativeRouteAI(state.activeVehicle) end
     queueVehicleCommand(
       state.activeVehicle,
       "if roadmind_sensors then roadmind_sensors.setEnabled(false, " .. tostring(state.activeVehicleId) .. ") end"
     )
   end
 
+  state.routePilotEnabled = false
+  state.routePilotStarted = false
+  state.routeSafetyStopped = false
+  state.routePilotVehicleId = nil
   state.activeVehicle = nil
   state.activeVehicleId = nil
+  clearPersistentLidarPoints()
   resetFrame()
 end
 
