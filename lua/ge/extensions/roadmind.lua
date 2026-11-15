@@ -93,6 +93,7 @@ local function detachPreviousVehicle()
 
   state.activeVehicle = nil
   state.activeVehicleId = nil
+  resetFrame()
 end
 
 local function attachVehicle(vehicle, id)
