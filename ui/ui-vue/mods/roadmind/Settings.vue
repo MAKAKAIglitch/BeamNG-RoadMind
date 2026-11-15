@@ -24,6 +24,27 @@
     </section>
 
     <section class="roadmind-section">
+      <BngCardHeading>{{ t("routePilot") }}</BngCardHeading>
+      <p class="roadmind-note">{{ t("routeDescription") }}</p>
+      <div class="roadmind-runtime">
+        <div>
+          <span class="roadmind-status" :class="{ active: status.routePilotEnabled && !status.routeSafetyStopped }">
+            {{ status.routePilotEnabled ? (status.routeSafetyStopped ? t("routePaused") : t("routeRunning")) : t("routeStopped") }}
+          </span>
+          <span class="roadmind-budget">{{ t("routeSpeed") }}: 29 km/h</span>
+        </div>
+        <BngButton
+          :accent="status.routePilotEnabled ? ACCENTS.outlined : ACCENTS.main"
+          :disabled="busy"
+          @click="toggleRoutePilot"
+        >{{ status.routePilotEnabled ? t("stopRoute") : t("startRoute") }}</BngButton>
+      </div>
+      <p v-if="status.routeSafetyStopped && status.routePilotEnabled" class="roadmind-note">
+        {{ t("routeSafetyStop") }}
+      </p>
+    </section>
+
+    <section class="roadmind-section">
       <BngCardHeading>{{ t("performance") }}</BngCardHeading>
       <p class="roadmind-note">{{ t("performanceNote") }}</p>
       <p class="roadmind-active-profile">{{ t("activeProfile") }}: <strong>{{ t(settings.preset) }}</strong></p>
@@ -57,6 +78,12 @@
           :config="optionConfig" :disabled="busy"
           @valueChanged="value => setSetting('lidarQuality', value)" />
       </BngRow>
+      <BngRow :vertical="true">
+        <template #label>{{ t("pointCount") }}: {{ settings.lidarPointCount }} {{ t("pointsPerRow") }}</template>
+        <BngSlider :min="9" :max="33" :step="4" :modelValue="settings.lidarPointCount"
+          :with-input="true" :disabled="busy"
+          @update:modelValue="queueLidarPointCount" />
+      </BngRow>
       <BngRow>
         <template #label>{{ t("scanRate") }}</template>
         <BngSelect :value="settings.lidarHz" :options="lidarRateOptions"
@@ -70,6 +97,17 @@
           @update:modelValue="queueLidarRange" />
       </BngRow>
       <p class="roadmind-note">{{ t("lidarNote") }}</p>
+      <BngRow>
+        <template #label>{{ t("persistence") }}</template>
+        <BngSwitch :modelValue="settings.lidarPersistenceEnabled" :disabled="busy"
+          @update:modelValue="value => setSetting('lidarPersistenceEnabled', value)" />
+      </BngRow>
+      <p class="roadmind-note">
+        {{ t("persistenceNote") }} ({{ status.persistentLidarPointCount || 0 }} / 1800)
+      </p>
+      <BngButton :accent="ACCENTS.outlined" :disabled="busy" @click="clearLidarMap">
+        {{ t("clearCloud") }}
+      </BngButton>
     </section>
 
     <section class="roadmind-section">
@@ -132,6 +170,11 @@
           @update:modelValue="value => setSetting('showUltrasonic', value)" />
       </BngRow>
       <BngRow>
+        <template #label>{{ t("detectedVehicles") }}</template>
+        <BngSwitch :modelValue="settings.showDetectedVehicles" :disabled="busy"
+          @update:modelValue="value => setSetting('showDetectedVehicles', value)" />
+      </BngRow>
+      <BngRow>
         <template #label>{{ t("cameraFrustums") }}</template>
         <BngSwitch :modelValue="settings.showCameras" :disabled="busy"
           @update:modelValue="value => setSetting('showCameras', value)" />
@@ -185,7 +228,23 @@ const EN = {
   high: "High quality",
   lidar: "Forward LiDAR",
   enabled: "Enabled",
-  resolution: "Resolution",
+  resolution: "Vertical layers",
+  pointCount: "Points per horizontal row",
+  pointsPerRow: "points",
+  persistence: "Accumulate point cloud",
+  persistenceNote: "Keeps up to 1800 world-space points for this game session. Drawing the cloud can reduce FPS.",
+  clearCloud: "Clear scanned point cloud",
+  detectedVehicles: "Detected vehicles",
+  routePilot: "Road route pilot (experimental)",
+  routeDescription: "Uses BeamNG's built-in road-network AI. LiDAR, radar, ultrasonic returns and vehicle detections act as an obstacle safety guard. It stops when an obstacle is too close or sensor data becomes stale; it does not yet build a destination-specific route from the point cloud.",
+  routeSpeed: "Speed limit",
+  routeRunning: "Route pilot active",
+  routePaused: "Paused by safety guard",
+  routeStopped: "Route pilot off",
+  startRoute: "Drive on road network",
+  stopRoute: "Stop route pilot",
+  routeSafetyStop: "The vehicle is stopping or waiting for fresh, clear sensor data.",
+
   scanRate: "Scan rate",
   range: "Maximum range",
   lidarNote: "Low: 9 rays per scan. Balanced: 26. High: 51. More rays, range and scan frequency increase CPU workload.",
@@ -204,9 +263,9 @@ const EN = {
   refresh: "Refresh status",
   error: "Could not contact RoadMind.",
   noVehicle: "Enter a vehicle before starting the sensors.",
-  lowResolution: "Low (9 × 1)",
-  balancedResolution: "Balanced (13 × 2)",
-  highResolution: "High (17 × 3)",
+  lowResolution: "1 vertical layer",
+  balancedResolution: "2 vertical layers",
+  highResolution: "3 vertical layers",
   lowDensity: "Low (1 ray per radar)",
   mediumDensity: "Balanced (up to 2 rays per radar)",
   highDensity: "High (full ray count)",
@@ -234,7 +293,23 @@ const RU = {
   high: "Высокое качество",
   lidar: "Передний LiDAR",
   enabled: "Включён",
-  resolution: "Разрешение",
+  resolution: "Вертикальные слои",
+  pointCount: "Точек по горизонтали",
+  pointsPerRow: "шт.",
+  persistence: "Накапливать облако точек",
+  persistenceNote: "Хранит до 1800 точек в мировых координатах до конца текущей игровой сессии. Отрисовка облака может снизить FPS.",
+  clearCloud: "Очистить облако точек",
+  detectedVehicles: "Обнаруженные автомобили",
+  routePilot: "Автопилот по дорожной сети (эксперимент)",
+  routeDescription: "Использует встроенный дорожный AI BeamNG. LiDAR, радары, ультразвук и обнаружение машин работают как контроль препятствий. Машина останавливается при близкой преграде или устаревших данных. Построение маршрута к выбранной точке по облаку LiDAR пока не реализовано.",
+  routeSpeed: "Ограничение скорости",
+  routeRunning: "Автопилот включён",
+  routePaused: "Остановка по датчикам",
+  routeStopped: "Автопилот выключен",
+  startRoute: "Ехать по дорожной сети",
+  stopRoute: "Остановить автопилот",
+  routeSafetyStop: "Автомобиль останавливается или ждёт новых данных без препятствий.",
+
   scanRate: "Частота сканирования",
   range: "Максимальная дальность",
   lidarNote: "Низкое: 9 лучей за скан. Сбалансированное: 26. Высокое: 51. Большее число лучей, дальность и частота повышают нагрузку на процессор.",
@@ -253,9 +328,9 @@ const RU = {
   refresh: "Обновить статус",
   error: "Не удалось связаться с RoadMind.",
   noVehicle: "Сначала сядь в автомобиль.",
-  lowResolution: "Низкое (9 × 1)",
-  balancedResolution: "Среднее (13 × 2)",
-  highResolution: "Высокое (17 × 3)",
+  lowResolution: "1 слой",
+  balancedResolution: "2 слоя",
+  highResolution: "3 слоя",
   lowDensity: "Низкая (1 луч на радар)",
   mediumDensity: "Средняя (до 2 лучей на радар)",
   highDensity: "Высокая (полное число лучей)",
@@ -302,6 +377,7 @@ const settings = ref({
   preset: "economy",
   lidarEnabled: true,
   lidarQuality: "low",
+  lidarPointCount: 9,
   lidarHz: 1,
   lidarRange: 45,
   radarEnabled: false,
@@ -311,13 +387,23 @@ const settings = ref({
   ultrasonicDensity: "single",
   ultrasonicHz: 1,
   poseHz: 2,
+  lidarPersistenceEnabled: false,
   showLidar: true,
   showRadar: false,
   showUltrasonic: false,
   showCameras: false,
   showLocalization: false,
+  showDetectedVehicles: true,
 })
-const status = ref({ visualizationEnabled: false, activeVehicle: false, estimatedRaycastsPerSecond: 0 })
+const status = ref({
+  visualizationEnabled: false,
+  activeVehicle: false,
+  estimatedRaycastsPerSecond: 0,
+  routePilotEnabled: false,
+  routeSafetyStopped: false,
+  persistentLidarPointCount: 0,
+  detectedVehicleCount: 0,
+})
 const error = ref("")
 const busy = ref(false)
 const optionConfig = { value: option => option.value, label: option => option.label }
@@ -361,6 +447,8 @@ function acceptResult(result) {
 
 let lidarRangeTimer = null
 let pendingLidarRange = null
+let lidarPointCountTimer = null
+let pendingLidarPointCount = null
 
 function queueLidarRange(value) {
   pendingLidarRange = Number(value)
@@ -374,12 +462,30 @@ function queueLidarRange(value) {
   }, 180)
 }
 
+function queueLidarPointCount(value) {
+  pendingLidarPointCount = Number(value)
+  settings.value.lidarPointCount = pendingLidarPointCount
+  if (lidarPointCountTimer) clearTimeout(lidarPointCountTimer)
+  lidarPointCountTimer = setTimeout(() => {
+    const nextValue = pendingLidarPointCount
+    pendingLidarPointCount = null
+    lidarPointCountTimer = null
+    setSetting("lidarPointCount", nextValue)
+  }, 180)
+}
+
 onBeforeUnmount(() => {
   if (lidarRangeTimer) {
     clearTimeout(lidarRangeTimer)
     lidarRangeTimer = null
     if (pendingLidarRange !== null) setSetting("lidarRange", pendingLidarRange)
     pendingLidarRange = null
+  }
+  if (lidarPointCountTimer) {
+    clearTimeout(lidarPointCountTimer)
+    lidarPointCountTimer = null
+    if (pendingLidarPointCount !== null) setSetting("lidarPointCount", pendingLidarPointCount)
+    pendingLidarPointCount = null
   }
 })
 
@@ -423,6 +529,30 @@ async function toggleRuntime() {
   } catch (e) {
     error.value = t("error")
     console.error("RoadMind: could not toggle scanning", e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function toggleRoutePilot() {
+  busy.value = true
+  try {
+    acceptResult(await callRoadMind('setRoutePilotEnabled', [!status.value.routePilotEnabled]))
+  } catch (e) {
+    error.value = t("error")
+    console.error("RoadMind: could not toggle route pilot", e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function clearLidarMap() {
+  busy.value = true
+  try {
+    acceptResult(await callRoadMind('clearLidarMap'))
+  } catch (e) {
+    error.value = t("error")
+    console.error("RoadMind: could not clear LiDAR map", e)
   } finally {
     busy.value = false
   }
