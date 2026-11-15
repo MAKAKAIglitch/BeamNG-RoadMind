@@ -651,6 +651,13 @@ function M.setVisualizationEnabled(enabled)
       return {ok = false, error = "No active player vehicle"}
     end
   else
+    if state.routePilotEnabled and state.activeVehicle then
+      stopNativeRouteAI(state.activeVehicle)
+    end
+    state.routePilotEnabled = false
+    state.routePilotStarted = false
+    state.routeSafetyStopped = false
+    state.routePilotVehicleId = nil
     state.visualizationEnabled = false
     if state.activeVehicle then
       setVehicleSensorState(state.activeVehicle, false, state.activeVehicleId)
@@ -658,6 +665,58 @@ function M.setVisualizationEnabled(enabled)
     resetFrame()
   end
 
+  return settingsResult()
+end
+
+function M.setRoutePilotEnabled(enabled)
+  if not state.settings then loadSettings() end
+
+  if enabled ~= true then
+    if state.routePilotEnabled and state.activeVehicle then
+      stopNativeRouteAI(state.activeVehicle)
+    end
+    state.routePilotEnabled = false
+    state.routePilotStarted = false
+    state.routeSafetyStopped = false
+    state.routePilotVehicleId = nil
+    return settingsResult()
+  end
+
+  if not state.visualizationEnabled then
+    local started = M.setVisualizationEnabled(true)
+    if not started.ok then return started end
+  end
+  if not state.activeVehicle or not state.activeVehicleId then
+    return {ok = false, error = "No active player vehicle"}
+  end
+
+  -- The route pilot explicitly switches to a bounded Balanced sensor baseline.
+  -- It enables LiDAR, all radars and ultrasonics, plus pose telemetry.
+  local candidate = copySettings(state.settings)
+  for key, value in pairs(PRESETS.balanced) do candidate[key] = value end
+  candidate.preset = "balanced"
+  candidate.showLidar = true
+  candidate.showRadar = true
+  candidate.showUltrasonic = true
+  candidate.showCameras = true
+  candidate.showLocalization = true
+  candidate.showDetectedVehicles = true
+  state.settings = normalizeSettings(candidate)
+  saveSettings()
+  setVehicleSensorSettings(state.activeVehicle)
+
+  state.routePilotEnabled = true
+  state.routePilotStarted = false
+  state.routeSafetyStopped = true
+  state.routePilotVehicleId = state.activeVehicleId
+  resetFrame()
+
+  log("I", "roadmind", "Experimental road-network route pilot armed; waiting for fresh sensor data")
+  return settingsResult()
+end
+
+function M.clearLidarMap()
+  clearPersistentLidarPoints()
   return settingsResult()
 end
 
@@ -748,6 +807,8 @@ local function processLidar(lidar)
     horizontalFov = lidar.horizontalFov,
     verticalFov = lidar.verticalFov,
     range = lidar.range,
+    forward = lidar.forward,
+    right = lidar.right,
     rays = returns,
     pointCount = #returns,
     rayCount = #beams
@@ -1122,6 +1183,10 @@ function M.onUpdate(dt)
   if checkTimer >= CHECK_INTERVAL then
     checkTimer = 0
     syncPlayerVehicle()
+  end
+
+  if state.routePilotEnabled then
+    updateRoutePilotSafety()
   end
 
   -- Scene raycasts run only when Vehicle Lua sends a due sensor scan.
