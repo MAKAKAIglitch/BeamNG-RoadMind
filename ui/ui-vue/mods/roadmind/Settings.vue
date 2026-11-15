@@ -154,6 +154,7 @@
 
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref } from "vue"
+import { useBridge } from "@/bridge"
 import {
   BngButton,
   BngSwitch,
@@ -271,11 +272,12 @@ function luaLiteral(value) {
   throw new TypeError("Unsupported RoadMind setting value")
 }
 
+const { api } = useBridge()
+
 function callRoadMind(method, args = []) {
   return new Promise((resolve, reject) => {
-    const engineLua = window.bngApi && window.bngApi.engineLua
-    if (typeof engineLua !== "function") {
-      reject(new Error("BeamNG engineLua bridge is unavailable"))
+    if (!api || typeof api.engineLua !== "function") {
+      reject(new Error("BeamNG Vue bridge is unavailable"))
       return
     }
 
@@ -283,7 +285,8 @@ function callRoadMind(method, args = []) {
       + method + "(" + args.map(luaLiteral).join(", ") + ") end)()"
 
     try {
-      engineLua(command, resolve)
+      // Keep the bridge API receiver intact: engineLua uses its own callback registry.
+      api.engineLua(command, resolve)
     } catch (error) {
       reject(error)
     }
