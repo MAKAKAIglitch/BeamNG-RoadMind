@@ -25,6 +25,22 @@ local CONFIG = {
   ultrasonicSpread = math.rad(7)
 }
 
+local sensorSettings = {
+  lidarEnabled = true,
+  lidarQuality = "balanced",
+  lidarHz = 2,
+  lidarRange = 65,
+  radarEnabled = true,
+  radarDensity = "medium",
+  radarHz = 1,
+  ultrasonicEnabled = true,
+  ultrasonicDensity = "single",
+  ultrasonicHz = 1,
+  poseHz = 4,
+  cameraFrustumsEnabled = false,
+  localizationEnabled = true
+}
+
 -- Vehicle-local lateral convention follows the sensor basis derived from
 -- getDirectionVector() and getDirectionVectorUp().
 local RADARS = {
@@ -78,6 +94,7 @@ local state = {
   lastForward = nil,
   lastPoseTime = 0,
   elapsed = 0,
+  pendingReset = false,
   frame = nil
 }
 
@@ -266,9 +283,17 @@ local function scanRadars(frame)
         range = cfg.range,
         fov = cfg.fov
       }
-      for rayIndex = 0, cfg.rays - 1 do
+
+      local sampleCount = cfg.rays
+      if sensorSettings.radarDensity == "low" then
+        sampleCount = 1
+      elseif sensorSettings.radarDensity == "medium" then
+        sampleCount = math.min(2, cfg.rays)
+      end
+
+      for rayIndex = 0, sampleCount - 1 do
         local angle = math.rad(-cfg.fov * 0.5
-          + cfg.fov * rayIndex / math.max(1, cfg.rays - 1))
+          + cfg.fov * rayIndex / math.max(1, sampleCount - 1))
         local direction = normalize(
           mount.direction * math.cos(angle) + mount.right * math.sin(angle)
         )
@@ -301,7 +326,11 @@ local function scanUltrasonics(frame)
         direction = vectorToPreciseTable(mount.direction),
         range = CONFIG.ultrasonicRange
       }
-      for offsetIndex = -1, 1 do
+      local firstOffset, lastOffset = -1, 1
+      if sensorSettings.ultrasonicDensity == "single" then
+        firstOffset, lastOffset = 0, 0
+      end
+      for offsetIndex = firstOffset, lastOffset do
         local angle = CONFIG.ultrasonicSpread * offsetIndex
         local direction = normalize(
           mount.direction * math.cos(angle) + mount.right * math.sin(angle)
@@ -324,6 +353,9 @@ end
 
 local function buildCameras(frame)
   local cameras = {}
+  if not sensorSettings.cameraFrustumsEnabled then
+    return cameras
+  end
 
   for i = 1, #CAMERAS do
     local cfg = CAMERAS[i]
@@ -465,6 +497,81 @@ local function clearPublishedFrame()
   end
 end
 
+local function applySensorSettings(source)
+  if type(source) ~= "table" then return false end
+
+  local booleanKeys = {
+    "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
+    "cameraFrustumsEnabled", "localizationEnabled"
+  }
+  for i = 1, #booleanKeys do
+    local key = booleanKeys[i]
+    if type(source[key]) == "boolean" then sensorSettings[key] = source[key] end
+  end
+
+  if source.lidarQuality == "low" or source.lidarQuality == "balanced"
+      or source.lidarQuality == "high" then
+    sensorSettings.lidarQuality = source.lidarQuality
+  end
+  if source.radarDensity == "low" or source.radarDensity == "medium"
+      or source.radarDensity == "high" then
+    sensorSettings.radarDensity = source.radarDensity
+  end
+  if source.ultrasonicDensity == "single" or source.ultrasonicDensity == "wide" then
+    sensorSettings.ultrasonicDensity = source.ultrasonicDensity
+  end
+
+  if source.lidarHz == 1 or source.lidarHz == 2 or source.lidarHz == 4 then
+    sensorSettings.lidarHz = source.lidarHz
+  end
+  if type(source.lidarRange) == "number" and source.lidarRange >= 30
+      and source.lidarRange <= 160 then
+    sensorSettings.lidarRange = math.floor(source.lidarRange / 5 + 0.5) * 5
+  end
+  if source.radarHz == 1 or source.radarHz == 2 then sensorSettings.radarHz = source.radarHz end
+  if source.ultrasonicHz == 1 or source.ultrasonicHz == 2 then
+    sensorSettings.ultrasonicHz = source.ultrasonicHz
+  end
+  if source.poseHz == 2 or source.poseHz == 4 or source.poseHz == 5 then
+    sensorSettings.poseHz = source.poseHz
+  end
+
+  local lidarResolution = {
+    low = {horizontal = 9, vertical = 1},
+    balanced = {horizontal = 13, vertical = 2},
+    high = {horizontal = 17, vertical = 3}
+  }
+  local resolution = lidarResolution[sensorSettings.lidarQuality]
+  CONFIG.lidar.horizontalSamples = resolution.horizontal
+  CONFIG.lidar.verticalSamples = resolution.vertical
+  CONFIG.lidar.maxRange = sensorSettings.lidarRange
+  CONFIG.lidar.interval = 1 / sensorSettings.lidarHz
+  CONFIG.radarInterval = 1 / sensorSettings.radarHz
+  CONFIG.ultrasonicInterval = 1 / sensorSettings.ultrasonicHz
+  CONFIG.poseInterval = 1 / sensorSettings.poseHz
+
+  state.lidarTimer = 0
+  state.radarTimer = 0
+  state.ultrasonicTimer = 0
+  state.poseTimer = 0
+  state.pendingReset = true
+  return true
+end
+
+function M.setSettings(encodedSettings)
+  if type(encodedSettings) ~= "string" or type(jsonDecode) ~= "function" then
+    return false
+  end
+  local ok, settings = pcall(jsonDecode, encodedSettings)
+  if not ok or type(settings) ~= "table" then return false end
+
+  local applied = applySensorSettings(settings)
+  if applied and state.enabled then
+    state.frame = state.frame or buildEmptyFrame()
+  end
+  return applied
+end
+
 function M.setEnabled(enabled, sourceVehicleId)
   state.enabled = enabled == true
   if type(sourceVehicleId) == "number" then
@@ -478,6 +585,7 @@ function M.setEnabled(enabled, sourceVehicleId)
   state.lastLidarCount = 0
   state.lastRadarCount = 0
   state.lastUltrasonicCount = 0
+  state.pendingReset = true
 
   if state.enabled then
     state.frame = buildEmptyFrame()
@@ -509,6 +617,7 @@ function M.onReset()
   state.ultrasonicTimer = 0
   state.poseTimer = 0
   state.lastForward = nil
+  state.pendingReset = true
   state.frame = state.enabled and buildEmptyFrame() or nil
 end
 
@@ -523,10 +632,12 @@ function M.updateGFX(dt)
   end
 
   state.elapsed = state.elapsed + dt
-  state.lidarTimer = state.lidarTimer + dt
-  state.radarTimer = state.radarTimer + dt
-  state.ultrasonicTimer = state.ultrasonicTimer + dt
-  state.poseTimer = state.poseTimer + dt
+  if sensorSettings.lidarEnabled then state.lidarTimer = state.lidarTimer + dt end
+  if sensorSettings.radarEnabled then state.radarTimer = state.radarTimer + dt end
+  if sensorSettings.ultrasonicEnabled then state.ultrasonicTimer = state.ultrasonicTimer + dt end
+  if sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled then
+    state.poseTimer = state.poseTimer + dt
+  end
 
   local frame = getVehicleFrame()
   if not frame then
@@ -536,7 +647,21 @@ function M.updateGFX(dt)
   local changed = false
   local updatedSensors = {}
 
-  if state.lidarTimer >= CONFIG.lidar.interval then
+  if state.pendingReset then
+    state.frame = state.frame or buildEmptyFrame()
+    state.frame.lidar = {origin = nil, rays = {}, rayCount = 0}
+    state.frame.radar = {mounts = {}, beams = {}}
+    state.frame.ultrasonic = {mounts = {}, beams = {}}
+    state.frame.cameras = {}
+    state.frame.localization = nil
+    updatedSensors.lidar = true
+    updatedSensors.radar = true
+    updatedSensors.ultrasonic = true
+    state.pendingReset = false
+    changed = true
+  end
+
+  if sensorSettings.lidarEnabled and state.lidarTimer >= CONFIG.lidar.interval then
     state.lidarTimer = state.lidarTimer % CONFIG.lidar.interval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.lidar = scanLidar(frame)
@@ -544,7 +669,7 @@ function M.updateGFX(dt)
     changed = true
   end
 
-  if state.radarTimer >= CONFIG.radarInterval then
+  if sensorSettings.radarEnabled and state.radarTimer >= CONFIG.radarInterval then
     state.radarTimer = state.radarTimer % CONFIG.radarInterval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.radar = scanRadars(frame)
@@ -552,7 +677,7 @@ function M.updateGFX(dt)
     changed = true
   end
 
-  if state.ultrasonicTimer >= CONFIG.ultrasonicInterval then
+  if sensorSettings.ultrasonicEnabled and state.ultrasonicTimer >= CONFIG.ultrasonicInterval then
     state.ultrasonicTimer = state.ultrasonicTimer % CONFIG.ultrasonicInterval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.ultrasonic = scanUltrasonics(frame)
@@ -560,16 +685,18 @@ function M.updateGFX(dt)
     changed = true
   end
 
-  if state.poseTimer >= CONFIG.poseInterval then
+  if (sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled)
+      and state.poseTimer >= CONFIG.poseInterval then
     local poseDt = state.poseTimer
     state.poseTimer = state.poseTimer % CONFIG.poseInterval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.cameras = buildCameras(frame)
-    state.frame.localization = updateLocalization(frame, poseDt)
-    state.frame.mounts = {
+    state.frame.localization = sensorSettings.localizationEnabled
+      and updateLocalization(frame, poseDt) or nil
+    state.frame.mounts = state.frame.localization and {
       imu = state.frame.localization.imu.position,
       gnss = state.frame.localization.gnss.position
-    }
+    } or {}
     changed = true
   end
 
