@@ -135,20 +135,16 @@ local function vectorToTable(value)
   }
 end
 
-local function pointFromHit(hit, origin, direction, distance)
-  local hitPoint = safeField(hit, "pt")
-  if hitPoint then
-    local x = safeField(hitPoint, "x")
-    local y = safeField(hitPoint, "y")
-    local z = safeField(hitPoint, "z")
-
-    if type(x) == "number" and type(y) == "number" and type(z) == "number" then
-      return vec3(x, y, z)
-    end
-  end
-
-  return origin + direction * distance
+-- Keep directions at full precision to avoid angular drift at long range.
+local function vectorToPreciseTable(value)
+  return {
+    x = value.x,
+    y = value.y,
+    z = value.z
+  }
 end
+
+
 
 local function getVehicleFrame()
   if not obj then
@@ -207,99 +203,25 @@ local function makeMount(frame, forwardOffset, lateralOffset, upOffset, yawDegre
   }
 end
 
-local function traceRay(origin, direction, maxRange, minRange, vehicleVelocity)
-  local staticDistance = nil
-  local dynamicHit = nil
 
-  if type(castRayStatic) == "function" then
-    local ok, distance = pcall(castRayStatic, origin, direction, maxRange)
-    if ok and type(distance) == "number"
-        and distance >= minRange and distance <= maxRange then
-      staticDistance = distance
-    end
-  end
-
-  if type(castRay) == "function" then
-    local dynamicLimit = staticDistance or maxRange
-    local endpoint = origin + direction * dynamicLimit
-    local ok, hit = pcall(castRay, origin, endpoint, true, true)
-
-    if ok and hit then
-      local hitDistance = safeField(hit, "dist")
-      if type(hitDistance) == "number"
-          and hitDistance >= minRange and hitDistance <= dynamicLimit then
-        dynamicHit = hit
-      end
-    end
-  end
-
-  local distance = staticDistance
-  local point = staticDistance and (origin + direction * staticDistance) or nil
-  local object = nil
-
-  if dynamicHit then
-    local dynamicDistance = safeField(dynamicHit, "dist")
-    if not distance or dynamicDistance < distance then
-      distance = dynamicDistance
-      point = pointFromHit(dynamicHit, origin, direction, dynamicDistance)
-      object = safeField(dynamicHit, "obj") or safeField(dynamicHit, "object")
-    end
-  end
-
-  if not distance or not point then
-    return nil
-  end
-
-  local targetVelocity = safeCall(object, "getVelocity")
-  local relativeRadialSpeed = nil
-
-  if targetVelocity and type(targetVelocity.dot) == "function" then
-    local relativeVelocity = targetVelocity - (vehicleVelocity or vec3(0, 0, 0))
-    relativeRadialSpeed = relativeVelocity:dot(direction)
-  end
-
-  local objectId = safeCall(object, "getID")
-    or safeField(dynamicHit, "objectId")
-    or safeField(dynamicHit, "objectID")
-    or safeField(dynamicHit, "cid")
-
-  return {
-    point = point,
-    distance = distance,
-    objectId = type(objectId) == "number" and objectId or nil,
-    dynamic = object ~= nil or objectId ~= nil,
-    radialSpeed = relativeRadialSpeed
-  }
-end
 
 local function scanLidar(frame)
   local cfg = CONFIG.lidar
-  local mount = makeMount(
-    frame,
-    cfg.forwardOffset,
-    cfg.lateralOffset,
-    cfg.upOffset,
-    0
-  )
-
+  local mount = makeMount(frame, cfg.forwardOffset, cfg.lateralOffset, cfg.upOffset, 0)
   if not mount then
-    return {origin = nil, rays = {}, pointCount = 0}
+    return {origin = nil, rays = {}, rayCount = 0}
   end
 
   local rays = {}
-  local hits = 0
-
   for h = 0, cfg.horizontalSamples - 1 do
     local horizontalAngle = -cfg.horizontalFov * 0.5
       + cfg.horizontalFov * h / math.max(1, cfg.horizontalSamples - 1)
-
     local cosH = math.cos(horizontalAngle)
     local sinH = math.sin(horizontalAngle)
 
-    for v = 0, cfg.verticalSamples - 1 do
+    for verticalIndex = 0, cfg.verticalSamples - 1 do
       local verticalAngle = -cfg.verticalFov * 0.5
-        + cfg.verticalFov * v / math.max(1, cfg.verticalSamples - 1)
-
+        + cfg.verticalFov * verticalIndex / math.max(1, cfg.verticalSamples - 1)
       local cosV = math.cos(verticalAngle)
       local sinV = math.sin(verticalAngle)
 
@@ -308,160 +230,95 @@ local function scanLidar(frame)
           + mount.right * (cosV * sinH)
           + mount.up * sinV
       )
-
       if direction then
-        local result = traceRay(mount.position, direction, cfg.maxRange, cfg.minRange, frame.velocity)
-        if result then
-          hits = hits + 1
-          rays[#rays + 1] = {
-            x = round2(result.point.x),
-            y = round2(result.point.y),
-            z = round2(result.point.z),
-            hit = true,
-            distance = round2(result.distance)
+        rays[#rays + 1] = {
+          direction = vectorToPreciseTable(direction),
+          minRange = cfg.minRange,
+          maxRange = cfg.maxRange
+        }
+      end
+    end
+  end
+
+  state.lastLidarCount = #rays
+  return {
+    name = "Forward LiDAR",
+    origin = vectorToTable(mount.position),
+    horizontalFov = math.deg(cfg.horizontalFov),
+    verticalFov = math.deg(cfg.verticalFov),
+    range = cfg.maxRange,
+    rays = rays,
+    rayCount = #rays
+  }
+end
+
+local function scanRadars(frame)
+  local mounts, beams = {}, {}
+  for i = 1, #RADARS do
+    local cfg = RADARS[i]
+    local mount = makeMount(frame, cfg.forward, cfg.lateral, cfg.up, cfg.yaw)
+    if mount then
+      mounts[#mounts + 1] = {
+        name = cfg.name,
+        position = vectorToTable(mount.position),
+        direction = vectorToPreciseTable(mount.direction),
+        range = cfg.range,
+        fov = cfg.fov
+      }
+      for rayIndex = 0, cfg.rays - 1 do
+        local angle = math.rad(-cfg.fov * 0.5
+          + cfg.fov * rayIndex / math.max(1, cfg.rays - 1))
+        local direction = normalize(
+          mount.direction * math.cos(angle) + mount.right * math.sin(angle)
+        )
+        if direction then
+          beams[#beams + 1] = {
+            name = cfg.name,
+            origin = vectorToTable(mount.position),
+            direction = vectorToPreciseTable(direction),
+            range = cfg.range,
+            minRange = 0.75
           }
         end
       end
     end
   end
 
-  state.lastLidarCount = hits
-
-  return {
-    name = "Forward LiDAR",
-    origin = vectorToTable(mount.position),
-    horizontalFov = 120,
-    verticalFov = 16,
-    range = cfg.maxRange,
-    rays = rays,
-    pointCount = hits
-  }
-end
-
-local function scanRadars(frame)
-  local mounts = {}
-  local returns = {}
-
-  for i = 1, #RADARS do
-    local cfg = RADARS[i]
-    local mount = makeMount(
-      frame,
-      cfg.forward,
-      cfg.lateral,
-      cfg.up,
-      cfg.yaw
-    )
-
-    if mount then
-      mounts[#mounts + 1] = {
-        name = cfg.name,
-        position = vectorToTable(mount.position),
-        direction = vectorToTable(mount.direction),
-        range = cfg.range,
-        fov = cfg.fov
-      }
-
-      local sampleCount = cfg.rays
-      for rayIndex = 0, sampleCount - 1 do
-        local angle = math.rad(-cfg.fov * 0.5
-          + cfg.fov * rayIndex / math.max(1, sampleCount - 1))
-
-        local direction = normalize(
-          mount.direction * math.cos(angle)
-            + mount.right * math.sin(angle)
-        )
-
-        if direction then
-          local result = traceRay(mount.position, direction, cfg.range, 0.75, frame.velocity)
-          if result then
-            returns[#returns + 1] = {
-              name = cfg.name,
-              origin = vectorToTable(mount.position),
-              x = round2(result.point.x),
-              y = round2(result.point.y),
-              z = round2(result.point.z),
-              distance = round2(result.distance),
-              dynamic = result.dynamic,
-              objectId = result.objectId,
-              radialSpeed = result.radialSpeed
-            }
-          end
-        end
-      end
-    end
-  end
-
-  state.lastRadarCount = #returns
-
-  return {
-    mounts = mounts,
-    returns = returns,
-    updateHz = 1 / CONFIG.radarInterval
-  }
+  state.lastRadarCount = #beams
+  return {mounts = mounts, beams = beams, updateHz = 1 / CONFIG.radarInterval}
 end
 
 local function scanUltrasonics(frame)
-  local mounts = {}
-  local returns = {}
-
+  local mounts, beams = {}, {}
   for i = 1, #ULTRASONICS do
     local cfg = ULTRASONICS[i]
     local mount = makeMount(frame, cfg.forward, cfg.lateral, 0.42, cfg.yaw)
-
     if mount then
       mounts[#mounts + 1] = {
         name = cfg.name,
         position = vectorToTable(mount.position),
-        direction = vectorToTable(mount.direction),
+        direction = vectorToPreciseTable(mount.direction),
         range = CONFIG.ultrasonicRange
       }
-
-      local nearest = nil
-      local nearestDistance = CONFIG.ultrasonicRange
-
       for offsetIndex = -1, 1 do
         local angle = CONFIG.ultrasonicSpread * offsetIndex
         local direction = normalize(
-          mount.direction * math.cos(angle)
-            + mount.right * math.sin(angle)
+          mount.direction * math.cos(angle) + mount.right * math.sin(angle)
         )
-
         if direction then
-          local result = traceRay(
-            mount.position,
-            direction,
-            CONFIG.ultrasonicRange,
-            0.08,
-            frame.velocity
-          )
-
-          if result and result.distance < nearestDistance then
-            nearest = result
-            nearestDistance = result.distance
-          end
+          beams[#beams + 1] = {
+            name = cfg.name,
+            origin = vectorToTable(mount.position),
+            direction = vectorToPreciseTable(direction),
+            range = CONFIG.ultrasonicRange,
+            minRange = 0.08
+          }
         end
-      end
-
-      if nearest then
-        returns[#returns + 1] = {
-          name = cfg.name,
-          origin = vectorToTable(mount.position),
-          x = round2(nearest.point.x),
-          y = round2(nearest.point.y),
-          z = round2(nearest.point.z),
-          distance = round2(nearest.distance)
-        }
       end
     end
   end
-
-  state.lastUltrasonicCount = #returns
-
-  return {
-    mounts = mounts,
-    returns = returns,
-    updateHz = 1 / CONFIG.ultrasonicInterval
-  }
+  state.lastUltrasonicCount = #beams
+  return {mounts = mounts, beams = beams, updateHz = 1 / CONFIG.ultrasonicInterval}
 end
 
 local function buildCameras(frame)
@@ -481,8 +338,8 @@ local function buildCameras(frame)
       cameras[#cameras + 1] = {
         name = cfg.name,
         position = vectorToTable(mount.position),
-        direction = vectorToTable(mount.direction),
-        up = vectorToTable(mount.up),
+        direction = vectorToPreciseTable(mount.direction),
+        up = vectorToPreciseTable(mount.up),
         horizontalFov = cfg.hfov,
         verticalFov = cfg.vfov,
         range = cfg.range
@@ -557,9 +414,10 @@ local function buildEmptyFrame()
   return {
     enabled = false,
     sequence = state.sequence,
-    lidar = {rays = {}, pointCount = 0},
-    radar = {mounts = {}, returns = {}},
-    ultrasonic = {mounts = {}, returns = {}},
+    updatedSensors = {},
+    lidar = {rays = {}, rayCount = 0},
+    radar = {mounts = {}, beams = {}},
+    ultrasonic = {mounts = {}, beams = {}},
     cameras = {},
     localization = nil,
     vehicleVelocity = nil
@@ -629,9 +487,9 @@ function M.getStatus()
   return {
     enabled = state.enabled,
     sequence = state.sequence,
-    lidarPoints = state.lastLidarCount,
-    radarReturns = state.lastRadarCount,
-    ultrasonicReturns = state.lastUltrasonicCount,
+    lidarRays = state.lastLidarCount,
+    radarRays = state.lastRadarCount,
+    ultrasonicRays = state.lastUltrasonicCount,
     cameraCount = #CAMERAS,
     radarCount = #RADARS,
     ultrasonicCount = #ULTRASONICS,
@@ -670,31 +528,35 @@ function M.updateGFX(dt)
   end
 
   local changed = false
+  local updatedSensors = {}
 
   if state.lidarTimer >= CONFIG.lidar.interval then
-    state.lidarTimer = 0
+    state.lidarTimer = state.lidarTimer % CONFIG.lidar.interval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.lidar = scanLidar(frame)
+    updatedSensors.lidar = true
     changed = true
   end
 
   if state.radarTimer >= CONFIG.radarInterval then
-    state.radarTimer = 0
+    state.radarTimer = state.radarTimer % CONFIG.radarInterval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.radar = scanRadars(frame)
+    updatedSensors.radar = true
     changed = true
   end
 
   if state.ultrasonicTimer >= CONFIG.ultrasonicInterval then
-    state.ultrasonicTimer = 0
+    state.ultrasonicTimer = state.ultrasonicTimer % CONFIG.ultrasonicInterval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.ultrasonic = scanUltrasonics(frame)
+    updatedSensors.ultrasonic = true
     changed = true
   end
 
   if state.poseTimer >= CONFIG.poseInterval then
     local poseDt = state.poseTimer
-    state.poseTimer = 0
+    state.poseTimer = state.poseTimer % CONFIG.poseInterval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.cameras = buildCameras(frame)
     state.frame.localization = updateLocalization(frame, poseDt)
@@ -707,7 +569,9 @@ function M.updateGFX(dt)
 
   if changed and state.frame then
     state.frame.enabled = true
+    state.frame.updatedSensors = updatedSensors
     publish()
+    state.frame.updatedSensors = {}
   end
 end
 
