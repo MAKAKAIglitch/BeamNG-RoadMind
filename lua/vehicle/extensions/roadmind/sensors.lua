@@ -550,7 +550,7 @@ local function applySensorSettings(source)
   end
 
   if type(source.lidarPointCount) == "number" and source.lidarPointCount >= 9
-      and source.lidarPointCount <= 129 then
+      and source.lidarPointCount <= 33 then
     sensorSettings.lidarPointCount = math.floor((source.lidarPointCount - 9) / 4 + 0.5) * 4 + 9
   end
 
