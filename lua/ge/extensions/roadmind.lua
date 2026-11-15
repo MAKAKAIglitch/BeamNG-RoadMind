@@ -43,11 +43,14 @@ local SENSOR_SETTING_KEYS = {
   poseHz = true, showCameras = true, showLocalization = true
 }
 
-local MAX_PERSISTENT_LIDAR_POINTS = 1800
+local MAX_PERSISTENT_LIDAR_POINTS = 600
 local PERSISTENT_POINT_CELL_SIZE = 0.35
 local ROUTE_MAX_SPEED_MPS = 8.0
-local ROUTE_STOP_DISTANCE = 8.0
-local ROUTE_RESUME_DISTANCE = 14.0
+local ROUTE_LOOKAHEAD_M = 550.0
+local ROUTE_REPLAN_DISTANCE = 140.0
+local ROUTE_REPLAN_COOLDOWN = 5.0
+local ROUTE_STOP_DISTANCE = 12.0
+local ROUTE_RESUME_DISTANCE = 20.0
 
 local state = {
   activeVehicleId = nil,
@@ -62,7 +65,11 @@ local state = {
   routePilotEnabled = false,
   routePilotStarted = false,
   routeSafetyStopped = false,
-  routePilotVehicleId = nil
+  routePilotVehicleId = nil,
+  routePilotError = nil,
+  routeRetryCooldown = 0,
+  routePath = {},
+  routePathEnd = nil
 }
 
 local checkTimer = 0
@@ -112,22 +119,158 @@ local function queueVehicleCommand(vehicle, command)
   return ok
 end
 
+local function buildForwardRoadPath(vehicle)
+  if type(map) ~= "table" or type(map.findClosestRoad) ~= "function"
+      or type(map.getMap) ~= "function" or type(map.getPath) ~= "function" then
+    return nil, nil, "NavGraph route API is unavailable on this map"
+  end
+
+  local position = safeCall(vehicle, "getPosition")
+  local direction = safeCall(vehicle, "getDirectionVector")
+  if not position or not direction then
+    return nil, nil, "Could not read vehicle position or heading"
+  end
+
+  local flatForward = vec3(direction.x, direction.y, 0)
+  if flatForward:length() < 0.0001 then
+    return nil, nil, "Vehicle heading is invalid"
+  end
+  flatForward = flatForward:normalized()
+
+  local targetPosition = position + flatForward * ROUTE_LOOKAHEAD_M
+  local okStart, startA, startB = pcall(map.findClosestRoad, position)
+  local okTarget, targetA, targetB = pcall(map.findClosestRoad, targetPosition)
+  if not okStart or not okTarget or not startA or not startB or not targetA or not targetB then
+    return nil, nil, "Could not find connected road nodes near the vehicle and forward target"
+  end
+
+  local okMap, mapData = pcall(map.getMap)
+  local nodes = okMap and type(mapData) == "table" and mapData.nodes or nil
+  if type(nodes) ~= "table" then
+    return nil, nil, "The current map has no loaded NavGraph nodes"
+  end
+
+  local starts = {startA, startB}
+  local targets = {targetA, targetB}
+  local bestIds, bestPoints, bestScore = nil, nil, math.huge
+
+  for si = 1, #starts do
+    for ti = 1, #targets do
+      local fromId, toId = starts[si], targets[ti]
+      if fromId ~= toId then
+        local okPath, path = pcall(map.getPath, fromId, toId)
+        if okPath and type(path) == "table" and #path >= 2 and #path <= 160 then
+          local valid, points, length = true, {}, 0
+          local previous = nil
+
+          for i = 1, #path do
+            local nodeId = path[i]
+            local node = nodes[nodeId]
+            local nodePosition = node and node.pos
+            if (type(nodeId) ~= "string" and type(nodeId) ~= "number")
+                or type(nodePosition) ~= "table"
+                or type(nodePosition.x) ~= "number"
+                or type(nodePosition.y) ~= "number"
+                or type(nodePosition.z) ~= "number" then
+              valid = false
+              break
+            end
+
+            if previous then
+              local previousNode = nodes[previous]
+              local edge = previousNode and previousNode.links and previousNode.links[nodeId]
+              if not edge then
+                local currentNode = nodes[nodeId]
+                edge = currentNode and currentNode.links and currentNode.links[previous]
+              end
+              if not edge then
+                valid = false
+                break
+              end
+              if type(edge) == "table" and edge.oneWay and edge.inNode ~= nil
+                  and edge.inNode ~= previous then
+                valid = false
+                break
+              end
+
+              local previousPosition = nodes[previous].pos
+              local dx = nodePosition.x - previousPosition.x
+              local dy = nodePosition.y - previousPosition.y
+              length = length + math.sqrt(dx * dx + dy * dy)
+            end
+
+            points[#points + 1] = {
+              x = nodePosition.x,
+              y = nodePosition.y,
+              z = nodePosition.z
+            }
+            previous = nodeId
+          end
+
+          if valid and #points >= 2 then
+            local dx = points[2].x - points[1].x
+            local dy = points[2].y - points[1].y
+            local headingAlignment = (dx * flatForward.x + dy * flatForward.y)
+              / math.max(0.0001, math.sqrt(dx * dx + dy * dy))
+            local endDelta = vec3(
+              points[#points].x - targetPosition.x,
+              points[#points].y - targetPosition.y,
+              points[#points].z - targetPosition.z
+            )
+            local targetError = endDelta:length()
+
+            if headingAlignment > -0.15 and targetError <= 180 then
+              local score = length + targetError * 2 - headingAlignment * 25
+              if score < bestScore then
+                bestIds, bestPoints, bestScore = path, points, score
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if not bestIds or not bestPoints then
+    return nil, nil, "No valid forward road path could be built from the current NavGraph"
+  end
+
+  return bestIds, bestPoints
+end
+
 local function startNativeRouteAI(vehicle)
-  if not vehicle then return false end
+  if not vehicle then return false, "No active vehicle" end
+
+  local pathIds, pathPoints, pathError = buildForwardRoadPath(vehicle)
+  if not pathIds then return false, pathError end
+
+  local serializedNodes = {}
+  for i = 1, #pathIds do
+    serializedNodes[i] = string.format("%q", tostring(pathIds[i]))
+  end
+
   local speed = string.format("%.2f", ROUTE_MAX_SPEED_MPS)
-  return queueVehicleCommand(vehicle,
-    "if ai then " ..
-    "if ai.setAggression then pcall(ai.setAggression, 0.35) end; " ..
-    "if ai.setSpeedMode then pcall(ai.setSpeedMode, 'limit') end; " ..
-    "if ai.setSpeed then pcall(ai.setSpeed, " .. speed .. ") end; " ..
-    "if ai.setAvoidCars then pcall(ai.setAvoidCars, true) end; " ..
-    "if ai.setMode then ai.setMode('span') end end"
-  )
+  local command =
+    "if not ai then extensions.load('ai') end; " ..
+    "if ai and ai.driveUsingPath then " ..
+    "ai.driveUsingPath({wpTargetList={" .. table.concat(serializedNodes, ",") .. "}, " ..
+    "driveInLane='on', avoidCars='on', routeSpeedMode='limit', " ..
+    "routeSpeed=" .. speed .. ", aggression=0.35}) " ..
+    "else error('RoadMind: vehicle AI path API unavailable') end"
+
+  if not queueVehicleCommand(vehicle, command) then
+    return false, "Could not queue the vehicle AI route command"
+  end
+
+  state.routePath = pathPoints
+  state.routePathEnd = pathPoints[#pathPoints]
+  return true
 end
 
 local function stopNativeRouteAI(vehicle)
   if not vehicle then return false end
   return queueVehicleCommand(vehicle,
+    "if not ai then extensions.load('ai') end; " ..
     "if ai and ai.setMode then pcall(ai.setMode, 'stopping') end"
   )
 end
@@ -193,6 +336,10 @@ local function detachPreviousVehicle()
   state.routePilotStarted = false
   state.routeSafetyStopped = false
   state.routePilotVehicleId = nil
+  state.routePilotError = nil
+  state.routeRetryCooldown = 0
+  state.routePath = {}
+  state.routePathEnd = nil
   state.activeVehicle = nil
   state.activeVehicleId = nil
   clearPersistentLidarPoints()
@@ -362,6 +509,18 @@ local function drawDetectedVehicles(drawer, vehicles)
   end
 end
 
+local function drawRoutePath(drawer)
+  if not state.routePilotEnabled or type(state.routePath) ~= "table" then return end
+  local color = ColorF(0.95, 0.58, 0.12, 0.88)
+  for i = 1, #state.routePath - 1 do
+    local a = state.routePath[i]
+    local b = state.routePath[i + 1]
+    if a and b then
+      drawLine(drawer, toPoint3F(a), toPoint3F(b), color)
+    end
+  end
+end
+
 local function drawCameraFrustum(drawer, camera)
   local origin = toPoint3F(camera.position)
   local forward = camera.direction
@@ -458,6 +617,7 @@ local function drawFrame()
   end
 
   if settings.showLocalization then drawLocalization(drawer, frame.localization) end
+  drawRoutePath(drawer)
 end
 
 local function copySettings(source)
@@ -565,6 +725,8 @@ local function settingsResult()
       estimatedRaycastsPerSecond = state.visualizationEnabled and rayCountFor(settings) or 0,
       routePilotEnabled = state.routePilotEnabled,
       routeSafetyStopped = state.routeSafetyStopped,
+      routePilotError = state.routePilotError,
+      routeWaypointCount = #state.routePath,
       persistentLidarPointCount = #state.lidarPointCloud,
       detectedVehicleCount = state.latestData and #(state.latestData.vehicles or {}) or 0
     }
