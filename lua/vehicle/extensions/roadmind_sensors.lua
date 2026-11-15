@@ -471,11 +471,6 @@ local function publish()
   frame.sourceVehicleId = state.sourceVehicleId
   frame.sequence = state.sequence
 
-  local ok, encoded = pcall(jsonEncode, frame)
-  if not ok or type(encoded) ~= "string" then
-    return
-  end
-
   local updates = frame.updatedSensors or {}
   local payload = {
     enabled = true,
