@@ -1,41 +1,40 @@
 # Performance notes
 
-RoadMind starts with a small sensor budget because BeamNG already performs demanding vehicle-physics simulation.
+RoadMind is designed to minimize its load on BeamNG.drive.
 
-## Current defaults
+## Current target budgets
 
-| Setting | Default |
-|---|---:|
-| Horizontal field of view | 120° |
-| Vertical field of view | 16° |
-| Horizontal samples | 17 |
-| Vertical samples | 3 |
-| Maximum ray directions per scan | 51 |
-| Scan frequency | 4 Hz |
-| Maximum range | 60 m |
-| Visualization | Off until toggled |
+| Subsystem | Workload | Update rate | Ray directions / second |
+|---|---:|---:|---:|
+| Forward LiDAR | 51 rays | 4 Hz | 204 |
+| Five radars | 17 rays total | 2 Hz | 34 |
+| Twelve ultrasonics | 36 rays total | 2 Hz | 72 |
+| Cameras | 7 frustums | 5 Hz pose refresh | 0 |
+| IMU / GNSS / odometry | vehicle-state sampling | 5 Hz | 0 |
+| **Total** | | | **310** |
 
-The default sensor budget is 51 ray directions × 4 scans per second = 204 ray directions per second. Depending on the scene, one direction can cause both a static and a dynamic raycast. The approximate upper bound is therefore 408 raycast calls per second.
+A ray direction may use one static and one dynamic query. The rough upper bound is therefore about 620 raycast calls per second. This is a workload estimate, not a measured CPU percentage.
 
-This is a workload estimate, not a measured CPU percentage. Real cost depends on scene complexity, BeamNG version, hardware and active vehicles.
+## Scheduling
 
-## Rendering behavior
+- LiDAR runs at 4 Hz.
+- Radar runs at 2 Hz.
+- Ultrasonic runs at 2 Hz.
+- Camera poses, IMU, GNSS-like position and odometry refresh at 5 Hz.
+- The complete suite is disabled until the player activates it.
+- Sensor data is cached between updates.
+- The Game Engine renderer redraws cached data but performs no raycasts.
 
-- World-space visualization is disabled until the player presses the RoadMind binding.
-- While enabled, the latest scan is redrawn with debugDrawer each graphics frame because debug primitives are transient.
-- The render loop does not perform any raycasts.
-- Only valid return beams and hit points are drawn; no-hit beams are omitted.
-- At most 51 hit markers can be drawn per scan.
+## Rendering budget
 
-## Rules for future features
+A maximum of 51 LiDAR hits, 17 radar ray directions and 36 ultrasonic ray directions are processed by the sensor backend. The number of visible return markers is bounded by the number of valid hits. Seven camera frustums add a fixed number of debug lines.
 
-- Keep sensor scanning independent of the render frame rate.
-- Never rebuild or re-raycast a point cloud just because the camera frame changed.
-- Cap the number of rays, points and trajectory candidates.
-- Keep visualization optional so the driving stack can use sensor data without drawing it.
-- Profile on a busy map with traffic before increasing ray density or scan rate.
-- Compare frame times with the sensor disabled, scanning only and world visualization enabled.
+## Profiling procedure
 
-## Tuning order
+1. Record a baseline with RoadMind disabled.
+2. Enable the suite but hide no sensor types (default full visualization).
+3. Compare the same vehicle, map, traffic and time of day.
+4. Record CPU use, average frame time and low-percentile frame rate.
+5. Change only one scan rate or ray-count setting at a time.
 
-Change one setting at a time. Record a baseline on a repeatable map and vehicle, then compare scanning-only and visualization-enabled runs. Increase ray density only when a measured planner limitation requires it.
+Actual CPU cost depends on map complexity, vehicle geometry, traffic and game version. No fixed CPU percentage is claimed until measured in BeamNG.

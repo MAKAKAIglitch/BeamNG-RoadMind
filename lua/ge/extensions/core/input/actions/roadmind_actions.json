@@ -5,7 +5,7 @@
     "ctx": "tlua",
     "actionMap": "Normal",
     "onDown": "extensions.load('roadmind'); extensions.roadmind.toggleVisualization()",
-    "title": "RoadMind: Toggle 3D LiDAR",
-    "desc": "Show or hide forward LiDAR rays and hit points directly in the 3D world"
+    "title": "RoadMind: Toggle Sensor Suite",
+    "desc": "Show or hide the complete RoadMind virtual automotive sensor layout in the 3D world"
   }
 }

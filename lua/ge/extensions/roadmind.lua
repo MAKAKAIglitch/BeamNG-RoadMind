@@ -1,11 +1,10 @@
--- RoadMind world-space LiDAR visualizer and vehicle coordinator.
--- This is a Game Engine Lua extension: debugDrawer renders into the 3D world.
+-- RoadMind world-space automotive sensor visualizer and coordinator.
+-- All primitives are drawn directly into the BeamNG 3D world.
 
 local M = {}
 
 local CHECK_INTERVAL = 0.5
-local MAX_FRAME_AGE = 0.8
-local POINT_RADIUS = 0.075
+local MAX_FRAME_AGE = 1.1
 
 local state = {
   activeVehicleId = nil,
@@ -117,45 +116,201 @@ local function toPoint3F(point)
   return vec3(point.x, point.y, point.z):toPoint3F()
 end
 
+local function drawLine(drawer, a, b, color)
+  if not drawer or type(drawer.drawLine) ~= "function" or not a or not b then
+    return
+  end
+  pcall(drawer.drawLine, drawer, a, b, color)
+end
+
+local function drawSphere(drawer, position, radius, color)
+  if not drawer or type(drawer.drawSphere) ~= "function" or not position then
+    return
+  end
+  pcall(drawer.drawSphere, drawer, position, radius, color)
+end
+
+local function drawRayReturns(drawer, originTable, rays, color, pointColor, pointRadius)
+  local origin = toPoint3F(originTable)
+  if not origin or type(rays) ~= "table" then
+    return
+  end
+
+  drawSphere(drawer, origin, 0.075, color)
+
+  for i = 1, #rays do
+    local ray = rays[i]
+    if ray.hit == true then
+      local hitPoint = toPoint3F(ray)
+      if hitPoint then
+        drawLine(drawer, origin, hitPoint, color)
+        drawSphere(drawer, hitPoint, pointRadius, pointColor)
+      end
+    end
+  end
+end
+
+local function drawLidar(drawer, lidar)
+  if type(lidar) ~= "table" then
+    return
+  end
+
+  drawRayReturns(
+    drawer,
+    lidar.origin,
+    lidar.rays,
+    ColorF(0.10, 0.76, 1.0, 0.88),
+    ColorF(1.0, 0.45, 0.08, 1.0),
+    0.065
+  )
+end
+
+local function drawRadar(drawer, radar)
+  if type(radar) ~= "table" then
+    return
+  end
+
+  local mounts = radar.mounts or {}
+  for i = 1, #mounts do
+    local position = toPoint3F(mounts[i].position)
+    drawSphere(drawer, position, 0.09, ColorF(0.15, 1.0, 0.35, 1.0))
+  end
+
+  local returns = radar.returns or {}
+  for i = 1, #returns do
+    local hit = returns[i]
+    local origin = toPoint3F(hit.origin)
+    local target = toPoint3F(hit)
+    if origin and target then
+      local approaching = type(hit.radialSpeed) == "number" and hit.radialSpeed < -0.5
+      local color = approaching
+        and ColorF(1.0, 0.18, 0.12, 0.95)
+        or ColorF(0.95, 0.76, 0.12, 0.90)
+
+      drawLine(drawer, origin, target, color)
+      drawSphere(drawer, target, 0.13, color)
+    end
+  end
+end
+
+local function drawUltrasonic(drawer, ultrasonic)
+  if type(ultrasonic) ~= "table" then
+    return
+  end
+
+  local mounts = ultrasonic.mounts or {}
+  for i = 1, #mounts do
+    drawSphere(
+      drawer,
+      toPoint3F(mounts[i].position),
+      0.065,
+      ColorF(0.15, 0.95, 0.95, 1.0)
+    )
+  end
+
+  local returns = ultrasonic.returns or {}
+  for i = 1, #returns do
+    local hit = returns[i]
+    local origin = toPoint3F(hit.origin)
+    local target = toPoint3F(hit)
+    if origin and target then
+      drawLine(drawer, origin, target, ColorF(0.10, 1.0, 0.82, 0.95))
+      drawSphere(drawer, target, 0.085, ColorF(1.0, 0.88, 0.1, 1.0))
+    end
+  end
+end
+
+local function drawCameraFrustum(drawer, camera)
+  local origin = toPoint3F(camera.position)
+  local forward = camera.direction
+  local up = camera.up
+
+  if not origin or type(forward) ~= "table" or type(up) ~= "table" then
+    return
+  end
+
+  local fwd = vec3(forward.x, forward.y, forward.z)
+  local upVec = vec3(up.x, up.y, up.z)
+  if fwd:length() < 0.00001 or upVec:length() < 0.00001 then
+    return
+  end
+  fwd = fwd:normalized()
+  upVec = upVec:normalized()
+
+  local right = fwd:cross(upVec)
+  if right:length() < 0.00001 then
+    return
+  end
+  right = right:normalized()
+
+  local range = type(camera.range) == "number" and camera.range or 25
+  local hfov = math.rad(tonumber(camera.horizontalFov) or 90)
+  local vfov = math.rad(tonumber(camera.verticalFov) or 55)
+  local halfWidth = math.tan(hfov * 0.5) * range
+  local halfHeight = math.tan(vfov * 0.5) * range
+
+  local center = vec3(origin.x, origin.y, origin.z) + fwd * range
+  local farLeftUp = center - right * halfWidth + upVec * halfHeight
+  local farRightUp = center + right * halfWidth + upVec * halfHeight
+  local farLeftDown = center - right * halfWidth - upVec * halfHeight
+  local farRightDown = center + right * halfWidth - upVec * halfHeight
+
+  local color = ColorF(0.28, 0.52, 1.0, 0.58)
+  drawLine(drawer, origin, farLeftUp:toPoint3F(), color)
+  drawLine(drawer, origin, farRightUp:toPoint3F(), color)
+  drawLine(drawer, origin, farLeftDown:toPoint3F(), color)
+  drawLine(drawer, origin, farRightDown:toPoint3F(), color)
+
+  drawLine(drawer, farLeftUp:toPoint3F(), farRightUp:toPoint3F(), color)
+  drawLine(drawer, farRightUp:toPoint3F(), farRightDown:toPoint3F(), color)
+  drawLine(drawer, farRightDown:toPoint3F(), farLeftDown:toPoint3F(), color)
+  drawLine(drawer, farLeftDown:toPoint3F(), farLeftUp:toPoint3F(), color)
+
+  drawSphere(drawer, origin, 0.055, ColorF(0.25, 0.55, 1.0, 1.0))
+end
+
+local function drawLocalization(drawer, localization)
+  if type(localization) ~= "table" then
+    return
+  end
+
+  local imu = localization.imu
+  if type(imu) == "table" and type(imu.position) == "table" then
+    local origin = toPoint3F(imu.position)
+    if origin then
+      drawSphere(drawer, origin, 0.11, ColorF(0.9, 0.2, 1.0, 1.0))
+    end
+  end
+
+  local gnss = localization.gnss
+  if type(gnss) == "table" and type(gnss.position) == "table" then
+    local origin = toPoint3F(gnss.position)
+    if origin then
+      drawSphere(drawer, origin, 0.12, ColorF(0.2, 1.0, 0.45, 1.0))
+      drawSphere(drawer, origin, 0.22, ColorF(0.2, 1.0, 0.45, 0.35))
+    end
+  end
+end
+
 local function drawFrame()
   local drawer = debugDrawer
   local frame = state.latestData
 
   if not drawer or not frame or not frame.enabled
-      or state.frameAge > MAX_FRAME_AGE
-      or type(frame.origin) ~= "table"
-      or type(frame.rays) ~= "table"
-      or type(drawer.drawLine) ~= "function"
-      or type(drawer.drawSphere) ~= "function" then
+      or state.frameAge > MAX_FRAME_AGE then
     return
   end
 
-  local origin = toPoint3F(frame.origin)
-  if not origin then
-    return
+  drawLidar(drawer, frame.lidar)
+  drawRadar(drawer, frame.radar)
+  drawUltrasonic(drawer, frame.ultrasonic)
+
+  local cameras = frame.cameras or {}
+  for i = 1, #cameras do
+    drawCameraFrustum(drawer, cameras[i])
   end
 
-  -- A small marker identifies the virtual sensor's exact mounting position.
-  drawer:drawSphere(origin, 0.11, ColorF(0.05, 0.85, 1.0, 1.0))
-
-  for i = 1, #frame.rays do
-    local ray = frame.rays[i]
-
-    -- Show only beams that received a return. This keeps the scene readable
-    -- and avoids drawing the full 60 m cone when no object was detected.
-    if ray.hit == true then
-      local hitPoint = toPoint3F(ray)
-      if hitPoint then
-        local distance = type(ray.distance) == "number" and ray.distance or 60
-        local t = math.max(0, math.min(1, distance / 60))
-        local lineColor = ColorF(0.1 + 0.9 * (1 - t), 0.82, 1.0, 0.9)
-        local pointColor = ColorF(1.0, 0.35 + 0.45 * t, 0.08, 1.0)
-
-        drawer:drawLine(origin, hitPoint, lineColor)
-        drawer:drawSphere(hitPoint, POINT_RADIUS, pointColor)
-      end
-    end
-  end
+  drawLocalization(drawer, frame.localization)
 end
 
 function M.onExtensionLoaded()
@@ -175,19 +330,18 @@ function M.toggleVisualization()
       setVehicleSensorState(state.activeVehicle, true)
     end
 
-    log("I", "roadmind", "3D LiDAR visualization enabled")
+    log("I", "roadmind", "Automotive sensor suite visualization enabled")
   else
     if state.activeVehicle then
       setVehicleSensorState(state.activeVehicle, false)
     end
 
-    log("I", "roadmind", "3D LiDAR visualization disabled")
+    log("I", "roadmind", "Automotive sensor suite visualization disabled")
   end
 
   return state.visualizationEnabled
 end
 
--- Receives serialized world-space ray endpoints from the active vehicle VM.
 function M.onSensorData(encodedFrame)
   if not state.visualizationEnabled
       or type(encodedFrame) ~= "string"
@@ -196,8 +350,7 @@ function M.onSensorData(encodedFrame)
   end
 
   local ok, frame = pcall(jsonDecode, encodedFrame)
-  if not ok or type(frame) ~= "table"
-      or type(frame.rays) ~= "table" then
+  if not ok or type(frame) ~= "table" then
     return
   end
 
@@ -228,8 +381,8 @@ function M.onUpdate(dt)
     syncPlayerVehicle()
   end
 
-  -- debugDrawer primitives are transient, so redraw the last scan every GFX
-  -- frame. Raycasts themselves remain rate-limited in Vehicle Lua to 4 Hz.
+  -- Sensor raycasts occur in Vehicle Lua at fixed, low rates.
+  -- The render loop redraws cached geometry only.
   drawFrame()
 end
 

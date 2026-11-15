@@ -1,58 +1,51 @@
 # RoadMind architecture
 
-RoadMind is split into independent layers so sensor acquisition, world visualization, route planning and vehicle control do not depend on one another.
+RoadMind is a layered sensor and driving stack for BeamNG.drive.
 
-## 1. Sensor layer — Vehicle Lua
+## Vehicle Lua sensor backend
 
 Location: lua/vehicle/extensions/roadmind_sensors.lua
 
-The current prototype uses one virtual sensor mounted near the front of the active vehicle:
+The Vehicle Lua extension owns all measurement work:
 
-- Horizontal field of view: 120°.
-- Vertical field of view: 16°.
-- Ray pattern: 17 azimuth samples × 3 elevation samples.
-- Maximum range: 60 m.
-- Default scan rate: 4 scans per second.
-- Maximum ray directions: 51 per scan.
+- Forward LiDAR: 51 rays, 4 Hz, 120° horizontal FOV, 65 m.
+- Five radar ray fans: 17 directions total, 2 Hz.
+- Twelve ultrasonic units: 36 short-range rays total, 2 Hz.
+- Seven camera mount poses and FOV values, refreshed at 5 Hz.
+- IMU-like acceleration and estimated yaw rate, refreshed at 5 Hz.
+- GNSS-like world position and vehicle odometry signals, refreshed at 5 Hz.
 
-For each ray, the sensor checks static geometry and dynamic objects, then keeps the closest hit. It sends the world-space endpoint of each ray to Game Engine Lua. Valid returns are also converted into sensor-local coordinates for future planning.
+The raycast scheduler is rate-limited. The extension serializes cached results to Game Engine Lua. It never performs raycasts from the renderer.
 
-The sensor origin is virtual; no visible sensor mesh or JBeam edit is required.
-
-## 2. Input binding
-
-Location: lua/ge/extensions/core/input/actions/roadmind_actions.json
-
-RoadMind contributes a regular BeamNG action named **RoadMind: Toggle 3D LiDAR**. It runs in Game Engine Lua and calls the RoadMind coordinator. The player assigns a keyboard key or controller button in Options → Controls.
-
-No UI app is needed.
-
-## 3. World visualization — Game Engine Lua
+## Game Engine Lua coordinator and renderer
 
 Location: lua/ge/extensions/roadmind.lua
 
-The game-engine extension attaches the sensor extension to the active player vehicle when visualization is enabled. Vehicle Lua sends serialized scan frames to the coordinator.
+The Game Engine Lua extension:
 
-The coordinator uses BeamNG's world debug drawer:
+- Attaches the sensor backend to the active player vehicle when the sensor-suite binding is enabled.
+- Receives the latest serialized sensor frame.
+- Draws LiDAR returns, radar returns, ultrasonic close-range returns, camera frustums, IMU and GNSS mount markers using the game's world debug drawer.
+- Redraws cached geometry each graphics frame because debug primitives are transient.
 
-- a line from the virtual sensor origin to each valid hit;
-- a small sphere at each hit position;
-- a cyan marker at the sensor origin.
+The render loop does not perform new raycasts.
 
-Debug primitives are transient, so the last received scan is redrawn each graphics frame while visualization is active. Raycasts themselves remain rate-limited to 4 Hz. No new raycasts are performed by the render loop.
+## Input
 
-Only valid hit beams are displayed; missed rays are not drawn to the 60 m range limit.
+Location: lua/ge/extensions/core/input/actions/roadmind_actions.json
 
-## 4. Local planner — planned
+The regular Controls action **RoadMind: Toggle Sensor Suite** calls the Game Engine Lua coordinator. The user assigns a keyboard key or controller button in Options → Controls.
 
-The local planner will consume sensor-local points and route-corridor information. It should produce a small set of candidate trajectories, reject collision paths and select the route-compatible candidate with the best clearance and smoothness score.
+## Sensor model boundaries
 
-The initial planner should be deterministic and inexpensive. A lattice or bicycle-model trajectory sampler with collision checks is preferred over a neural network.
+The base mod targets BeamNG.drive. LiDAR, radar and ultrasonic use geometric raycasts; camera mounts display FOV frustums but do not return RGB images. IMU-like values use vehicle electrics and heading differences. GNSS-like positioning uses simulator world coordinates. Wheel speed and odometer come from vehicle electrics.
 
-## 5. Vehicle controller — planned
+BeamNG.tech provides a separate native suite with rendered camera, LiDAR, RADAR, ultrasonic, GPS and IMU sensors. The planned native adapter can use those APIs without changing the upper-level route-planning interface.
 
-The controller will track the selected path and manage steering, throttle, braking and gears. A safety supervisor will request a stop when sensor data is stale, route confidence is lost or every candidate path is blocked.
+## Planned autonomy stack
 
-## Important distinction
-
-The current prototype does **not** autonomously drive the vehicle. It provides sensor acquisition and the requested in-world visualization. Route planning and autonomous actuation are separate future milestones.
+1. **Route manager:** road graph, route points and local road corridor.
+2. **Object tracker:** radar returns and LiDAR points associated over time.
+3. **Local planner:** candidate trajectory generation, collision checks and scoring.
+4. **Vehicle controller:** steering, throttle, braking and gear management.
+5. **Safety supervisor:** controlled stop on stale sensors, invalid route or blocked path.

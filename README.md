@@ -1,60 +1,76 @@
 # BeamNG-RoadMind
 
-**Lightweight autonomous-driving research mod for BeamNG.drive.**
+**A lightweight virtual automotive sensor suite and autonomous-driving research mod for BeamNG.drive.**
 
-RoadMind is being built around a forward-facing automotive sensor model, world-space LiDAR visualization and a custom driving stack. The goal is a vehicle that can follow route points, understand nearby obstacles and choose its own safe trajectory without requiring a permanent neural-network runtime.
+RoadMind models the sensor layout of a modern assisted/autonomous vehicle and visualizes its coverage directly in the game world. The long-term goal is a custom driving stack that plans routes, avoids obstacles and controls the vehicle without relying on a permanent neural-network runtime.
 
-> **Development status: early prototype.** The current build provides a forward virtual LiDAR sensor and an in-world 3D ray/point visualizer activated by a configurable key binding. Autonomous steering, throttle and braking are not implemented yet.
+> **Development status: sensor-suite prototype.** The current build contains virtual LiDAR, raycast-based radar and ultrasonic proxies, camera coverage frustums, and vehicle-state localization/odometry data. Autonomous steering, throttle and braking are not implemented yet. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
 
-## Current prototype
+## Sensor suite
 
-- Forward virtual LiDAR with **120° horizontal FOV** and 16° vertical FOV.
-- 17 × 3 ray layout: up to **51 rays per scan**.
-- Default scan frequency: **4 Hz**, range: **60 m**.
-- Static scenery and dynamic-object raycasts.
-- Sensor origin positioned virtually near the front of the active vehicle.
-- Each valid return is drawn directly in the 3D game world:
-  - a line from the sensor origin to the hit;
-  - a small sphere at the hit position;
-  - a small cyan marker at the virtual sensor origin.
-- No separate UI app, HTML canvas, external Python process or neural-network runtime.
-- Sensor scanning runs only while the 3D visualization toggle is enabled.
+| System | Count | Current model |
+|---|---:|---|
+| Forward LiDAR | 1 | 120° forward ray fan, 51 directions, 65 m |
+| Automotive radar | 5 | 1 front long-range + 4 corner radars; 3–5 rays each |
+| Ultrasonic | 12 | Front, rear and corner sensors; 3-ray cone approximation |
+| Cameras | 7 | Front narrow/wide, side, rear wide and rear-corner coverage frustums |
+| IMU | 1 | Chassis acceleration signals and estimated yaw rate |
+| GNSS-like localization | 1 | Vehicle world position and altitude; no latitude/longitude reference |
+| Wheel odometry | 1 data source | BeamNG wheel speed and odometer signals |
 
-## Installation and key binding
+### One-key visualization
 
 1. Download the repository as a ZIP.
-2. Put the ZIP in your BeamNG.drive user folder's `mods` directory.
+2. Put it in your BeamNG.drive user folder's `mods` directory.
 3. Start BeamNG.drive and open **Options → Controls**.
-4. Search for **RoadMind: Toggle 3D LiDAR** and assign a keyboard key or controller button.
-5. Enter a vehicle and press the assigned binding. Press it again to hide the visualization and stop scanning.
+4. Search for **RoadMind: Toggle Sensor Suite** and assign a keyboard key or controller button.
+5. Enter a vehicle and press the binding. Press it again to hide the suite and stop sensor updates.
 
-The binding is a regular BeamNG action, so it is available without opening or keeping any UI app on screen.
+No separate UI app is required. Sensors are invisible virtual mounts; their 3D coverage, beams and returns are drawn directly into the game world.
 
-## Performance design
+## Important simulation boundaries
 
-- Maximum of 51 ray directions per scan.
-- Sensor scans are rate-limited to 4 Hz; no catch-up bursts.
-- The sensor is off until the visualization binding is enabled.
-- Debug drawing reuses the latest scan; it does not perform new raycasts each render frame.
-- Only valid hit beams and hit points are drawn, rather than a dense empty cone.
-- The visualization uses the game's world debug drawer, not a continuously polling HTML canvas.
+This project targets **BeamNG.drive**. BeamNG.tech has a separate native sensor stack with rendered RGB/depth cameras, LiDAR, RADAR, ultrasonic, GPS and IMU APIs. The regular BeamNG.drive mod API does not expose the same complete native suite.
 
-These are workload limits, not a measured CPU guarantee. Actual cost depends on the map, vehicle, game version and scene complexity.
+Therefore:
 
-See [ROADMAP.md](ROADMAP.md), [Architecture](docs/ARCHITECTURE.md) and [Performance notes](docs/PERFORMANCE.md).
+- LiDAR uses virtual raycasts and produces a sparse forward point cloud.
+- Radar uses raycast hits plus target-velocity estimates where available. It is a lightweight kinematic radar proxy, not an RF/FMCW waveform simulation.
+- Ultrasonic uses short-range ray fans. It approximates the sensor beam, not acoustic propagation or material-dependent reflections.
+- Camera cones show mounting positions and fields of view. They do not produce RGB frames or semantic object detections in this Drive build.
+- IMU acceleration comes from BeamNG vehicle electrics; yaw rate is estimated from heading changes.
+- GNSS-like localization reports BeamNG world coordinates. It is not geodetic latitude/longitude.
+- Odometry reads the vehicle wheel-speed and odometer electrics where present.
 
-## Roadmap
+These boundaries are kept explicit so a simulated geometric measurement is not mistaken for a full physical sensor model.
 
-See [ROADMAP.md](ROADMAP.md) for the full development plan and acceptance criteria.
+## Performance
+
+- LiDAR: 51 directions at 4 Hz.
+- Radar: 17 directions total at 2 Hz.
+- Ultrasonic: 36 short-range directions at 2 Hz.
+- Camera frustums: geometry only; no image rendering.
+- IMU/localization/odometry: sampled at 5 Hz.
+- The whole suite stays off until the Controls binding is pressed.
+- Debug drawing redraws cached sensor data; it performs no raycasts.
+
+The rough budget is 310 ray directions per second. A ray may use one static and one dynamic query, so this is a workload estimate, not a measured CPU percentage. Actual cost depends on the map, vehicle, traffic, hardware and game version.
+
+## Documentation
+
+- [Full sensor inventory](docs/SENSOR_SUITE.md)
+- [Roadmap](ROADMAP.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Performance notes](docs/PERFORMANCE.md)
 
 ## Design principles
 
-- **Lua-first:** keep real-time sensor and driving logic inside BeamNG.
-- **Low overhead:** rate-limit scans, cap ray counts and avoid per-frame raycasts.
-- **World-space first:** sensor data should be inspectable directly in the game world.
-- **Modular:** sensors, route planning, vehicle control and debugging are independent components.
-- **Explainable:** start with deterministic planning and conventional control algorithms before considering machine learning.
-- **Vehicle-agnostic:** do not require editing every vehicle's JBeam files.
+- **Drive-compatible:** no BeamNG.tech-only API dependencies in the base mod.
+- **Honest sensor models:** simulated proxies are labelled as proxies.
+- **Low overhead:** fixed scan rates, hard ray budgets and no raycasts in the render loop.
+- **World-space first:** sensor mounts, camera fields of view, beams and returns are inspectable in-game.
+- **Modular:** sensing, planning, vehicle control and visualization remain independent.
+- **Vehicle-agnostic:** no per-vehicle JBeam edits are required for the virtual sensor layout.
 
 ## License
 
