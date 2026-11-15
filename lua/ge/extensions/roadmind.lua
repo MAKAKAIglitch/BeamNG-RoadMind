@@ -710,9 +710,11 @@ local function mergeSensorFrame(frame)
   if updates.lidar == true then latest.lidar = processLidar(frame.lidar) end
   if updates.radar == true then latest.radar = processRadar(frame.radar) end
   if updates.ultrasonic == true then latest.ultrasonic = processUltrasonic(frame.ultrasonic) end
-  if type(frame.cameras) == "table" then latest.cameras = frame.cameras end
-  if type(frame.localization) == "table" then latest.localization = frame.localization end
-  if type(frame.mounts) == "table" then latest.mounts = frame.mounts end
+  if updates.pose == true then
+    latest.cameras = type(frame.cameras) == "table" and frame.cameras or {}
+    latest.localization = type(frame.localization) == "table" and frame.localization or nil
+    latest.mounts = type(frame.mounts) == "table" and frame.mounts or {}
+  end
   if type(frame.vehicleVelocity) == "table" then latest.vehicleVelocity = frame.vehicleVelocity end
 
   state.latestData = latest
