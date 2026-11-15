@@ -91,7 +91,7 @@ Status: **virtual sensor-suite prototype; in-game BeamNG validation is required.
 ## Performance principles
 
 - No raycasts on every render frame.
-- Balanced profile target: about 74 scene-raycast queries per second; Economy: 26; High: 310.
+- Default Economy profile target: about 26 scene-raycast queries per second; Balanced: 74; High: 310.
 - These are calculated query budgets, not measured FPS or CPU results.
 - Hard caps on rays, points and trajectory candidates.
 - Radar and ultrasonic scans run at lower rates than LiDAR.
