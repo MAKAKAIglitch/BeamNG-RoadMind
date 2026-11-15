@@ -2,26 +2,25 @@
 
 RoadMind is designed to minimize its load on BeamNG.drive.
 
-## Current target budgets
+## Configurable profiles
 
-| Subsystem | Workload | Update rate | Scene raycast queries / second |
-|---|---:|---:|---:|
-| Forward LiDAR | 51 rays | 4 Hz | 204 |
-| Five radars | 17 rays total | 2 Hz | 34 |
-| Twelve ultrasonics | 36 rays total | 2 Hz | 72 |
-| Cameras | 7 frustums | 5 Hz pose refresh | 0 |
-| IMU / GNSS / odometry | vehicle-state sampling | 5 Hz | 0 |
-| **Total** | | | **310** |
+The settings page is available at **ESC → System → Mods → RoadMind** in BeamNG.drive 0.39+.
 
-Each ray direction currently produces one Game Engine scene-raycast query. The target workload is about 310 queries per second. This is a workload estimate, not a measured CPU percentage.
+| Profile | LiDAR | Radar | Ultrasonic | Estimated queries/s |
+|---|---|---|---|---:|
+| Economy | 9 rays × 1 Hz | 5 rays × 1 Hz | 12 rays × 1 Hz | **26** |
+| Balanced (default) | 26 rays × 2 Hz | 10 rays × 1 Hz | 12 rays × 1 Hz | **74** |
+| High | 51 rays × 4 Hz | 17 rays × 2 Hz | 36 rays × 2 Hz | **310** |
+
+The page also allows each sensor group to be disabled, LiDAR range to be changed (30–160 m), and individual 3D overlays to be hidden. Hiding an overlay does not disable the underlying scan; disable the sensor itself to reduce raycast work.
+
+These figures are calculated from configured ray counts and frequencies. They are not measured FPS or CPU percentages.
 
 ## Scheduling
 
-- LiDAR runs at 4 Hz.
-- Radar runs at 2 Hz.
-- Ultrasonic runs at 2 Hz.
-- Camera poses, IMU, GNSS-like position and odometry refresh at 5 Hz.
-- The complete suite is disabled until the player activates it.
+- Sensor scan frequencies are controlled by the selected profile and can be customized.
+- Camera frustums, IMU, GNSS-like position and odometry use the selected 2–5 Hz pose rate when enabled.
+- The complete suite is disabled until the player activates it from the settings page or Controls binding.
 - Sensor data is cached between updates.
 - Game Engine scene raycasts run only on incoming sensor-scan updates; the render loop redraws cached data and performs no raycasts.
 
