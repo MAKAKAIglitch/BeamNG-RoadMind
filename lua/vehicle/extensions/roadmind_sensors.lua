@@ -476,8 +476,28 @@ local function publish()
     return
   end
 
+  local updates = frame.updatedSensors or {}
+  local payload = {
+    enabled = true,
+    sourceVehicleId = state.sourceVehicleId,
+    sequence = state.sequence,
+    updatedSensors = updates
+  }
+
+  if updates.lidar then payload.lidar = frame.lidar end
+  if updates.radar then payload.radar = frame.radar end
+  if updates.ultrasonic then payload.ultrasonic = frame.ultrasonic end
+  if updates.pose then
+    payload.cameras = frame.cameras or {}
+    payload.localization = frame.localization
+    payload.mounts = frame.mounts or {}
+  end
+
+  local okPayload, compactEncoded = pcall(jsonEncode, payload)
+  if not okPayload or type(compactEncoded) ~= "string" then return end
+
   local command = "extensions.roadmind.onSensorData("
-    .. string.format("%q", encoded) .. ")"
+    .. string.format("%q", compactEncoded) .. ")"
 
   pcall(obj.queueGameEngineLua, obj, command)
 end
@@ -664,6 +684,7 @@ function M.updateGFX(dt)
     updatedSensors.lidar = true
     updatedSensors.radar = true
     updatedSensors.ultrasonic = true
+    updatedSensors.pose = true
     state.pendingReset = false
     changed = true
   end
@@ -704,6 +725,7 @@ function M.updateGFX(dt)
       imu = state.frame.localization.imu.position,
       gnss = state.frame.localization.gnss.position
     } or {}
+    updatedSensors.pose = true
     changed = true
   end
 
