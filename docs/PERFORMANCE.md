@@ -4,7 +4,7 @@ RoadMind is designed to minimize its load on BeamNG.drive.
 
 ## Configurable profiles
 
-The settings page is available at **ESC → System → Mods → RoadMind** in BeamNG.drive 0.39+.
+The settings page is available at **ESC → Mods → RoadMind** in BeamNG.drive 0.39+.
 
 | Profile | LiDAR | Radar | Ultrasonic | Estimated queries/s |
 |---|---|---|---|---:|
