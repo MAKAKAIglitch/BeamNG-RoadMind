@@ -98,7 +98,7 @@ local function getDynamicHit(origin, direction, maxDistance)
   local endpoint = origin + direction * maxDistance
   local ok, hit = pcall(castRay, origin, endpoint, true, true)
 
-  if ok and type(hit) == "table" and type(hit.dist) == "number"
+  if ok and hit and type(hit.dist) == "number"
       and hit.dist >= CONFIG.minRange and hit.dist <= maxDistance then
     return hit
   end
