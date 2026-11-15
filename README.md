@@ -18,15 +18,19 @@ RoadMind models the sensor layout of a modern assisted/autonomous vehicle and vi
 | GNSS-like localization | 1 | Vehicle world position and altitude; no latitude/longitude reference |
 | Wheel odometry | 1 data source | BeamNG wheel speed and odometer signals |
 
-### One-key visualization
+### In-game settings
 
-1. Download the repository as a ZIP.
-2. Put it in your BeamNG.drive user folder's `mods` directory.
-3. Start BeamNG.drive and open **Options → Controls**.
-4. Search for **RoadMind: Toggle Sensor Suite** and assign a keyboard key or controller button.
-5. Enter a vehicle and press the binding. Press it again to hide the suite and stop sensor updates.
+Open **ESC → System → Mods → RoadMind** (BeamNG.drive 0.39+). The bilingual settings page follows the game's language and includes:
 
-No separate UI app is required. Sensors are invisible virtual mounts; their 3D coverage, beams and returns are drawn directly into the game world.
+- Economy, Balanced and High performance profiles.
+- LiDAR enable, resolution, frequency and range.
+- Radar and ultrasonic enable, ray density and frequency.
+- Independent switches for 3D sensor overlays.
+- A live estimate of scheduled scene-raycast queries per second.
+
+Settings are saved to the BeamNG user settings folder and applied while scanning is active. Scanning is stopped by default. Press **Start scanning** in the page, or use the existing **RoadMind: Toggle Sensor Suite** Controls binding as a quick toggle.
+
+The 3D beams and returns are drawn directly into the game world; there is no separate HUD app.
 
 ## Important simulation boundaries
 
@@ -46,15 +50,16 @@ These boundaries are kept explicit so a simulated geometric measurement is not m
 
 ## Performance
 
-- LiDAR: 51 directions at 4 Hz.
-- Radar: 17 directions total at 2 Hz.
-- Ultrasonic: 36 short-range directions at 2 Hz.
-- Camera frustums: geometry only; no image rendering.
-- IMU/localization/odometry: sampled at 5 Hz.
-- The whole suite stays off until the Controls binding is pressed.
+- Economy: about 26 scene-raycast queries/s.
+- Balanced (default): about 74 queries/s.
+- High: about 310 queries/s.
+- Individual sensors can be disabled; the 3D overlays can also be hidden.
+- Camera frustums are geometry only; no image rendering.
+- Camera/localization data updates at the selected pose rate.
+- Scanning stays off until explicitly started.
 - Raycasts run only when a sensor scan is due, not in the render loop. Debug drawing redraws cached results.
 
-The target workload is 310 Game Engine scene-raycast queries per second. This is an estimate, not a measured CPU percentage. Actual cost depends on the map, vehicle, traffic, hardware and game version.
+The figures are calculated from ray counts and scan frequencies. They are not measured FPS or CPU percentages. Actual cost depends on the map, vehicle, traffic, hardware and game version.
 
 ## Documentation
 
@@ -62,12 +67,13 @@ The target workload is 310 Game Engine scene-raycast queries per second. This is
 - [Roadmap](ROADMAP.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Performance notes](docs/PERFORMANCE.md)
+- [Settings and profile details](docs/SETTINGS.md)
 
 ## Design principles
 
 - **Drive-compatible:** no BeamNG.tech-only API dependencies in the base mod.
 - **Honest sensor models:** simulated proxies are labelled as proxies.
-- **Low overhead:** fixed scan rates, hard ray budgets and no raycasts in the render loop.
+- **Low overhead:** off-by-default scanning, configurable scan rates and ray density, and no raycasts in the render loop.
 - **World-space first:** sensor mounts, camera fields of view, beams and returns are inspectable in-game.
 - **Modular:** sensing, planning, vehicle control and visualization remain independent.
 - **Vehicle-agnostic:** no per-vehicle JBeam edits are required for the virtual sensor layout.
