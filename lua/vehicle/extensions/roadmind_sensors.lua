@@ -1,6 +1,6 @@
 -- RoadMind virtual automotive sensor suite.
--- Vehicle Lua performs all raycasts; Game Engine Lua renders the returned
--- sensor geometry in world space. This targets BeamNG.drive, not BeamNG.tech.
+-- Vehicle Lua calculates sensor poses and ray directions. Game Engine Lua
+-- performs scene raycasts and renders the resulting geometry in BeamNG.drive.
 
 local M = {}
 
@@ -66,6 +66,7 @@ local CAMERAS = {
 
 local state = {
   enabled = false,
+  sourceVehicleId = nil,
   lidarTimer = 0,
   radarTimer = 0,
   ultrasonicTimer = 0,
@@ -413,6 +414,7 @@ end
 local function buildEmptyFrame()
   return {
     enabled = false,
+    sourceVehicleId = state.sourceVehicleId,
     sequence = state.sequence,
     updatedSensors = {},
     lidar = {rays = {}, rayCount = 0},
@@ -434,6 +436,7 @@ local function publish()
 
   state.sequence = state.sequence + 1
   frame.enabled = true
+  frame.sourceVehicleId = state.sourceVehicleId
   frame.sequence = state.sequence
 
   local ok, encoded = pcall(jsonEncode, frame)
@@ -462,8 +465,11 @@ local function clearPublishedFrame()
   end
 end
 
-function M.setEnabled(enabled)
+function M.setEnabled(enabled, sourceVehicleId)
   state.enabled = enabled == true
+  if type(sourceVehicleId) == "number" then
+    state.sourceVehicleId = sourceVehicleId
+  end
   state.lidarTimer = 0
   state.radarTimer = 0
   state.ultrasonicTimer = 0
