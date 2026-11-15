@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Move scene raycasts to Game Engine Lua, where BeamNG exposes `castRay`.
+- Send only due sensor beams to the Game Engine to preserve the 4 Hz / 2 Hz scan schedules.
+- Keep missed rays empty instead of inventing returns at maximum range.
+- Preserve full floating-point precision for beam directions.
+- Clarify that radar radial velocity and stable target tracking are not implemented yet.
+
 ## 0.3.0 — Virtual automotive sensor suite
 
 - Added five virtual automotive radar units.
