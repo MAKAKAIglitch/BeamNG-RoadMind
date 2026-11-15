@@ -265,23 +265,23 @@ function t(key) {
 }
 
 const settings = ref({
-  preset: "balanced",
+  preset: "economy",
   lidarEnabled: true,
-  lidarQuality: "balanced",
-  lidarHz: 2,
-  lidarRange: 65,
+  lidarQuality: "low",
+  lidarHz: 1,
+  lidarRange: 45,
   radarEnabled: true,
-  radarDensity: "medium",
+  radarDensity: "low",
   radarHz: 1,
   ultrasonicEnabled: true,
   ultrasonicDensity: "single",
   ultrasonicHz: 1,
-  poseHz: 4,
+  poseHz: 2,
   showLidar: true,
-  showRadar: true,
-  showUltrasonic: true,
+  showRadar: false,
+  showUltrasonic: false,
   showCameras: false,
-  showLocalization: true,
+  showLocalization: false,
 })
 const status = ref({ visualizationEnabled: false, activeVehicle: false, estimatedRaycastsPerSecond: 0 })
 const error = ref("")
