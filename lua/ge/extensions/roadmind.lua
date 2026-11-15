@@ -10,8 +10,8 @@ local SETTINGS_FILE = "/settings/roadmind.json"
 local DEFAULT_SETTINGS = {
   preset = "economy",
   lidarEnabled = true, lidarQuality = "low", lidarHz = 1, lidarRange = 45,
-  radarEnabled = true, radarDensity = "low", radarHz = 1,
-  ultrasonicEnabled = true, ultrasonicDensity = "single", ultrasonicHz = 1,
+  radarEnabled = false, radarDensity = "low", radarHz = 1,
+  ultrasonicEnabled = false, ultrasonicDensity = "single", ultrasonicHz = 1,
   poseHz = 2,
   showLidar = true, showRadar = false, showUltrasonic = false,
   showCameras = false, showLocalization = false
@@ -19,19 +19,19 @@ local DEFAULT_SETTINGS = {
 
 local PRESETS = {
   economy = {
-    lidarQuality = "low", lidarHz = 1, lidarRange = 45,
-    radarDensity = "low", radarHz = 1,
-    ultrasonicDensity = "single", ultrasonicHz = 1, poseHz = 2
+    lidarEnabled = true, lidarQuality = "low", lidarHz = 1, lidarRange = 45,
+    radarEnabled = false, radarDensity = "low", radarHz = 1,
+    ultrasonicEnabled = false, ultrasonicDensity = "single", ultrasonicHz = 1, poseHz = 2
   },
   balanced = {
-    lidarQuality = "balanced", lidarHz = 2, lidarRange = 65,
-    radarDensity = "medium", radarHz = 1,
-    ultrasonicDensity = "single", ultrasonicHz = 1, poseHz = 4
+    lidarEnabled = true, lidarQuality = "balanced", lidarHz = 2, lidarRange = 65,
+    radarEnabled = true, radarDensity = "medium", radarHz = 1,
+    ultrasonicEnabled = true, ultrasonicDensity = "single", ultrasonicHz = 1, poseHz = 4
   },
   high = {
-    lidarQuality = "high", lidarHz = 4, lidarRange = 65,
-    radarDensity = "high", radarHz = 2,
-    ultrasonicDensity = "wide", ultrasonicHz = 2, poseHz = 5
+    lidarEnabled = true, lidarQuality = "high", lidarHz = 4, lidarRange = 65,
+    radarEnabled = true, radarDensity = "high", radarHz = 2,
+    ultrasonicEnabled = true, ultrasonicDensity = "wide", ultrasonicHz = 2, poseHz = 5
   }
 }
 
