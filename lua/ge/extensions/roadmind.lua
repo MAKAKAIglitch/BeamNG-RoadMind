@@ -499,7 +499,7 @@ local function normalizeSettings(source)
   end
 
   if type(source.lidarPointCount) == "number" and source.lidarPointCount >= 9
-      and source.lidarPointCount <= 129 then
+      and source.lidarPointCount <= 33 then
     result.lidarPointCount = math.floor((source.lidarPointCount - 9) / 4 + 0.5) * 4 + 9
   end
   if source.lidarHz == 1 or source.lidarHz == 2 or source.lidarHz == 4 then result.lidarHz = source.lidarHz end
@@ -605,7 +605,7 @@ function M.setSetting(key, value)
   end
   if key == "lidarPointCount"
       and (value < 9 or value > 129 or math.abs((value - 9) % 4) > 0.001) then
-    return {ok = false, error = "LiDAR point count must be 9–129 in steps of 4"}
+    return {ok = false, error = "LiDAR point count must be 9–33 in steps of 4"}
   end
 
   state.settings = normalized
