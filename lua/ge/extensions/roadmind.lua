@@ -117,18 +117,18 @@ local function startNativeRouteAI(vehicle)
   local speed = string.format("%.2f", ROUTE_MAX_SPEED_MPS)
   return queueVehicleCommand(vehicle,
     "if ai then " ..
-    "if ai.setAggression then ai.setAggression(0.35) end; " ..
-    "if ai.setSpeedMode then ai.setSpeedMode('limit') end; " ..
-    "if ai.setSpeed then ai.setSpeed(" .. speed .. ") end; " ..
-    "if ai.setAvoidCars then ai.setAvoidCars(true) end; " ..
-    "ai.setMode('span') end"
+    "if ai.setAggression then pcall(ai.setAggression, 0.35) end; " ..
+    "if ai.setSpeedMode then pcall(ai.setSpeedMode, 'limit') end; " ..
+    "if ai.setSpeed then pcall(ai.setSpeed, " .. speed .. ") end; " ..
+    "if ai.setAvoidCars then pcall(ai.setAvoidCars, true) end; " ..
+    "if ai.setMode then ai.setMode('span') end end"
   )
 end
 
 local function stopNativeRouteAI(vehicle)
   if not vehicle then return false end
   return queueVehicleCommand(vehicle,
-    "if ai and ai.setMode then ai.setMode('stopping') end"
+    "if ai and ai.setMode then pcall(ai.setMode, 'stopping') end"
   )
 end
 
@@ -604,7 +604,7 @@ function M.setSetting(key, value)
     return {ok = false, error = "LiDAR range must be between 30 and 160 m"}
   end
   if key == "lidarPointCount"
-      and (value < 9 or value > 129 or math.abs((value - 9) % 4) > 0.001) then
+      and (value < 9 or value > 33 or math.abs((value - 9) % 4) > 0.001) then
     return {ok = false, error = "LiDAR point count must be 9–33 in steps of 4"}
   end
 
@@ -1055,7 +1055,7 @@ local function nearestForwardObstacle(data)
     local delta = target - origin
     local longitudinal = delta:dot(forward)
     local lateral = math.abs(delta:dot(right))
-    if longitudinal > 0.5 and lateral <= 2.4 then
+    if longitudinal > 0.5 and lateral <= 2.4 and delta.z > -0.85 then
       minimum = math.min(minimum, longitudinal)
     end
   end
