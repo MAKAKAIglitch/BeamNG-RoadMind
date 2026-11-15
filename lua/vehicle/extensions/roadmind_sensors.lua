@@ -27,18 +27,18 @@ local CONFIG = {
 
 local sensorSettings = {
   lidarEnabled = true,
-  lidarQuality = "balanced",
-  lidarHz = 2,
-  lidarRange = 65,
+  lidarQuality = "low",
+  lidarHz = 1,
+  lidarRange = 45,
   radarEnabled = true,
-  radarDensity = "medium",
+  radarDensity = "low",
   radarHz = 1,
   ultrasonicEnabled = true,
   ultrasonicDensity = "single",
   ultrasonicHz = 1,
-  poseHz = 4,
+  poseHz = 2,
   cameraFrustumsEnabled = false,
-  localizationEnabled = true
+  localizationEnabled = false
 }
 
 -- Vehicle-local lateral convention follows the sensor basis derived from
