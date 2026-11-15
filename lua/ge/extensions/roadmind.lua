@@ -820,6 +820,10 @@ function M.setVisualizationEnabled(enabled)
     state.routePilotStarted = false
     state.routeSafetyStopped = false
     state.routePilotVehicleId = nil
+    state.routePilotError = nil
+    state.routeRetryCooldown = 0
+    state.routePath = {}
+    state.routePathEnd = nil
     state.visualizationEnabled = false
     if state.activeVehicle then
       setVehicleSensorState(state.activeVehicle, false, state.activeVehicleId)
@@ -841,6 +845,10 @@ function M.setRoutePilotEnabled(enabled)
     state.routePilotStarted = false
     state.routeSafetyStopped = false
     state.routePilotVehicleId = nil
+    state.routePilotError = nil
+    state.routeRetryCooldown = 0
+    state.routePath = {}
+    state.routePathEnd = nil
     return settingsResult()
   end
 
@@ -871,6 +879,10 @@ function M.setRoutePilotEnabled(enabled)
   state.routePilotStarted = false
   state.routeSafetyStopped = true
   state.routePilotVehicleId = state.activeVehicleId
+  state.routePilotError = "Waiting for fresh sensor data"
+  state.routeRetryCooldown = 0
+  state.routePath = {}
+  state.routePathEnd = nil
   resetFrame()
 
   log("I", "roadmind", "Experimental road-network route pilot armed; waiting for fresh sensor data")
@@ -1238,46 +1250,79 @@ local function nearestForwardObstacle(data)
   return minimum
 end
 
-local function updateRoutePilotSafety()
+local function updateRoutePilotSafety(dt)
   if not state.routePilotEnabled then return end
+
+  dt = math.max(0, tonumber(dt) or 0)
+  state.routeRetryCooldown = math.max(0, (state.routeRetryCooldown or 0) - dt)
+
   if not state.activeVehicle or state.routePilotVehicleId ~= state.activeVehicleId then
     state.routePilotEnabled = false
     state.routePilotStarted = false
     state.routeSafetyStopped = false
     state.routePilotVehicleId = nil
+    state.routePilotError = "The active vehicle changed"
+    state.routePath = {}
+    state.routePathEnd = nil
     return
   end
 
   if state.frameAge > MAX_FRAME_AGE or not state.latestData then
-    if not state.routeSafetyStopped then
+    if state.routePilotStarted then
       stopNativeRouteAI(state.activeVehicle)
       state.routePilotStarted = false
       state.routeSafetyStopped = true
     end
+    state.routePilotError = "Waiting for fresh sensor data"
     return
   end
 
   local clearance = nearestForwardObstacle(state.latestData)
   if clearance <= ROUTE_STOP_DISTANCE then
-    if not state.routeSafetyStopped then
+    if state.routePilotStarted then
       stopNativeRouteAI(state.activeVehicle)
       state.routePilotStarted = false
-      state.routeSafetyStopped = true
       log("W", "roadmind", "Route pilot paused by sensor obstacle guard")
+    end
+    state.routeSafetyStopped = true
+    state.routePilotError = string.format("Obstacle inside %.0f m safety distance", ROUTE_STOP_DISTANCE)
+    return
+  end
+
+  -- Extend the route before its last NavGraph waypoint is reached.
+  if state.routePilotStarted and state.routePathEnd then
+    local position = safeCall(state.activeVehicle, "getPosition")
+    if position then
+      local endpoint = state.routePathEnd
+      local dx, dy = endpoint.x - position.x, endpoint.y - position.y
+      local distance = math.sqrt(dx * dx + dy * dy)
+      if distance <= ROUTE_REPLAN_DISTANCE and state.routeRetryCooldown <= 0 then
+        local started, reason = startNativeRouteAI(state.activeVehicle)
+        state.routeRetryCooldown = ROUTE_REPLAN_COOLDOWN
+        if started then
+          state.routePilotError = nil
+        else
+          state.routePilotError = reason or "Could not extend the road route"
+        end
+      end
     end
     return
   end
 
-  if state.routeSafetyStopped then
-    if clearance >= ROUTE_RESUME_DISTANCE then
-      if startNativeRouteAI(state.activeVehicle) then
+  if state.routeSafetyStopped or not state.routePilotStarted then
+    if clearance >= ROUTE_RESUME_DISTANCE and state.routeRetryCooldown <= 0 then
+      local started, reason = startNativeRouteAI(state.activeVehicle)
+      if started then
         state.routePilotStarted = true
         state.routeSafetyStopped = false
+        state.routePilotError = nil
+        state.routeRetryCooldown = ROUTE_REPLAN_COOLDOWN
+        log("I", "roadmind", "NavGraph route started with sensor safety enabled")
+      else
+        state.routeSafetyStopped = true
+        state.routePilotError = reason or "Could not build a forward road route"
+        state.routeRetryCooldown = 3.0
       end
-    end
-  elseif not state.routePilotStarted then
-    if startNativeRouteAI(state.activeVehicle) then
-      state.routePilotStarted = true
     end
   end
 end
@@ -1348,7 +1393,7 @@ function M.onUpdate(dt)
   end
 
   if state.routePilotEnabled then
-    updateRoutePilotSafety()
+    updateRoutePilotSafety(dt)
   end
 
   -- Scene raycasts run only when Vehicle Lua sends a due sensor scan.
