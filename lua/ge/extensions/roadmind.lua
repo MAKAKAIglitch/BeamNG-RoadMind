@@ -795,6 +795,270 @@ local function processUltrasonic(ultrasonic)
   return {mounts = ultrasonic.mounts or {}, returns = returns, updateHz = ultrasonic.updateHz}
 end
 
+local function vectorFromTable(point)
+  if type(point) ~= "table" or type(point.x) ~= "number"
+      or type(point.y) ~= "number" or type(point.z) ~= "number" then
+    return nil
+  end
+  return vec3(point.x, point.y, point.z)
+end
+
+local function pointCellKey(point)
+  local size = PERSISTENT_POINT_CELL_SIZE
+  return table.concat({
+    tostring(math.floor(point.x / size)),
+    tostring(math.floor(point.y / size)),
+    tostring(math.floor(point.z / size))
+  }, ":")
+end
+
+local function rememberLidarPoints(lidar)
+  if not state.settings or not state.settings.lidarPersistenceEnabled
+      or type(lidar) ~= "table" or type(lidar.rays) ~= "table" then
+    return
+  end
+
+  for i = 1, #lidar.rays do
+    local point = lidar.rays[i]
+    if point.hit == true and type(point.x) == "number"
+        and type(point.y) == "number" and type(point.z) == "number" then
+      local key = pointCellKey(point)
+      if not state.lidarPointCells[key] then
+        local slot
+        if #state.lidarPointCloud < MAX_PERSISTENT_LIDAR_POINTS then
+          slot = #state.lidarPointCloud + 1
+        else
+          slot = state.lidarPointWriteIndex
+          local previous = state.lidarPointCloud[slot]
+          if previous then
+            local previousKey = pointCellKey(previous)
+            if state.lidarPointCells[previousKey] == slot then
+              state.lidarPointCells[previousKey] = nil
+            end
+          end
+          state.lidarPointWriteIndex = (slot % MAX_PERSISTENT_LIDAR_POINTS) + 1
+        end
+
+        state.lidarPointCloud[slot] = {x = point.x, y = point.y, z = point.z}
+        state.lidarPointCells[key] = slot
+      end
+    end
+  end
+end
+
+local function pointInsideSensorCone(targetPosition, mountPosition, direction, range, fovDegrees)
+  local target = vectorFromTable(targetPosition)
+  local origin = vectorFromTable(mountPosition)
+  local forward = vectorFromTable(direction)
+  if not target or not origin or not forward or type(range) ~= "number" then return false end
+
+  local delta = target - origin
+  local distance = delta:length()
+  if distance < 0.5 or distance > range then return false end
+  if forward:length() < 0.00001 then return false end
+
+  local cosine = math.max(-1, math.min(1, delta:normalized():dot(forward:normalized())))
+  local halfAngle = math.rad((tonumber(fovDegrees) or 0) * 0.5)
+  return cosine >= math.cos(halfAngle), distance
+end
+
+local function detectNearbyVehicles(data)
+  local detected = {}
+  if not state.activeVehicle or type(getAllVehicles) ~= "function" then return detected end
+
+  local ok, vehicles = pcall(getAllVehicles)
+  if not ok or type(vehicles) ~= "table" then return detected end
+
+  local settings = state.settings or DEFAULT_SETTINGS
+  local playerVelocity = safeCall(state.activeVehicle, "getVelocity")
+  local examined = 0
+
+  for _, otherVehicle in pairs(vehicles) do
+    examined = examined + 1
+    if examined > 96 then break end
+
+    local otherId = getVehicleId(otherVehicle)
+    if otherId and otherId ~= state.activeVehicleId then
+      local position = safeCall(otherVehicle, "getPosition")
+      if position then
+        local targetPosition = {x = position.x, y = position.y, z = position.z}
+        local bestDistance = math.huge
+        local bestOrigin = nil
+        local detectedBy = {}
+
+        if settings.lidarEnabled and data.lidar then
+          local visible, distance = pointInsideSensorCone(
+            targetPosition, data.lidar.origin, data.lidar.forward,
+            data.lidar.range, data.lidar.horizontalFov or 120
+          )
+          if visible then
+            detectedBy[#detectedBy + 1] = "LiDAR"
+            bestDistance = distance
+            bestOrigin = data.lidar.origin
+          end
+        end
+
+        if settings.radarEnabled and data.radar and type(data.radar.mounts) == "table" then
+          for i = 1, #data.radar.mounts do
+            local mount = data.radar.mounts[i]
+            local visible, distance = pointInsideSensorCone(
+              targetPosition, mount.position, mount.direction, mount.range, mount.fov
+            )
+            if visible then
+              detectedBy[#detectedBy + 1] = mount.name or "Radar"
+              if distance < bestDistance then
+                bestDistance = distance
+                bestOrigin = mount.position
+              end
+            end
+          end
+        end
+
+        if settings.ultrasonicEnabled and data.ultrasonic
+            and type(data.ultrasonic.mounts) == "table" then
+          for i = 1, #data.ultrasonic.mounts do
+            local mount = data.ultrasonic.mounts[i]
+            local visible, distance = pointInsideSensorCone(
+              targetPosition, mount.position, mount.direction, mount.range, 16
+            )
+            if visible then
+              detectedBy[#detectedBy + 1] = mount.name or "Ultrasonic"
+              if distance < bestDistance then
+                bestDistance = distance
+                bestOrigin = mount.position
+              end
+            end
+          end
+        end
+
+        if #detectedBy > 0 then
+          local targetVelocity = safeCall(otherVehicle, "getVelocity")
+          local radialSpeed = nil
+          if targetVelocity and playerVelocity then
+            local relativeVelocity = targetVelocity - playerVelocity
+            local playerPosition = safeCall(state.activeVehicle, "getPosition")
+            if playerPosition then
+              local delta = position - playerPosition
+              if delta:length() > 0.001 then
+                radialSpeed = round2(relativeVelocity:dot(delta:normalized()))
+              end
+            end
+          end
+
+          detected[#detected + 1] = {
+            id = otherId,
+            position = targetPosition,
+            sensorOrigin = bestOrigin,
+            distance = round2(bestDistance),
+            radialSpeed = radialSpeed,
+            detectedBy = detectedBy
+          }
+        end
+      end
+    end
+  end
+
+  table.sort(detected, function(a, b) return a.distance < b.distance end)
+  return detected
+end
+
+local function nearestForwardObstacle(data)
+  if type(data) ~= "table" then return math.huge end
+
+  local forward = data.lidar and vectorFromTable(data.lidar.forward) or nil
+  local right = data.lidar and vectorFromTable(data.lidar.right) or nil
+  local originFallback = data.lidar and vectorFromTable(data.lidar.origin) or nil
+
+  if not forward then
+    local mounts = data.radar and data.radar.mounts or {}
+    for i = 1, #mounts do
+      if mounts[i].name == "Front long-range" then
+        forward = vectorFromTable(mounts[i].direction)
+        right = forward and vec3(-forward.y, forward.x, 0) or nil
+        originFallback = vectorFromTable(mounts[i].position)
+        break
+      end
+    end
+  end
+  if not forward or forward:length() < 0.00001 then return math.huge end
+  forward = forward:normalized()
+  if not right or right:length() < 0.00001 then right = vec3(-forward.y, forward.x, 0) end
+  if right:length() < 0.00001 then return math.huge end
+  right = right:normalized()
+
+  local minimum = math.huge
+  local function inspect(point, originData)
+    local target = vectorFromTable(point)
+    local origin = vectorFromTable(originData) or originFallback
+    if not target or not origin then return end
+    local delta = target - origin
+    local longitudinal = delta:dot(forward)
+    local lateral = math.abs(delta:dot(right))
+    if longitudinal > 0.5 and lateral <= 2.4 then
+      minimum = math.min(minimum, longitudinal)
+    end
+  end
+
+  local lidarReturns = data.lidar and data.lidar.rays or {}
+  for i = 1, #lidarReturns do inspect(lidarReturns[i], data.lidar.origin) end
+
+  local radarReturns = data.radar and data.radar.returns or {}
+  for i = 1, #radarReturns do inspect(radarReturns[i], radarReturns[i].origin) end
+
+  local ultrasonicReturns = data.ultrasonic and data.ultrasonic.returns or {}
+  for i = 1, #ultrasonicReturns do inspect(ultrasonicReturns[i], ultrasonicReturns[i].origin) end
+
+  for i = 1, #(data.vehicles or {}) do
+    inspect(data.vehicles[i].position, originFallback)
+  end
+
+  return minimum
+end
+
+local function updateRoutePilotSafety()
+  if not state.routePilotEnabled then return end
+  if not state.activeVehicle or state.routePilotVehicleId ~= state.activeVehicleId then
+    state.routePilotEnabled = false
+    state.routePilotStarted = false
+    state.routeSafetyStopped = false
+    state.routePilotVehicleId = nil
+    return
+  end
+
+  if state.frameAge > MAX_FRAME_AGE or not state.latestData then
+    if not state.routeSafetyStopped then
+      stopNativeRouteAI(state.activeVehicle)
+      state.routePilotStarted = false
+      state.routeSafetyStopped = true
+    end
+    return
+  end
+
+  local clearance = nearestForwardObstacle(state.latestData)
+  if clearance <= ROUTE_STOP_DISTANCE then
+    if not state.routeSafetyStopped then
+      stopNativeRouteAI(state.activeVehicle)
+      state.routePilotStarted = false
+      state.routeSafetyStopped = true
+      log("W", "roadmind", "Route pilot paused by sensor obstacle guard")
+    end
+    return
+  end
+
+  if state.routeSafetyStopped then
+    if clearance >= ROUTE_RESUME_DISTANCE then
+      if startNativeRouteAI(state.activeVehicle) then
+        state.routePilotStarted = true
+        state.routeSafetyStopped = false
+      end
+    end
+  elseif not state.routePilotStarted then
+    if startNativeRouteAI(state.activeVehicle) then
+      state.routePilotStarted = true
+    end
+  end
+end
+
 local function mergeSensorFrame(frame)
   local updates = frame.updatedSensors or {}
   local latest = state.latestData or {
@@ -807,7 +1071,10 @@ local function mergeSensorFrame(frame)
   latest.enabled = frame.enabled == true
   latest.sequence = frame.sequence
 
-  if updates.lidar == true then latest.lidar = processLidar(frame.lidar) end
+  if updates.lidar == true then
+    latest.lidar = processLidar(frame.lidar)
+    rememberLidarPoints(latest.lidar)
+  end
   if updates.radar == true then latest.radar = processRadar(frame.radar) end
   if updates.ultrasonic == true then latest.ultrasonic = processUltrasonic(frame.ultrasonic) end
   if updates.pose == true then
@@ -817,8 +1084,10 @@ local function mergeSensorFrame(frame)
   end
   if type(frame.vehicleVelocity) == "table" then latest.vehicleVelocity = frame.vehicleVelocity end
 
+  latest.vehicles = detectNearbyVehicles(latest)
   state.latestData = latest
   state.frameAge = 0
+  updateRoutePilotSafety()
 end
 
 function M.onSensorData(encodedFrame)
