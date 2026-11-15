@@ -13,6 +13,9 @@
           <span class="roadmind-budget">
             {{ t("estimatedLoad") }}: {{ status.estimatedRaycastsPerSecond || 0 }} {{ t("queriesPerSecond") }}
           </span>
+          <span class="roadmind-budget">
+            {{ t("vehiclesDetected") }}: {{ status.detectedVehicleCount || 0 }}
+          </span>
         </div>
         <BngButton
           :accent="status.visualizationEnabled ? ACCENTS.outlined : ACCENTS.main"
@@ -32,6 +35,7 @@
             {{ status.routePilotEnabled ? (status.routeSafetyStopped ? t("routePaused") : t("routeRunning")) : t("routeStopped") }}
           </span>
           <span class="roadmind-budget">{{ t("routeSpeed") }}: 29 km/h</span>
+          <span class="roadmind-budget">{{ t("routeWaypoints") }}: {{ status.routeWaypointCount || 0 }}</span>
         </div>
         <BngButton
           :accent="status.routePilotEnabled ? ACCENTS.outlined : ACCENTS.main"
@@ -41,6 +45,9 @@
       </div>
       <p v-if="status.routeSafetyStopped && status.routePilotEnabled" class="roadmind-note">
         {{ t("routeSafetyStop") }}
+      </p>
+      <p v-if="status.routePilotError && status.routePilotEnabled" class="roadmind-error">
+        {{ routeErrorText(status.routePilotError) }}
       </p>
     </section>
 
@@ -103,7 +110,7 @@
           @update:modelValue="value => setSetting('lidarPersistenceEnabled', value)" />
       </BngRow>
       <p class="roadmind-note">
-        {{ t("persistenceNote") }} ({{ status.persistentLidarPointCount || 0 }} / 1800)
+        {{ t("persistenceNote") }} ({{ status.persistentLidarPointCount || 0 }} / 600)
       </p>
       <BngButton :accent="ACCENTS.outlined" :disabled="busy" @click="clearLidarMap">
         {{ t("clearCloud") }}
@@ -232,11 +239,13 @@ const EN = {
   pointCount: "Points per horizontal row",
   pointsPerRow: "points",
   persistence: "Accumulate point cloud",
-  persistenceNote: "Keeps up to 1800 world-space points for this game session. Drawing the cloud can reduce FPS.",
+  persistenceNote: "Keeps up to 600 world-space points for this game session. Drawing the cloud can reduce FPS.",
   clearCloud: "Clear scanned point cloud",
   detectedVehicles: "Detected vehicles",
+  vehiclesDetected: "Vehicles in sensor view",
+  routeWaypoints: "Road waypoints in active path",
   routePilot: "Road route pilot (experimental)",
-  routeDescription: "Uses BeamNG's built-in road-network AI. LiDAR, radar, ultrasonic returns and vehicle detections act as an obstacle safety guard. It stops when an obstacle is too close or sensor data becomes stale; it does not yet build a destination-specific route from the point cloud.",
+  routeDescription: "Builds a forward route on the current road NavGraph and sends its waypoints to BeamNG vehicle AI (up to 29 km/h). LiDAR, radar, ultrasonic returns and nearby-vehicle detections guard the path: it stops when blocked or when sensor data is stale, then replans ahead when clear. It does not yet steer around a blocked lane or accept a chosen destination; camera frustums are view-only.",
   routeSpeed: "Speed limit",
   routeRunning: "Route pilot active",
   routePaused: "Paused by safety guard",
@@ -247,7 +256,7 @@ const EN = {
 
   scanRate: "Scan rate",
   range: "Maximum range",
-  lidarNote: "Low: 9 rays per scan. Balanced: 26. High: 51. More rays, range and scan frequency increase CPU workload.",
+  lidarNote: "The slider sets 9–33 horizontal samples; resolution adds 1, 2 or 3 vertical layers. More samples, range and scan frequency increase CPU workload.",
   radar: "Automotive radar",
   rayDensity: "Ray density",
   ultrasonic: "Ultrasonic sensors",
@@ -297,11 +306,13 @@ const RU = {
   pointCount: "Точек по горизонтали",
   pointsPerRow: "шт.",
   persistence: "Накапливать облако точек",
-  persistenceNote: "Хранит до 1800 точек в мировых координатах до конца текущей игровой сессии. Отрисовка облака может снизить FPS.",
+  persistenceNote: "Хранит до 600 точек в мировых координатах до конца текущей игровой сессии. Отрисовка облака может снизить FPS.",
   clearCloud: "Очистить облако точек",
   detectedVehicles: "Обнаруженные автомобили",
+  vehiclesDetected: "Машин в поле зрения датчиков",
+  routeWaypoints: "Точек дорожного маршрута",
   routePilot: "Автопилот по дорожной сети (эксперимент)",
-  routeDescription: "Использует встроенный дорожный AI BeamNG. LiDAR, радары, ультразвук и обнаружение машин работают как контроль препятствий. Машина останавливается при близкой преграде или устаревших данных. Построение маршрута к выбранной точке по облаку LiDAR пока не реализовано.",
+  routeDescription: "Строит путь вперёд по дорожному графу текущей карты и передаёт точки штатному AI BeamNG (до 29 км/ч). LiDAR, радары, ультразвук и обнаружение машин контролируют путь: при препятствии или устаревших данных машина останавливается, после освобождения пути строится следующий участок. Объезд препятствий и выбор конечной точки пока не реализованы; камеры показывают только поля обзора.",
   routeSpeed: "Ограничение скорости",
   routeRunning: "Автопилот включён",
   routePaused: "Остановка по датчикам",
@@ -309,10 +320,18 @@ const RU = {
   startRoute: "Ехать по дорожной сети",
   stopRoute: "Остановить автопилот",
   routeSafetyStop: "Автомобиль останавливается или ждёт новых данных без препятствий.",
+  routeWaitingData: "Ожидание свежих данных датчиков",
+  routeNoRoadNodes: "Не удалось найти дорожные узлы рядом с автомобилем и впереди него",
+  routeNoPath: "Не удалось построить связный путь по дорожному графу",
+  routeApiMissing: "На этой карте недоступен API дорожного графа",
+  routeHeadingInvalid: "Не удалось определить направление автомобиля",
+  routeVehicleChanged: "Активный автомобиль изменился",
+  routeObstacle: "Препятствие ближе {distance} м — автопилот остановлен",
+  routeGenericError: "Не удалось запустить или продолжить маршрут",
 
   scanRate: "Частота сканирования",
   range: "Максимальная дальность",
-  lidarNote: "Низкое: 9 лучей за скан. Сбалансированное: 26. Высокое: 51. Большее число лучей, дальность и частота повышают нагрузку на процессор.",
+  lidarNote: "Ползунок задаёт 9–33 точки по горизонтали; разрешение добавляет 1, 2 или 3 вертикальных слоя. Большее число точек, дальность и частота повышают нагрузку на процессор.",
   radar: "Автомобильные радары",
   rayDensity: "Плотность лучей",
   ultrasonic: "Ультразвуковые датчики",
@@ -371,6 +390,22 @@ function callRoadMind(method, args = []) {
 function t(key) {
   const dictionary = String(locale.value).toLowerCase().startsWith("ru") ? RU : EN
   return dictionary[key] || EN[key] || key
+}
+
+function routeErrorText(message) {
+  const value = String(message || "")
+  if (!String(locale.value).toLowerCase().startsWith("ru")) return value
+
+  if (value === "Waiting for fresh sensor data") return t("routeWaitingData")
+  if (value === "Could not find connected road nodes near the vehicle and forward target") return t("routeNoRoadNodes")
+  if (value === "No valid forward road path could be built from the current NavGraph") return t("routeNoPath")
+  if (value === "NavGraph route API is unavailable on this map") return t("routeApiMissing")
+  if (value === "Vehicle heading is invalid" || value === "Could not read vehicle position or heading") return t("routeHeadingInvalid")
+  if (value === "The active vehicle changed") return t("routeVehicleChanged")
+
+  const obstacle = value.match(/^Obstacle inside ([0-9.]+) m safety distance$/)
+  if (obstacle) return t("routeObstacle").replace("{distance}", obstacle[1])
+  return t("routeGenericError")
 }
 
 const settings = ref({
@@ -475,6 +510,10 @@ function queueLidarPointCount(value) {
 }
 
 onBeforeUnmount(() => {
+  if (statusRefreshTimer) {
+    clearInterval(statusRefreshTimer)
+    statusRefreshTimer = null
+  }
   if (lidarRangeTimer) {
     clearTimeout(lidarRangeTimer)
     lidarRangeTimer = null
@@ -558,7 +597,20 @@ async function clearLidarMap() {
   }
 }
 
-onMounted(refresh)
+let statusRefreshTimer = null
+
+onMounted(() => {
+  refresh()
+  statusRefreshTimer = setInterval(async () => {
+    if (busy.value) return
+    try {
+      const result = await callRoadMind("getSettings")
+      if (result && result.status) status.value = { ...status.value, ...result.status }
+    } catch (e) {
+      console.warn("RoadMind: background status refresh failed", e)
+    }
+  }, 1500)
+})
 </script>
 
 <style scoped lang="scss">
