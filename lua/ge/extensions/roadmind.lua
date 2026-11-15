@@ -98,15 +98,9 @@ local function round2(value)
 end
 
 local function getVehicleId(vehicle)
-  if not vehicle or type(vehicle.getID) ~= "function" then
-    return nil
-  end
-
-  local ok, id = pcall(vehicle.getID, vehicle)
-  if ok then
-    return id
-  end
-
+  local id = safeCall(vehicle, "getID")
+  if id == nil then id = safeCall(vehicle, "getId") end
+  if type(id) == "number" or type(id) == "string" then return id end
   return nil
 end
 
@@ -166,12 +160,14 @@ local function buildForwardRoadPath(vehicle)
           for i = 1, #path do
             local nodeId = path[i]
             local node = nodes[nodeId]
-            local nodePosition = node and node.pos
+            local nodePosition = node and safeField(node, "pos")
+            local nodeX = safeField(nodePosition, "x")
+            local nodeY = safeField(nodePosition, "y")
+            local nodeZ = safeField(nodePosition, "z")
             if (type(nodeId) ~= "string" and type(nodeId) ~= "number")
-                or type(nodePosition) ~= "table"
-                or type(nodePosition.x) ~= "number"
-                or type(nodePosition.y) ~= "number"
-                or type(nodePosition.z) ~= "number" then
+                or type(nodeX) ~= "number"
+                or type(nodeY) ~= "number"
+                or type(nodeZ) ~= "number" then
               valid = false
               break
             end
@@ -200,9 +196,9 @@ local function buildForwardRoadPath(vehicle)
             end
 
             points[#points + 1] = {
-              x = nodePosition.x,
-              y = nodePosition.y,
-              z = nodePosition.z
+              x = nodeX,
+              y = nodeY,
+              z = nodeZ
             }
             previous = nodeId
           end
