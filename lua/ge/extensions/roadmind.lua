@@ -53,13 +53,14 @@ local function queueVehicleCommand(vehicle, command)
   return ok
 end
 
-local function setVehicleSensorState(vehicle, enabled)
+local function setVehicleSensorState(vehicle, enabled, vehicleId)
   if not vehicle then
     return
   end
 
+  local idArgument = type(vehicleId) == "number" and string.format("%.0f", vehicleId) or "nil"
   local command = "extensions.load('roadmind_sensors'); "
-    .. "roadmind_sensors.setEnabled(" .. boolString(enabled) .. ")"
+    .. "roadmind_sensors.setEnabled(" .. boolString(enabled) .. ", " .. idArgument .. ")"
 
   queueVehicleCommand(vehicle, command)
 end
@@ -86,7 +87,7 @@ local function detachPreviousVehicle()
   if state.activeVehicle then
     queueVehicleCommand(
       state.activeVehicle,
-      "if roadmind_sensors then roadmind_sensors.setEnabled(false) end"
+      "if roadmind_sensors then roadmind_sensors.setEnabled(false, " .. tostring(state.activeVehicleId) .. ") end"
     )
   end
 
@@ -98,7 +99,7 @@ local function attachVehicle(vehicle, id)
   state.activeVehicle = vehicle
   state.activeVehicleId = id
   resetFrame()
-  setVehicleSensorState(vehicle, state.visualizationEnabled)
+  setVehicleSensorState(vehicle, state.visualizationEnabled, id)
 end
 
 local function syncPlayerVehicle()
@@ -338,13 +339,13 @@ function M.toggleVisualization()
     syncPlayerVehicle()
 
     if state.activeVehicle then
-      setVehicleSensorState(state.activeVehicle, true)
+      setVehicleSensorState(state.activeVehicle, true, state.activeVehicleId)
     end
 
     log("I", "roadmind", "Automotive sensor suite visualization enabled")
   else
     if state.activeVehicle then
-      setVehicleSensorState(state.activeVehicle, false)
+      setVehicleSensorState(state.activeVehicle, false, state.activeVehicleId)
     end
 
     log("I", "roadmind", "Automotive sensor suite visualization disabled")
@@ -496,6 +497,8 @@ function M.onSensorData(encodedFrame)
       or type(jsonDecode) ~= "function" then return end
   local ok, frame = pcall(jsonDecode, encodedFrame)
   if not ok or type(frame) ~= "table" then return end
+  -- Drop late messages from a vehicle that is no longer the active player car.
+  if frame.sourceVehicleId ~= state.activeVehicleId then return end
   if frame.enabled == false then
     resetFrame()
     return
@@ -523,8 +526,8 @@ function M.onUpdate(dt)
     syncPlayerVehicle()
   end
 
-  -- Sensor raycasts occur in Vehicle Lua at fixed, low rates.
-  -- The render loop redraws cached geometry only.
+  -- Scene raycasts run only when Vehicle Lua sends a due sensor scan.
+  -- This update callback redraws already cached geometry only.
   drawFrame()
 end
 
