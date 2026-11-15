@@ -5,11 +5,48 @@ local M = {}
 
 local CHECK_INTERVAL = 0.5
 local MAX_FRAME_AGE = 1.1
+local SETTINGS_FILE = "/settings/roadmind.json"
+
+local DEFAULT_SETTINGS = {
+  preset = "balanced",
+  lidarEnabled = true, lidarQuality = "balanced", lidarHz = 2, lidarRange = 65,
+  radarEnabled = true, radarDensity = "medium", radarHz = 1,
+  ultrasonicEnabled = true, ultrasonicDensity = "single", ultrasonicHz = 1,
+  poseHz = 4,
+  showLidar = true, showRadar = true, showUltrasonic = true,
+  showCameras = false, showLocalization = true
+}
+
+local PRESETS = {
+  economy = {
+    lidarQuality = "low", lidarHz = 1, lidarRange = 45,
+    radarDensity = "low", radarHz = 1,
+    ultrasonicDensity = "single", ultrasonicHz = 1, poseHz = 2
+  },
+  balanced = {
+    lidarQuality = "balanced", lidarHz = 2, lidarRange = 65,
+    radarDensity = "medium", radarHz = 1,
+    ultrasonicDensity = "single", ultrasonicHz = 1, poseHz = 4
+  },
+  high = {
+    lidarQuality = "high", lidarHz = 4, lidarRange = 65,
+    radarDensity = "high", radarHz = 2,
+    ultrasonicDensity = "wide", ultrasonicHz = 2, poseHz = 5
+  }
+}
+
+local SENSOR_SETTING_KEYS = {
+  lidarEnabled = true, lidarQuality = true, lidarHz = true, lidarRange = true,
+  radarEnabled = true, radarDensity = true, radarHz = true,
+  ultrasonicEnabled = true, ultrasonicDensity = true, ultrasonicHz = true,
+  poseHz = true, showCameras = true, showLocalization = true
+}
 
 local state = {
   activeVehicleId = nil,
   activeVehicle = nil,
   visualizationEnabled = false,
+  settings = nil,
   latestData = nil,
   frameAge = math.huge
 }
@@ -53,15 +90,27 @@ local function queueVehicleCommand(vehicle, command)
   return ok
 end
 
-local function setVehicleSensorState(vehicle, enabled, vehicleId)
-  if not vehicle then
-    return
+local function vehicleSettingsCommand()
+  local encoded = "{}"
+  if type(jsonEncode) == "function" then
+    local ok, value = pcall(jsonEncode, state.settings or DEFAULT_SETTINGS)
+    if ok and type(value) == "string" then encoded = value end
   end
+  return "roadmind_sensors.setSettings(" .. string.format("%q", encoded) .. "); "
+end
 
+local function setVehicleSensorSettings(vehicle)
+  if not vehicle then return end
+  local command = "extensions.load('roadmind_sensors'); " .. vehicleSettingsCommand()
+  queueVehicleCommand(vehicle, command)
+end
+
+local function setVehicleSensorState(vehicle, enabled, vehicleId)
+  if not vehicle then return end
   local idArgument = type(vehicleId) == "number" and string.format("%.0f", vehicleId) or "nil"
   local command = "extensions.load('roadmind_sensors'); "
-    .. "roadmind_sensors.setEnabled(" .. boolString(enabled) .. ", " .. idArgument .. ")"
-
+  if enabled then command = command .. vehicleSettingsCommand() end
+  command = command .. "roadmind_sensors.setEnabled(" .. boolString(enabled) .. ", " .. idArgument .. ")"
   queueVehicleCommand(vehicle, command)
 end
 
@@ -308,50 +357,216 @@ end
 local function drawFrame()
   local drawer = debugDrawer
   local frame = state.latestData
+  local settings = state.settings or DEFAULT_SETTINGS
 
   if not drawer or not frame or not frame.enabled
       or state.frameAge > MAX_FRAME_AGE then
     return
   end
 
-  drawLidar(drawer, frame.lidar)
-  drawRadar(drawer, frame.radar)
-  drawUltrasonic(drawer, frame.ultrasonic)
+  if settings.showLidar then drawLidar(drawer, frame.lidar) end
+  if settings.showRadar then drawRadar(drawer, frame.radar) end
+  if settings.showUltrasonic then drawUltrasonic(drawer, frame.ultrasonic) end
 
-  local cameras = frame.cameras or {}
-  for i = 1, #cameras do
-    drawCameraFrustum(drawer, cameras[i])
+  if settings.showCameras then
+    local cameras = frame.cameras or {}
+    for i = 1, #cameras do drawCameraFrustum(drawer, cameras[i]) end
   end
 
-  drawLocalization(drawer, frame.localization)
+  if settings.showLocalization then drawLocalization(drawer, frame.localization) end
+end
+
+local function copySettings(source)
+  local result = {}
+  for key, value in pairs(source or {}) do result[key] = value end
+  return result
+end
+
+local function enumValue(value, allowed)
+  for i = 1, #allowed do
+    if value == allowed[i] then return true end
+  end
+  return false
+end
+
+local function normalizeSettings(source)
+  source = type(source) == "table" and source or {}
+  local result = copySettings(DEFAULT_SETTINGS)
+
+  local booleanKeys = {
+    "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
+    "showLidar", "showRadar", "showUltrasonic", "showCameras", "showLocalization"
+  }
+  for i = 1, #booleanKeys do
+    local key = booleanKeys[i]
+    if type(source[key]) == "boolean" then result[key] = source[key] end
+  end
+
+  local enums = {
+    preset = {"economy", "balanced", "high", "custom"},
+    lidarQuality = {"low", "balanced", "high"},
+    radarDensity = {"low", "medium", "high"},
+    ultrasonicDensity = {"single", "wide"}
+  }
+  for key, allowed in pairs(enums) do
+    if enumValue(source[key], allowed) then result[key] = source[key] end
+  end
+
+  if source.lidarHz == 1 or source.lidarHz == 2 or source.lidarHz == 4 then result.lidarHz = source.lidarHz end
+  if type(source.lidarRange) == "number" and source.lidarRange >= 30 and source.lidarRange <= 160 then
+    result.lidarRange = math.floor(source.lidarRange / 5 + 0.5) * 5
+  end
+  if source.radarHz == 1 or source.radarHz == 2 then result.radarHz = source.radarHz end
+  if source.ultrasonicHz == 1 or source.ultrasonicHz == 2 then result.ultrasonicHz = source.ultrasonicHz end
+  if source.poseHz == 2 or source.poseHz == 4 or source.poseHz == 5 then result.poseHz = source.poseHz end
+
+  return result
+end
+
+local function loadSettings()
+  local loaded = nil
+  if type(jsonReadFile) == "function" then
+    local ok, data = pcall(jsonReadFile, SETTINGS_FILE)
+    if ok and type(data) == "table" then loaded = data end
+  end
+  state.settings = normalizeSettings(loaded or DEFAULT_SETTINGS)
+end
+
+local function saveSettings()
+  if type(jsonWriteFile) ~= "function" then return false end
+  local ok = pcall(jsonWriteFile, SETTINGS_FILE, state.settings, true)
+  return ok
+end
+
+local function rayCountFor(settings)
+  local lidarCount = settings.lidarQuality == "low" and 9
+    or (settings.lidarQuality == "balanced" and 26 or 51)
+  local radarCount = settings.radarDensity == "low" and 5
+    or (settings.radarDensity == "medium" and 10 or 17)
+  local ultrasonicCount = settings.ultrasonicDensity == "single" and 12 or 36
+
+  local total = 0
+  if settings.lidarEnabled then total = total + lidarCount * settings.lidarHz end
+  if settings.radarEnabled then total = total + radarCount * settings.radarHz end
+  if settings.ultrasonicEnabled then total = total + ultrasonicCount * settings.ultrasonicHz end
+  return total
+end
+
+local function settingsResult()
+  local settings = state.settings or DEFAULT_SETTINGS
+  return {
+    ok = true,
+    settings = copySettings(settings),
+    status = {
+      visualizationEnabled = state.visualizationEnabled,
+      activeVehicle = state.activeVehicleId ~= nil,
+      estimatedRaycastsPerSecond = state.visualizationEnabled and rayCountFor(settings) or 0
+    }
+  }
+end
+
+function M.getSettings()
+  if not state.settings then loadSettings() end
+  return settingsResult()
+end
+
+function M.setSetting(key, value)
+  if not state.settings then loadSettings() end
+  if DEFAULT_SETTINGS[key] == nil then
+    return {ok = false, error = "Unknown setting"}
+  end
+
+  local candidate = copySettings(state.settings)
+  candidate[key] = value
+  if key ~= "preset" then candidate.preset = "custom" end
+  local normalized = normalizeSettings(candidate)
+
+  if type(DEFAULT_SETTINGS[key]) == "boolean" and type(value) ~= "boolean" then
+    return {ok = false, error = "Invalid boolean value"}
+  end
+  if type(DEFAULT_SETTINGS[key]) == "number" and type(value) ~= "number" then
+    return {ok = false, error = "Invalid numeric value"}
+  end
+  if type(DEFAULT_SETTINGS[key]) == "string" and normalized[key] ~= value then
+    return {ok = false, error = "Invalid option"}
+  end
+  if type(DEFAULT_SETTINGS[key]) == "number" and key ~= "lidarRange" and normalized[key] ~= value then
+    return {ok = false, error = "Invalid numeric option"}
+  end
+  if key == "lidarRange" and (value < 30 or value > 160) then
+    return {ok = false, error = "LiDAR range must be between 30 and 160 m"}
+  end
+
+  state.settings = normalized
+  saveSettings()
+
+  if state.visualizationEnabled and state.activeVehicle and SENSOR_SETTING_KEYS[key] then
+    setVehicleSensorSettings(state.activeVehicle)
+  end
+  return settingsResult()
+end
+
+function M.setPreset(name)
+  if not state.settings then loadSettings() end
+  local preset = PRESETS[name]
+  if not preset then return {ok = false, error = "Unknown performance preset"} end
+
+  local candidate = copySettings(state.settings)
+  candidate.preset = name
+  for key, value in pairs(preset) do candidate[key] = value end
+  state.settings = normalizeSettings(candidate)
+  saveSettings()
+
+  if state.visualizationEnabled and state.activeVehicle then
+    setVehicleSensorSettings(state.activeVehicle)
+  end
+  return settingsResult()
+end
+
+function M.setVisualizationEnabled(enabled)
+  if not state.settings then loadSettings() end
+  local wanted = enabled == true
+
+  if wanted then
+    local previousId = state.activeVehicleId
+    state.visualizationEnabled = true
+    resetFrame()
+    syncPlayerVehicle()
+    if state.activeVehicle and state.activeVehicleId == previousId then
+      setVehicleSensorState(state.activeVehicle, true, state.activeVehicleId)
+    end
+    if not state.activeVehicle then
+      state.visualizationEnabled = false
+      return {ok = false, error = "No active player vehicle"}
+    end
+  else
+    state.visualizationEnabled = false
+    if state.activeVehicle then
+      setVehicleSensorState(state.activeVehicle, false, state.activeVehicleId)
+    end
+    resetFrame()
+  end
+
+  return settingsResult()
 end
 
 function M.onExtensionLoaded()
   if setExtensionUnloadMode then
     setExtensionUnloadMode(M, "manual")
   end
+  loadSettings()
 end
 
 function M.toggleVisualization()
-  state.visualizationEnabled = not state.visualizationEnabled
-  resetFrame()
-
-  if state.visualizationEnabled then
-    syncPlayerVehicle()
-
-    if state.activeVehicle then
-      setVehicleSensorState(state.activeVehicle, true, state.activeVehicleId)
-    end
-
-    log("I", "roadmind", "Automotive sensor suite visualization enabled")
-  else
-    if state.activeVehicle then
-      setVehicleSensorState(state.activeVehicle, false, state.activeVehicleId)
-    end
-
-    log("I", "roadmind", "Automotive sensor suite visualization disabled")
+  local result = M.setVisualizationEnabled(not state.visualizationEnabled)
+  if not result.ok then
+    log("W", "roadmind", result.error or "Could not toggle sensor suite")
+    return false
   end
 
+  log("I", "roadmind", state.visualizationEnabled
+    and "Automotive sensor suite visualization enabled"
+    or "Automotive sensor suite visualization disabled")
   return state.visualizationEnabled
 end
 
