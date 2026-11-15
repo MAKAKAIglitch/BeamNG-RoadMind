@@ -26,6 +26,7 @@
     <section class="roadmind-section">
       <BngCardHeading>{{ t("performance") }}</BngCardHeading>
       <p class="roadmind-note">{{ t("performanceNote") }}</p>
+      <p class="roadmind-active-profile">{{ t("activeProfile") }}: <strong>{{ t(settings.preset) }}</strong></p>
       <div class="roadmind-presets">
         <BngButton
           v-for="preset in presets"
@@ -175,7 +176,9 @@ const EN = {
   stop: "Stop scanning",
   runtimeNote: "The estimate counts scheduled scene raycasts. It is not a measured FPS or CPU result.",
   performance: "Performance",
-  performanceNote: "Choose a preset, then fine-tune the sensors below. Changing an individual setting switches the profile to Custom.",
+  performanceNote: "Economy runs only the forward LiDAR. Radar and ultrasonic start off; Balanced enables all three sensor groups. Changing a setting switches to Custom.",
+  activeProfile: "Active profile",
+  custom: "Custom",
   economy: "Economy (LiDAR only)",
   balanced: "Balanced",
   high: "High quality",
@@ -222,7 +225,9 @@ const RU = {
   stop: "Остановить сканирование",
   runtimeNote: "Показано расчётное число запросов к сцене. Это не замер FPS или загрузки процессора.",
   performance: "Производительность",
-  performanceNote: "Выбери профиль, затем настрой датчики отдельно. Изменение параметра переключает профиль на «Свои настройки».",
+  performanceNote: "В режиме «Экономный» работает только передний LiDAR. Радар и ультразвук выключены; «Сбалансированный» включает все три группы. Изменение параметра переключает профиль на свои настройки.",
+  activeProfile: "Активный профиль",
+  custom: "Свои настройки",
   economy: "Экономный (только LiDAR)",
   balanced: "Сбалансированный",
   high: "Высокое качество",
@@ -476,6 +481,9 @@ onMounted(refresh)
 }
 .roadmind-preset {
   min-width: 0;
+}
+.roadmind-active-profile {
+  font-size: 0.9em;
 }
 .roadmind-profile-summary {
   display: flex;
