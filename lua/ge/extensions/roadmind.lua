@@ -336,6 +336,32 @@ local function drawUltrasonic(drawer, ultrasonic)
   end
 end
 
+local function drawPersistentLidarCloud(drawer)
+  if not state.settings or not state.settings.lidarPersistenceEnabled then return end
+  for i = 1, #state.lidarPointCloud do
+    local point = state.lidarPointCloud[i]
+    if point then
+      drawSphere(drawer, toPoint3F(point), 0.045, ColorF(0.95, 0.72, 0.20, 0.82))
+    end
+  end
+end
+
+local function drawDetectedVehicles(drawer, vehicles)
+  if type(vehicles) ~= "table" then return end
+  for i = 1, #vehicles do
+    local target = vehicles[i]
+    local position = toPoint3F(target.position)
+    local origin = toPoint3F(target.sensorOrigin)
+    if position then
+      local color = type(target.radialSpeed) == "number" and target.radialSpeed < -1.0
+        and ColorF(1.0, 0.18, 0.12, 1.0)
+        or ColorF(0.30, 1.0, 0.40, 1.0)
+      if origin then drawLine(drawer, origin, position, color) end
+      drawSphere(drawer, position, 0.42, color)
+    end
+  end
+end
+
 local function drawCameraFrustum(drawer, camera)
   local origin = toPoint3F(camera.position)
   local forward = camera.direction
@@ -418,9 +444,13 @@ local function drawFrame()
     return
   end
 
-  if settings.showLidar then drawLidar(drawer, frame.lidar) end
+  if settings.showLidar then
+    drawLidar(drawer, frame.lidar)
+    drawPersistentLidarCloud(drawer)
+  end
   if settings.showRadar then drawRadar(drawer, frame.radar) end
   if settings.showUltrasonic then drawUltrasonic(drawer, frame.ultrasonic) end
+  if settings.showDetectedVehicles then drawDetectedVehicles(drawer, frame.vehicles) end
 
   if settings.showCameras then
     local cameras = frame.cameras or {}
@@ -449,7 +479,9 @@ local function normalizeSettings(source)
 
   local booleanKeys = {
     "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
-    "showLidar", "showRadar", "showUltrasonic", "showCameras", "showLocalization"
+    "lidarPersistenceEnabled",
+    "showLidar", "showRadar", "showUltrasonic", "showCameras",
+    "showLocalization", "showDetectedVehicles"
   }
   for i = 1, #booleanKeys do
     local key = booleanKeys[i]
@@ -466,6 +498,10 @@ local function normalizeSettings(source)
     if enumValue(source[key], allowed) then result[key] = source[key] end
   end
 
+  if type(source.lidarPointCount) == "number" and source.lidarPointCount >= 9
+      and source.lidarPointCount <= 129 then
+    result.lidarPointCount = math.floor((source.lidarPointCount - 9) / 4 + 0.5) * 4 + 9
+  end
   if source.lidarHz == 1 or source.lidarHz == 2 or source.lidarHz == 4 then result.lidarHz = source.lidarHz end
   if type(source.lidarRange) == "number" and source.lidarRange >= 30 and source.lidarRange <= 160 then
     result.lidarRange = math.floor(source.lidarRange / 5 + 0.5) * 5
@@ -493,8 +529,9 @@ local function saveSettings()
 end
 
 local function rayCountFor(settings)
-  local lidarCount = settings.lidarQuality == "low" and 9
-    or (settings.lidarQuality == "balanced" and 26 or 51)
+  local lidarLayers = settings.lidarQuality == "low" and 1
+    or (settings.lidarQuality == "balanced" and 2 or 3)
+  local lidarCount = (settings.lidarPointCount or 9) * lidarLayers
   local radarCount = settings.radarDensity == "low" and 5
     or (settings.radarDensity == "medium" and 10 or 17)
   local ultrasonicCount = settings.ultrasonicDensity == "single" and 12 or 36
@@ -525,7 +562,11 @@ local function settingsResult()
     status = {
       visualizationEnabled = state.visualizationEnabled,
       activeVehicle = state.activeVehicleId ~= nil,
-      estimatedRaycastsPerSecond = state.visualizationEnabled and rayCountFor(settings) or 0
+      estimatedRaycastsPerSecond = state.visualizationEnabled and rayCountFor(settings) or 0,
+      routePilotEnabled = state.routePilotEnabled,
+      routeSafetyStopped = state.routeSafetyStopped,
+      persistentLidarPointCount = #state.lidarPointCloud,
+      detectedVehicleCount = state.latestData and #(state.latestData.vehicles or {}) or 0
     }
   }
 end
@@ -555,11 +596,16 @@ function M.setSetting(key, value)
   if type(DEFAULT_SETTINGS[key]) == "string" and normalized[key] ~= value then
     return {ok = false, error = "Invalid option"}
   end
-  if type(DEFAULT_SETTINGS[key]) == "number" and key ~= "lidarRange" and normalized[key] ~= value then
+  if type(DEFAULT_SETTINGS[key]) == "number" and key ~= "lidarRange" and key ~= "lidarPointCount"
+      and normalized[key] ~= value then
     return {ok = false, error = "Invalid numeric option"}
   end
   if key == "lidarRange" and (value < 30 or value > 160) then
     return {ok = false, error = "LiDAR range must be between 30 and 160 m"}
+  end
+  if key == "lidarPointCount"
+      and (value < 9 or value > 129 or math.abs((value - 9) % 4) > 0.001) then
+    return {ok = false, error = "LiDAR point count must be 9–129 in steps of 4"}
   end
 
   state.settings = normalized
