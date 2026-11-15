@@ -25,6 +25,7 @@ The Game Engine Lua extension:
 
 - Attaches the sensor backend to the active player vehicle when the sensor-suite binding is enabled.
 - Receives the latest serialized sensor frame and performs scheduled scene raycasts through `castRay`.
+- Checks the source vehicle ID and discards delayed frames from a vehicle that is no longer active.
 - Merges raycast hits into the latest sensor frame.
 - Draws LiDAR returns, radar returns, ultrasonic close-range returns, camera frustums, IMU and GNSS mount markers using the game's world debug drawer.
 - Redraws cached geometry each graphics frame because debug primitives are transient.
