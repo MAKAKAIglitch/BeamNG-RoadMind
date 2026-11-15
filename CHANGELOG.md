@@ -2,13 +2,13 @@
 
 ## Unreleased
 
-- Add a BeamNG 0.39+ Pause → System → Mods → RoadMind settings page.
+- Add a BeamNG 0.39+ Pause → Mods → RoadMind settings page.
 - Add Russian/English interface text based on the game's selected language.
 - Add persistent Economy, Balanced and High performance profiles.
 - Add live LiDAR resolution, range and scan-rate controls.
 - Add independent radar and ultrasonic density, frequency and enable controls.
 - Add independent 3D overlay visibility controls.
-- Default to the Economy profile and the LiDAR overlay only to reduce overhead.
+- Default to LiDAR-only Economy scanning (about 9 queries/s) and the LiDAR overlay to reduce overhead.
 - Keep sensor scanning disabled until explicitly started.
 
 - Move scene raycasts to Game Engine Lua, where BeamNG exposes `castRay`.
