@@ -509,6 +509,13 @@ local function applySensorSettings(source)
     if type(source[key]) == "boolean" then sensorSettings[key] = source[key] end
   end
 
+  if type(source.showCameras) == "boolean" then
+    sensorSettings.cameraFrustumsEnabled = source.showCameras
+  end
+  if type(source.showLocalization) == "boolean" then
+    sensorSettings.localizationEnabled = source.showLocalization
+  end
+
   if source.lidarQuality == "low" or source.lidarQuality == "balanced"
       or source.lidarQuality == "high" then
     sensorSettings.lidarQuality = source.lidarQuality
