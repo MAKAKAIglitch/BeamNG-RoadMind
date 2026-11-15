@@ -66,7 +66,7 @@
         <template #label>{{ t("range") }}: {{ settings.lidarRange }} m</template>
         <BngSlider :min="30" :max="160" :step="5" :modelValue="settings.lidarRange"
           :with-input="true" :disabled="busy"
-          @update:modelValue="value => setSetting('lidarRange', Number(value))" />
+          @update:modelValue="queueLidarRange" />
       </BngRow>
       <p class="roadmind-note">{{ t("lidarNote") }}</p>
     </section>
@@ -152,7 +152,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue"
+import { onMounted, onBeforeUnmount, ref } from "vue"
 import { lua } from "@/bridge"
 import {
   BngButton,
@@ -324,6 +324,30 @@ function acceptResult(result) {
   error.value = ""
   return true
 }
+
+let lidarRangeTimer = null
+let pendingLidarRange = null
+
+function queueLidarRange(value) {
+  pendingLidarRange = Number(value)
+  settings.value.lidarRange = pendingLidarRange
+  if (lidarRangeTimer) clearTimeout(lidarRangeTimer)
+  lidarRangeTimer = setTimeout(() => {
+    const nextValue = pendingLidarRange
+    pendingLidarRange = null
+    lidarRangeTimer = null
+    setSetting("lidarRange", nextValue)
+  }, 180)
+}
+
+onBeforeUnmount(() => {
+  if (lidarRangeTimer) {
+    clearTimeout(lidarRangeTimer)
+    lidarRangeTimer = null
+    if (pendingLidarRange !== null) setSetting("lidarRange", pendingLidarRange)
+    pendingLidarRange = null
+  }
+})
 
 async function refresh() {
   busy.value = true
