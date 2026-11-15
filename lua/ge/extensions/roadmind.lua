@@ -452,10 +452,21 @@ local function rayCountFor(settings)
   return total
 end
 
+local function getGameLanguage()
+  if type(settings) == "table" and type(settings.getValue) == "function" then
+    local ok, language = pcall(settings.getValue, "userLanguage")
+    if ok and type(language) == "string" and language ~= "" then
+      return language
+    end
+  end
+  return "en-US"
+end
+
 local function settingsResult()
   local settings = state.settings or DEFAULT_SETTINGS
   return {
     ok = true,
+    language = getGameLanguage(),
     settings = copySettings(settings),
     status = {
       visualizationEnabled = state.visualizationEnabled,
