@@ -292,8 +292,11 @@ local function scanRadars(frame)
       end
 
       for rayIndex = 0, sampleCount - 1 do
-        local angle = math.rad(-cfg.fov * 0.5
-          + cfg.fov * rayIndex / math.max(1, sampleCount - 1))
+        local angle = 0
+        if sampleCount > 1 then
+          angle = math.rad(-cfg.fov * 0.5
+            + cfg.fov * rayIndex / (sampleCount - 1))
+        end
         local direction = normalize(
           mount.direction * math.cos(angle) + mount.right * math.sin(angle)
         )
