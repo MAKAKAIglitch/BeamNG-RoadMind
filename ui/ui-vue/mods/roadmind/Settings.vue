@@ -37,7 +37,7 @@
         >{{ t(preset.label) }}</BngButton>
       </div>
       <div class="roadmind-profile-summary">
-        <div><strong>{{ t("economy") }}</strong><span>≈ 26 {{ t("queriesPerSecond") }}</span></div>
+        <div><strong>{{ t("economy") }}</strong><span>≈ 9 {{ t("queriesPerSecond") }}</span></div>
         <div><strong>{{ t("balanced") }}</strong><span>≈ 74 {{ t("queriesPerSecond") }}</span></div>
         <div><strong>{{ t("high") }}</strong><span>≈ 310 {{ t("queriesPerSecond") }}</span></div>
       </div>
@@ -176,7 +176,7 @@ const EN = {
   runtimeNote: "The estimate counts scheduled scene raycasts. It is not a measured FPS or CPU result.",
   performance: "Performance",
   performanceNote: "Choose a preset, then fine-tune the sensors below. Changing an individual setting switches the profile to Custom.",
-  economy: "Economy",
+  economy: "Economy (LiDAR only)",
   balanced: "Balanced",
   high: "High quality",
   lidar: "Forward LiDAR",
@@ -223,7 +223,7 @@ const RU = {
   runtimeNote: "Показано расчётное число запросов к сцене. Это не замер FPS или загрузки процессора.",
   performance: "Производительность",
   performanceNote: "Выбери профиль, затем настрой датчики отдельно. Изменение параметра переключает профиль на «Свои настройки».",
-  economy: "Экономный",
+  economy: "Экономный (только LiDAR)",
   balanced: "Сбалансированный",
   high: "Высокое качество",
   lidar: "Передний LiDAR",
@@ -296,10 +296,10 @@ const settings = ref({
   lidarQuality: "low",
   lidarHz: 1,
   lidarRange: 45,
-  radarEnabled: true,
+  radarEnabled: false,
   radarDensity: "low",
   radarHz: 1,
-  ultrasonicEnabled: true,
+  ultrasonicEnabled: false,
   ultrasonicDensity: "single",
   ultrasonicHz: 1,
   poseHz: 2,
