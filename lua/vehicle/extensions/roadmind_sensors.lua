@@ -1,5 +1,6 @@
 -- RoadMind forward-facing virtual LiDAR.
--- This file runs in the active vehicle Lua VM.
+-- Vehicle Lua performs the raycasts and sends hit points to Game Engine Lua.
+-- World-space endpoints are used by debugDrawer for in-world visualization.
 
 local M = {}
 
@@ -13,13 +14,13 @@ local CONFIG = {
   scanInterval = 0.25,
   maxPoints = 51,
 
-  -- Virtual mounting point near the front grille.
+  -- Virtual sensor origin near the front grille. No visible model is required.
   forwardOffset = 2.0,
   upOffset = 0.95
 }
 
 local state = {
-  enabled = true,
+  enabled = false,
   timer = 0,
   sequence = 0,
   lastPointCount = 0
@@ -29,19 +30,25 @@ local function round2(value)
   return math.floor(value * 100 + 0.5) / 100
 end
 
-local function safeLength(value)
-  if not value or type(value.length) ~= "function" then
-    return 0
-  end
-  return value:length()
-end
-
 local function normalize(value)
-  local length = safeLength(value)
+  if not value or type(value.length) ~= "function" then
+    return nil
+  end
+
+  local length = value:length()
   if length < 0.000001 then
     return nil
   end
+
   return value / length
+end
+
+local function vectorToTable(value)
+  return {
+    x = round2(value.x),
+    y = round2(value.y),
+    z = round2(value.z)
+  }
 end
 
 local function getSensorFrame()
@@ -99,23 +106,6 @@ local function getDynamicHit(origin, direction, maxDistance)
   return nil
 end
 
-local function addHit(points, origin, direction, right, forward, up, distance, worldPoint)
-  if type(distance) ~= "number" or distance < CONFIG.minRange
-      or distance > CONFIG.maxRange then
-    return
-  end
-
-  local point = worldPoint or (origin + direction * distance)
-  local relative = point - origin
-
-  points[#points + 1] = {
-    x = round2(relative:dot(right)),
-    y = round2(relative:dot(forward)),
-    z = round2(relative:dot(up)),
-    distance = round2(distance)
-  }
-end
-
 local function scan()
   local origin, forward, right, up = getSensorFrame()
   if not origin then
@@ -123,6 +113,7 @@ local function scan()
   end
 
   local points = {}
+  local rays = {}
   local hCount = CONFIG.horizontalSamples
   local vCount = CONFIG.verticalSamples
 
@@ -134,10 +125,6 @@ local function scan()
     local sinH = math.sin(horizontalAngle)
 
     for v = 0, vCount - 1 do
-      if #points >= CONFIG.maxPoints then
-        break
-      end
-
       local verticalAngle = -CONFIG.verticalFov * 0.5
         + CONFIG.verticalFov * v / math.max(1, vCount - 1)
 
@@ -164,20 +151,28 @@ local function scan()
 
         if dynamicHit and (not distance or dynamicHit.dist < distance) then
           distance = dynamicHit.dist
-          worldPoint = dynamicHit.pt
+          worldPoint = dynamicHit.pt or (origin + direction * dynamicHit.dist)
         end
 
-        if distance then
-          addHit(
-            points,
-            origin,
-            direction,
-            right,
-            forward,
-            up,
-            distance,
-            worldPoint
-          )
+        local isHit = distance ~= nil and worldPoint ~= nil
+        local endpoint = worldPoint or (origin + direction * CONFIG.maxRange)
+
+        rays[#rays + 1] = {
+          x = round2(endpoint.x),
+          y = round2(endpoint.y),
+          z = round2(endpoint.z),
+          hit = isHit,
+          distance = round2(distance or CONFIG.maxRange)
+        }
+
+        if isHit and #points < CONFIG.maxPoints then
+          local relative = worldPoint - origin
+          points[#points + 1] = {
+            x = round2(relative:dot(right)),
+            y = round2(relative:dot(forward)),
+            z = round2(relative:dot(up)),
+            distance = round2(distance)
+          }
         end
       end
     end
@@ -187,11 +182,14 @@ local function scan()
   state.lastPointCount = #points
 
   return {
+    enabled = true,
     sequence = state.sequence,
     range = CONFIG.maxRange,
     horizontalFov = 120,
     verticalFov = 16,
     scanHz = 1 / CONFIG.scanInterval,
+    origin = vectorToTable(origin),
+    rays = rays,
     points = points,
     pointCount = #points
   }
@@ -217,6 +215,22 @@ end
 function M.setEnabled(enabled)
   state.enabled = enabled == true
   state.timer = 0
+
+  if not state.enabled then
+    state.lastPointCount = 0
+    publish({
+      enabled = false,
+      sequence = state.sequence,
+      range = CONFIG.maxRange,
+      horizontalFov = 120,
+      verticalFov = 16,
+      origin = nil,
+      rays = {},
+      points = {},
+      pointCount = 0
+    })
+  end
+
   return state.enabled
 end
 
@@ -251,7 +265,7 @@ function M.updateGFX(dt)
     return
   end
 
-  -- Do not run catch-up scans after a slow frame.
+  -- Skip missed intervals instead of launching catch-up scan bursts.
   state.timer = 0
 
   local frame = scan()

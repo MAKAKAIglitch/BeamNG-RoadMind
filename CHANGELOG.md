@@ -1,12 +1,13 @@
 # Changelog
 
-## 0.1.0 — Initial prototype
+## 0.2.0 — World-space LiDAR visualization
 
-- Added a forward-facing virtual LiDAR sensor with a 120° horizontal field of view.
-- Limited the default scan to 51 rays at 4 Hz.
-- Added static and dynamic ray-hit collection.
-- Added a BeamNG UI app for viewing the point cloud.
-- Added a game-engine bridge for attaching the sensor to the active player vehicle.
-- Documented the performance budget and planned autonomous-driving architecture.
+- Replaced the separate HTML/Canvas viewer with in-world BeamNG debug drawing.
+- Added a regular Controls action: RoadMind: Toggle 3D LiDAR.
+- Added 3D beams from the virtual sensor origin to valid ray hits.
+- Added hit-point spheres and a sensor-origin marker.
+- Made scanning start only while visualization is enabled.
+- Kept raycasts rate-limited to 4 Hz and capped at 51 rays per scan.
+- Added a full project roadmap and updated architecture/performance docs.
 
-The route planner and autonomous driving controller are not part of this prototype yet.
+The autonomous route planner and vehicle controller are not implemented yet.

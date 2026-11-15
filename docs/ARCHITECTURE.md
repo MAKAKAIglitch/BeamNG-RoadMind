@@ -1,56 +1,58 @@
 # RoadMind architecture
 
-RoadMind is split into four independent layers. This keeps point rendering from becoming part of the vehicle-control loop.
+RoadMind is split into independent layers so sensor acquisition, world visualization, route planning and vehicle control do not depend on one another.
 
-## 1. Sensor layer
+## 1. Sensor layer — Vehicle Lua
 
 Location: lua/vehicle/extensions/roadmind_sensors.lua
 
-The prototype uses one virtual sensor mounted near the front of the vehicle:
+The current prototype uses one virtual sensor mounted near the front of the active vehicle:
 
 - Horizontal field of view: 120°.
 - Vertical field of view: 16°.
-- Ray layout: 17 azimuth samples × 3 elevation samples.
+- Ray pattern: 17 azimuth samples × 3 elevation samples.
 - Maximum range: 60 m.
-- Default update rate: 4 scans per second.
-- Maximum output: 51 hit points per scan.
+- Default scan rate: 4 scans per second.
+- Maximum ray directions: 51 per scan.
 
-Each point is converted into sensor-local coordinates:
+For each ray, the sensor checks static geometry and dynamic objects, then keeps the closest hit. It sends the world-space endpoint of each ray to Game Engine Lua. Valid returns are also converted into sensor-local coordinates for future planning.
 
-- x: lateral offset, positive to the vehicle's right.
-- y: forward distance.
-- z: height relative to the sensor.
-- distance: straight-line distance from the sensor origin.
+The sensor origin is virtual; no visible sensor mesh or JBeam edit is required.
 
-The scan uses static raycasts and checks dynamic objects along the same ray. The closest valid hit is retained. The sensor origin is virtual; no JBeam part or visible sensor model is needed.
+## 2. Input binding
 
-## 2. Game-engine bridge
+Location: lua/ge/extensions/core/input/actions/roadmind_actions.json
+
+RoadMind contributes a regular BeamNG action named **RoadMind: Toggle 3D LiDAR**. It runs in Game Engine Lua and calls the RoadMind coordinator. The player assigns a keyboard key or controller button in Options → Controls.
+
+No UI app is needed.
+
+## 3. World visualization — Game Engine Lua
 
 Location: lua/ge/extensions/roadmind.lua
 
-The game-engine extension watches for the active player vehicle, loads the vehicle sensor extension and receives serialized scan data. It exposes the latest sensor frame to the UI app.
+The game-engine extension attaches the sensor extension to the active player vehicle when visualization is enabled. Vehicle Lua sends serialized scan frames to the coordinator.
 
-Only the active player vehicle is attached by this prototype.
+The coordinator uses BeamNG's world debug drawer:
 
-## 3. Visualization
+- a line from the virtual sensor origin to each valid hit;
+- a small sphere at each hit position;
+- a cyan marker at the sensor origin.
 
-Location: ui/modules/apps/roadmind/
+Debug primitives are transient, so the last received scan is redrawn each graphics frame while visualization is active. Raycasts themselves remain rate-limited to 4 Hz. No new raycasts are performed by the render loop.
 
-The UI app polls the latest frame at 5 Hz and draws the points on a top-down sensor view. Visualization is not involved in the sensor raycast loop or future control calculations.
+Only valid hit beams are displayed; missed rays are not drawn to the 60 m range limit.
 
-The point data retains height, so a later 3D view or height-based filtering can use it without changing the sensor interface.
+## 4. Local planner — planned
 
-## 4. Autonomous-driving stack — planned
+The local planner will consume sensor-local points and route-corridor information. It should produce a small set of candidate trajectories, reject collision paths and select the route-compatible candidate with the best clearance and smoothness score.
 
-The intended driving stack is:
+The initial planner should be deterministic and inexpensive. A lattice or bicycle-model trajectory sampler with collision checks is preferred over a neural network.
 
-1. **Route manager:** receives ordered destination points and obtains a road-following corridor from the map/road graph.
-2. **Local planner:** generates a small set of candidate trajectories ahead of the car. It scores progress, clearance from LiDAR points, road boundaries, curvature and steering smoothness.
-3. **Motion controller:** tracks the selected trajectory and regulates speed using vehicle speed, curvature and stopping distance.
-4. **Safety supervisor:** brakes and disengages when sensor data is stale, no safe trajectory exists or the vehicle leaves the supported road corridor.
+## 5. Vehicle controller — planned
 
-The first planner should be deterministic and computationally small: a bicycle-model trajectory sampler with collision scoring is a better starting point than running a neural network every frame. A learned perception model can remain an optional future experiment.
+The controller will track the selected path and manage steering, throttle, braking and gears. A safety supervisor will request a stop when sensor data is stale, route confidence is lost or every candidate path is blocked.
 
 ## Important distinction
 
-The current prototype does **not** autonomously drive the vehicle. It only provides the first sensor and visualization milestone. Route following, obstacle avoidance and actuation must be implemented and tested as separate milestones.
+The current prototype does **not** autonomously drive the vehicle. It provides sensor acquisition and the requested in-world visualization. Route planning and autonomous actuation are separate future milestones.

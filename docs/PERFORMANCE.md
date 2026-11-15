@@ -1,8 +1,8 @@
 # Performance notes
 
-RoadMind starts with conservative limits because BeamNG already performs a demanding vehicle-physics simulation.
+RoadMind starts with a small sensor budget because BeamNG already performs demanding vehicle-physics simulation.
 
-## Prototype defaults
+## Current defaults
 
 | Setting | Default |
 |---|---:|
@@ -10,25 +10,32 @@ RoadMind starts with conservative limits because BeamNG already performs a deman
 | Vertical field of view | 16° |
 | Horizontal samples | 17 |
 | Vertical samples | 3 |
-| Maximum rays per scan | 51 |
+| Maximum ray directions per scan | 51 |
 | Scan frequency | 4 Hz |
 | Maximum range | 60 m |
-| UI polling | 5 Hz |
+| Visualization | Off until toggled |
 
-The default sensor budget is 51 ray directions × 4 scans per second = 204 ray directions per second. A direction may require both a static and a dynamic raycast, so the theoretical upper bound is approximately 408 raycast calls per second.
+The default sensor budget is 51 ray directions × 4 scans per second = 204 ray directions per second. Depending on the scene, one direction can cause both a static and a dynamic raycast. The approximate upper bound is therefore 408 raycast calls per second.
 
-This is a ray budget, not a guaranteed CPU percentage. Real cost depends on scene complexity, BeamNG version, hardware and the number of active vehicles.
+This is a workload estimate, not a measured CPU percentage. Real cost depends on scene complexity, BeamNG version, hardware and active vehicles.
+
+## Rendering behavior
+
+- World-space visualization is disabled until the player presses the RoadMind binding.
+- While enabled, the latest scan is redrawn with debugDrawer each graphics frame because debug primitives are transient.
+- The render loop does not perform any raycasts.
+- Only valid return beams and hit points are drawn; no-hit beams are omitted.
+- At most 51 hit markers can be drawn per scan.
 
 ## Rules for future features
 
-- Keep the sensor scan rate independent of the render frame rate.
-- Never rebuild or re-raycast the point cloud just because the UI redraws.
-- Cap the number of rays and points.
-- Keep UI polling slower than the render loop.
-- Avoid per-frame allocations in the future planner where practical.
-- Profile on a busy map with traffic before raising scan density.
+- Keep sensor scanning independent of the render frame rate.
+- Never rebuild or re-raycast a point cloud just because the camera frame changed.
+- Cap the number of rays, points and trajectory candidates.
 - Keep visualization optional so the driving stack can use sensor data without drawing it.
+- Profile on a busy map with traffic before increasing ray density or scan rate.
+- Compare frame times with the sensor disabled, scanning only and world visualization enabled.
 
 ## Tuning order
 
-When profiling, change one setting at a time. First measure the baseline with the viewer closed, then with the viewer open, then with traffic enabled. Increase horizontal resolution only if the planner demonstrably needs more samples.
+Change one setting at a time. Record a baseline on a repeatable map and vehicle, then compare scanning-only and visualization-enabled runs. Increase ray density only when a measured planner limitation requires it.

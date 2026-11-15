@@ -1,0 +1,11 @@
+{
+  "roadmind_toggle_3d_lidar": {
+    "cat": "menuExtra",
+    "order": 910,
+    "ctx": "tlua",
+    "actionMap": "Normal",
+    "onDown": "extensions.load('roadmind'); extensions.roadmind.toggleVisualization()",
+    "title": "RoadMind: Toggle 3D LiDAR",
+    "desc": "Show or hide forward LiDAR rays and hit points directly in the 3D world"
+  }
+}
