@@ -153,7 +153,6 @@
 
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref } from "vue"
-import { lua } from "@/bridge"
 import {
   BngButton,
   BngSwitch,
@@ -259,6 +258,33 @@ const RU = {
 }
 
 const locale = ref("en-US")
+
+function luaLiteral(value) {
+  if (typeof value === "string") return JSON.stringify(value)
+  if (typeof value === "boolean") return value ? "true" : "false"
+  if (typeof value === "number" && Number.isFinite(value)) return String(value)
+  throw new TypeError("Unsupported RoadMind setting value")
+}
+
+function callRoadMind(method, args = []) {
+  return new Promise((resolve, reject) => {
+    const engineLua = window.bngApi && window.bngApi.engineLua
+    if (typeof engineLua !== "function") {
+      reject(new Error("BeamNG engineLua bridge is unavailable"))
+      return
+    }
+
+    const command = "extensions.roadmind." + method + "("
+      + args.map(luaLiteral).join(", ") + ")"
+
+    try {
+      engineLua(command, resolve)
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
 function t(key) {
   const dictionary = String(locale.value).toLowerCase().startsWith("ru") ? RU : EN
   return dictionary[key] || EN[key] || key
@@ -352,7 +378,7 @@ onBeforeUnmount(() => {
 async function refresh() {
   busy.value = true
   try {
-    acceptResult(await lua.extensions.roadmind.getSettings())
+    acceptResult(await callRoadMind('getSettings'))
   } catch (e) {
     error.value = t("error")
     console.error("RoadMind: could not read settings", e)
@@ -363,7 +389,7 @@ async function refresh() {
 
 async function setSetting(key, value) {
   try {
-    acceptResult(await lua.extensions.roadmind.setSetting(key, value))
+    acceptResult(await callRoadMind('setSetting', [key, value]))
   } catch (e) {
     error.value = t("error")
     console.error("RoadMind: could not set " + key, e)
@@ -373,7 +399,7 @@ async function setSetting(key, value) {
 async function applyPreset(name) {
   busy.value = true
   try {
-    acceptResult(await lua.extensions.roadmind.setPreset(name))
+    acceptResult(await callRoadMind('setPreset', [name]))
   } catch (e) {
     error.value = t("error")
     console.error("RoadMind: could not apply preset", e)
@@ -385,7 +411,7 @@ async function applyPreset(name) {
 async function toggleRuntime() {
   busy.value = true
   try {
-    acceptResult(await lua.extensions.roadmind.setVisualizationEnabled(!status.value.visualizationEnabled))
+    acceptResult(await callRoadMind('setVisualizationEnabled', [!status.value.visualizationEnabled]))
   } catch (e) {
     error.value = t("error")
     console.error("RoadMind: could not toggle scanning", e)
