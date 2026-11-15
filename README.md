@@ -34,9 +34,9 @@ This project targets **BeamNG.drive**. BeamNG.tech has a separate native sensor 
 
 Therefore:
 
-- LiDAR uses virtual raycasts and produces a sparse forward point cloud.
-- Radar uses raycast hits plus target-velocity estimates where available. It is a lightweight kinematic radar proxy, not an RF/FMCW waveform simulation.
-- Ultrasonic uses short-range ray fans. It approximates the sensor beam, not acoustic propagation or material-dependent reflections.
+- LiDAR uses BeamNG's Game Engine scene-raycast API and produces a sparse forward point cloud.
+- Radar uses Game Engine scene-raycast returns. It is a geometric radar proxy, not an RF/FMCW waveform simulation; target radial velocity and stable target tracking are not implemented yet.
+- Ultrasonic uses three short-range scene-raycasts per sensor and keeps the nearest hit. It approximates the sensor beam, not acoustic propagation or material-dependent reflections.
 - Camera cones show mounting positions and fields of view. They do not produce RGB frames or semantic object detections in this Drive build.
 - IMU acceleration comes from BeamNG vehicle electrics; yaw rate is estimated from heading changes.
 - GNSS-like localization reports BeamNG world coordinates. It is not geodetic latitude/longitude.
@@ -52,9 +52,9 @@ These boundaries are kept explicit so a simulated geometric measurement is not m
 - Camera frustums: geometry only; no image rendering.
 - IMU/localization/odometry: sampled at 5 Hz.
 - The whole suite stays off until the Controls binding is pressed.
-- Debug drawing redraws cached sensor data; it performs no raycasts.
+- Raycasts run only when a sensor scan is due, not in the render loop. Debug drawing redraws cached results.
 
-The rough budget is 310 ray directions per second. A ray may use one static and one dynamic query, so this is a workload estimate, not a measured CPU percentage. Actual cost depends on the map, vehicle, traffic, hardware and game version.
+The target workload is 310 Game Engine scene-raycast queries per second. This is an estimate, not a measured CPU percentage. Actual cost depends on the map, vehicle, traffic, hardware and game version.
 
 ## Documentation
 
