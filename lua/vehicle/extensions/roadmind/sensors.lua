@@ -428,6 +428,7 @@ local function scanLidar(frame)
     range = cfg.maxRange,
     forward = vectorToPreciseTable(mount.direction),
     right = vectorToPreciseTable(mount.right),
+    up = vectorToPreciseTable(mount.up),
     rays = rays,
     rayCount = #rays
   }
@@ -444,8 +445,12 @@ local function scanRadars(frame)
         name = cfg.name,
         position = vectorToTable(mount.position),
         direction = vectorToPreciseTable(mount.direction),
+        right = vectorToPreciseTable(mount.right),
+        up = vectorToPreciseTable(mount.up),
         range = cfg.range,
-        fov = cfg.fov
+        fov = cfg.fov,
+        verticalFov = 45,
+        minRange = 0.75
       }
 
       local sampleCount = cfg.rays
@@ -492,7 +497,12 @@ local function scanUltrasonics(frame)
         name = cfg.name,
         position = vectorToTable(mount.position),
         direction = vectorToPreciseTable(mount.direction),
-        range = CONFIG.ultrasonicRange
+        right = vectorToPreciseTable(mount.right),
+        up = vectorToPreciseTable(mount.up),
+        range = CONFIG.ultrasonicRange,
+        fov = 16,
+        verticalFov = 20,
+        minRange = 0.08
       }
       local firstOffset, lastOffset = -1, 1
       if sensorSettings.ultrasonicDensity == "single" then
