@@ -1905,7 +1905,14 @@ local function getTrackedLidarWorldPosition(point)
   local track = state.tracks[point.trackId]
   if not track or not trackCanOwnLidarPoint(track) then return nil end
 
-  local position = asVec3(track.status == "coasting" and track.predictedPosition or track.position)
+  local position = asVec3(track.position)
+  local velocity = asVec3(track.estimatedVelocity)
+  if position and velocity then
+    local elapsed = math.max(0, state.simulationTime - (track.lastObservedAt or state.simulationTime))
+    local predictionHorizon = math.min(elapsed, 0.5)
+    position = position + velocity * predictionHorizon
+  end
+
   local orientation = track.orientation or {}
   local forward = normalizedVec3(orientation.forward)
   local right = normalizedVec3(orientation.right)
