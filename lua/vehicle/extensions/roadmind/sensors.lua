@@ -355,14 +355,24 @@ local function buildSensorMountDebug(frame)
     end
   end
 
-  add("Forward LiDAR", "lidar", layout.lidar)
+  add("Forward LiDAR", "lidar", {
+    forward = layout.lidar.forwardOffset,
+    lateral = layout.lidar.lateralOffset,
+    up = layout.lidar.upOffset,
+    yaw = 0
+  })
   for i = 1, #layout.radars do
     local config = layout.radars[i]
     add(config.name, "radar", config)
   end
   for i = 1, #layout.ultrasonics do
     local config = layout.ultrasonics[i]
-    add(config.name, "ultrasonic", config)
+    add(config.name, "ultrasonic", {
+      forward = config.forward,
+      lateral = config.lateral,
+      up = config.up or 0.42,
+      yaw = config.yaw
+    })
   end
   for i = 1, #layout.cameras do
     local config = layout.cameras[i]
@@ -476,7 +486,7 @@ local function scanUltrasonics(frame)
   local ultrasonics = currentSensorLayout().ultrasonics
   for i = 1, #ultrasonics do
     local cfg = ultrasonics[i]
-    local mount = makeMount(frame, cfg.forward, cfg.lateral, cfg.up, cfg.yaw)
+    local mount = makeMount(frame, cfg.forward, cfg.lateral, cfg.up or 0.42, cfg.yaw)
     if mount then
       mounts[#mounts + 1] = {
         name = cfg.name,
@@ -741,6 +751,16 @@ local function applySensorSettings(source)
   CONFIG.radarInterval = 1 / sensorSettings.radarHz
   CONFIG.ultrasonicInterval = 1 / sensorSettings.ultrasonicHz
   CONFIG.poseInterval = 1 / sensorSettings.poseHz
+
+  if state.sensorLayout and state.sensorLayout.lidar then
+    state.sensorLayout.lidar.maxRange = CONFIG.lidar.maxRange
+    state.sensorLayout.lidar.minRange = CONFIG.lidar.minRange
+    state.sensorLayout.lidar.horizontalFov = CONFIG.lidar.horizontalFov
+    state.sensorLayout.lidar.verticalFov = CONFIG.lidar.verticalFov
+    state.sensorLayout.lidar.horizontalSamples = CONFIG.lidar.horizontalSamples
+    state.sensorLayout.lidar.verticalSamples = CONFIG.lidar.verticalSamples
+    state.sensorLayout.lidar.interval = CONFIG.lidar.interval
+  end
 
   state.lidarTimer = 0
   state.radarTimer = 0
