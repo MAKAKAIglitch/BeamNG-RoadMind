@@ -14,7 +14,14 @@
             {{ t("estimatedLoad") }}: {{ status.estimatedRaycastsPerSecond || 0 }} {{ t("queriesPerSecond") }}
           </span>
           <span class="roadmind-budget">
-            {{ t("vehiclesDetected") }}: {{ status.detectedVehicleCount || 0 }}
+            {{ t("vehiclesDetected") }}: {{ status.visibleVehicleCount || status.detectedVehicleCount || 0 }}
+          </span>
+          <span class="roadmind-budget">
+            {{ t("vehicleCandidates") }}: {{ status.vehicleCandidateCount || 0 }}
+          </span>
+          <span class="roadmind-budget">
+            {{ t("registrySize") }}: {{ status.vehicleRegistryCount || 0 }}
+            <span v-if="status.vehicleRegistryTruncated">({{ t("registryLimited") }})</span>
           </span>
         </div>
         <BngButton
@@ -24,6 +31,7 @@
         >{{ status.visualizationEnabled ? t("stop") : t("start") }}</BngButton>
       </div>
       <p class="roadmind-note">{{ t("runtimeNote") }}</p>
+      <p class="roadmind-note">{{ t("detectionNote") }}</p>
     </section>
 
     <section class="roadmind-section">
@@ -269,7 +277,11 @@ const EN = {
   persistenceNote: "Keeps up to 600 world-space points for this game session. Drawing the cloud can reduce FPS.",
   clearCloud: "Clear scanned point cloud",
   detectedVehicles: "Detected vehicles",
-  vehiclesDetected: "Vehicles in sensor view",
+  vehiclesDetected: "Vehicles confirmed visible",
+  vehicleCandidates: "Vehicle candidates in sensor zones",
+  registrySize: "Cached vehicle registry",
+  registryLimited: "limit reached",
+  detectionNote: "Vehicle presence is simulator-assisted: RoadMind checks vehicle OBBs against calibrated sensor zones and verifies visibility with a bounded number of occlusion raycasts. It is not a raw LiDAR/radar/camera detection stream.",
   vehicleGeometry: "Vehicle geometry and sensor calibration",
   calibrated: "Geometry calibrated",
   fallbackCalibration: "Using fallback sensor positions",
@@ -343,7 +355,11 @@ const RU = {
   persistenceNote: "Хранит до 600 точек в мировых координатах до конца текущей игровой сессии. Отрисовка облака может снизить FPS.",
   clearCloud: "Очистить облако точек",
   detectedVehicles: "Обнаруженные автомобили",
-  vehiclesDetected: "Машин в поле зрения датчиков",
+  vehiclesDetected: "Подтверждённо видимых машин",
+  vehicleCandidates: "Кандидатов в зонах датчиков",
+  registrySize: "Машин в общем реестре",
+  registryLimited: "достигнут лимит",
+  detectionNote: "Обнаружение машин использует данные симулятора: RoadMind проверяет OBB автомобилей в зонах датчиков и видимость ограниченным числом лучей. Это не поток физических измерений LiDAR, радара или камер.",
   vehicleGeometry: "Геометрия автомобиля и калибровка датчиков",
   calibrated: "Геометрия определена",
   fallbackCalibration: "Используются резервные позиции датчиков",
@@ -480,6 +496,11 @@ const status = ref({
   routeSafetyStopped: false,
   persistentLidarPointCount: 0,
   detectedVehicleCount: 0,
+  visibleVehicleCount: 0,
+  vehicleCandidateCount: 0,
+  vehicleRegistryCount: 0,
+  vehicleRegistryTruncated: false,
+  occlusionRaycastsPerSecond: 0,
   vehicleCalibration: { calibrated: false, error: "Calibration has not been run" },
 })
 const error = ref("")
