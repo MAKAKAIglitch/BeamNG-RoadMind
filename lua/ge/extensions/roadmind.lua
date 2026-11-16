@@ -693,7 +693,7 @@ local function drawCalibrationGeometry(drawer, geometry, mounts)
   for i = 1, #mounts do
     local mount = mounts[i]
     local position = toPoint3F(mount.position)
-    local direction = vectorFromTable and vectorFromTable(mount.direction) or nil
+    local direction = asVec3(mount.direction)
     local color = ColorF(0.65, 0.8, 1.0, 0.95)
     if mount.kind == "lidar" then
       color = ColorF(0.1, 0.78, 1.0, 1.0)
