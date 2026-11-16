@@ -124,14 +124,14 @@ The current priority is the perception foundation. Route following, parking and 
 
 **Goal:** provide one consistent interface for objects and obstacles detected by different sensors.
 
-- [ ] Define a common observation format with position, orientation/size when available, timestamp, source sensor, confidence and data age.
-- [ ] Define a common target/world-model format for tracked vehicles and other detected objects.
-- [ ] Merge observations of the same target without creating duplicate objects.
-- [ ] Preserve source-specific measurements alongside fused estimates.
-- [ ] Reconcile differences in update rate, coordinate frame and measurement age.
-- [ ] Add quality checks for invalid, stale, conflicting or low-confidence observations.
-- [ ] Keep non-vehicle obstacles from LiDAR and scene raycasts in the world model.
-- [ ] Document which fields are measured, simulator-assisted, estimated or predicted.
+- [x] Define a common observation format with position, orientation/size when available, timestamp, source sensor, confidence and data age.
+- [x] Define a common target/world-model format for tracked vehicles and other detected objects.
+- [x] Merge observations of the same vehicle by RoadMind track ID; aggregate non-vehicle ray hits into bounded spatial obstacle clusters.
+- [x] Preserve source-specific LiDAR, radar, ultrasonic and vehicle-registry observations alongside tracked/fused target records.
+- [x] Reconcile sensor update rates, coordinate frames and measurement ages with GE simulation timestamps and per-source freshness.
+- [x] Add quality checks and counters for invalid, future, stale, conflicting, low-confidence, truncated and dropped data.
+- [x] Keep non-vehicle obstacles from LiDAR, radar and ultrasonic scene raycasts in the world model.
+- [x] Document measured scene-raycast data, simulator-assisted OBB observations, estimated motion and predicted positions in `docs/WORLD_MODEL.md`.
 
 **Acceptance criteria:** future planning modules can consume a single documented world-model interface without depending on LiDAR, radar or ultrasonic implementation details.
 
