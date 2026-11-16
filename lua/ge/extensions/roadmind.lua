@@ -509,6 +509,7 @@ local function makeTrackObservation(candidate)
     observationTimestamp = observationTimestamp,
     visibilityTimestamp = visibilityTimestamp,
     visibilityAge = math.max(0, now - visibilityTimestamp),
+    distance = tonumber(candidate.distance),
     sourceSensors = copySensorSources(candidate.sensorSources),
     sourceKind = candidate.sourceKind or "simulator-assisted",
     measurementKind = candidate.measurementKind or "vehicle OBB registry"
@@ -578,6 +579,7 @@ local function updateObjectTracks(candidates)
           }
           track.lastObservedAt = observation.observationTimestamp
           track.lastVisibilityAt = observation.visibilityTimestamp
+          track.distance = observation.distance
           track.confidence = math.min(TRACK_CONFIDENCE_MAX, (track.confidence or 0.55) + 0.08)
           track.missedScans = 0
           track.registryMissingSnapshots = 0
@@ -1196,6 +1198,27 @@ end
 
 local function settingsResult()
   local settings = state.settings or DEFAULT_SETTINGS
+  local trackedObjects = {}
+  local tracks = state.latestData and state.latestData.tracks or {}
+  for i = 1, math.min(#tracks, 8) do
+    local track = tracks[i]
+    local sensorNames = {}
+    for j = 1, #(track.sourceSensors or {}) do
+      sensorNames[#sensorNames + 1] = track.sourceSensors[j].name
+    end
+    trackedObjects[#trackedObjects + 1] = {
+      trackId = track.trackId,
+      status = track.status,
+      distance = track.distance,
+      estimatedSpeedKph = track.estimatedSpeed and round2(track.estimatedSpeed * 3.6) or nil,
+      estimatedRelativeSpeedKph = track.estimatedRelativeSpeed
+        and round2(track.estimatedRelativeSpeed * 3.6) or nil,
+      dataAge = track.dataAge,
+      confidencePercent = math.floor((track.confidence or 0) * 100 + 0.5),
+      sensors = sensorNames
+    }
+  end
+
   return {
     ok = true,
     language = getGameLanguage(),
@@ -1223,6 +1246,7 @@ local function settingsResult()
       routeWaypointCount = #state.routePath,
       persistentLidarPointCount = #state.lidarPointCloud,
       trackedVehicleCount = state.trackCount,
+      trackedObjects = trackedObjects,
       coastingTrackCount = state.latestData and (function()
         local count = 0
         for i = 1, #(state.latestData.tracks or {}) do
@@ -1451,6 +1475,11 @@ end
 
 local function invalidateVehicleGeometry(vehicleId)
   if vehicleId == nil or tostring(vehicleId) == tostring(state.activeVehicleId) then
+    resetTrackingState(false)
+    state.vehicleRegistry = {}
+    state.vehicleRegistryById = {}
+    state.vehicleRegistrySnapshotValid = false
+    state.vehicleRegistryTimer = 0
     if state.activeVehicle then M.recalibrateVehicle() end
   end
 end
@@ -2348,7 +2377,18 @@ function M.onVehicleDestroyed(vehicleId)
   if vehicleId == state.activeVehicleId then
     detachPreviousVehicle()
     resetFrame()
+    return
   end
+
+  local key = tostring(vehicleId)
+  local track = state.tracksBySourceId[key]
+  if track then
+    state.tracks[track.trackId] = nil
+    state.tracksBySourceId[key] = nil
+    state.trackCount = math.max(0, state.trackCount - 1)
+  end
+  state.vehicleRegistryById[key] = nil
+  state.occlusionCache[key] = nil
 end
 
 return M
