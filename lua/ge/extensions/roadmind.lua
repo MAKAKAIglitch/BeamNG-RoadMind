@@ -161,6 +161,11 @@ local state = {
   lidarRenderOriginVelocity = nil,
   lidarRenderScanTimestamp = 0,
   vehicleRenderStates = {},
+  visualizationRenderFrame = nil,
+  visualizationRenderOverlays = nil,
+  visualizationVectorStates = {},
+  visualizationRenderClock = 0,
+  visualizationRenderPruneTimer = 0,
   lidarRenderScanSequence = 0,
   worldModel = nil,
   worldModelGeneration = 0,
@@ -1108,6 +1113,11 @@ local function resetFrame()
   state.latestData = nil
   state.frameAge = math.huge
   state.worldModel = nil
+  state.visualizationRenderFrame = nil
+  state.visualizationRenderOverlays = nil
+  state.visualizationVectorStates = {}
+  state.visualizationRenderClock = 0
+  state.visualizationRenderPruneTimer = 0
   clearLidarRenderState()
 end
 
@@ -1395,20 +1405,21 @@ local function drawDetectedVehicles(drawer, candidates, tracks)
   end
 end
 
-local function drawRoutePath(drawer)
-  if not state.routePilotEnabled or type(state.routePath) ~= "table" then return end
+local function drawRoutePath(drawer, renderPath)
+  local path = renderPath or state.routePath
+  if not state.routePilotEnabled or type(path) ~= "table" then return end
   local color = ColorF(0.95, 0.58, 0.12, 0.88)
-  for i = 1, #state.routePath - 1 do
-    local a = state.routePath[i]
-    local b = state.routePath[i + 1]
+  for i = 1, #path - 1 do
+    local a = path[i]
+    local b = path[i + 1]
     if a and b then
       drawLine(drawer, toPoint3F(a), toPoint3F(b), color)
     end
   end
 end
 
-local function drawLocalPlanner(drawer)
-  local planner = state.localPlanner
+local function drawLocalPlanner(drawer, renderPlanner)
+  local planner = renderPlanner or state.localPlanner
   if not state.routePilotEnabled or type(planner) ~= "table"
       or type(planner.candidates) ~= "table" then return end
   for i = 1, #planner.candidates do
@@ -1559,7 +1570,7 @@ end
 
 local function drawFrame()
   local drawer = debugDrawer
-  local frame = state.latestData
+  local frame = state.visualizationRenderFrame or state.latestData
   local settings = state.settings or DEFAULT_SETTINGS
 
   if not drawer or not frame or not frame.enabled then return end
@@ -1584,8 +1595,9 @@ local function drawFrame()
   if settings.showCalibration then
     drawCalibrationGeometry(drawer, frame.geometryDebug, frame.mounts)
   end
-  drawRoutePath(drawer)
-  drawLocalPlanner(drawer)
+  local renderOverlays = state.visualizationRenderOverlays or {}
+  drawRoutePath(drawer, renderOverlays.routePath)
+  drawLocalPlanner(drawer, renderOverlays.planner)
 end
 
 local function copySettings(source)
@@ -2621,10 +2633,10 @@ local function getTrackedLidarWorldPosition(point)
   return position + forward * p.forward + right * p.right + up * p.up
 end
 
-local function dampedSpringStep(currentPosition, currentVelocity, targetPosition, dt)
+local function dampedSpringStep(currentPosition, currentVelocity, targetPosition, dt, smoothingSeconds, maxVelocity)
   if not currentPosition or not targetPosition then return targetPosition, vec3(0, 0, 0) end
   if dt <= 0 then return currentPosition, currentVelocity or vec3(0, 0, 0) end
-  local omega = 2.0 / LIDAR_RENDER_SMOOTHING_SECONDS
+  local omega = 2.0 / math.max(0.01, tonumber(smoothingSeconds) or LIDAR_RENDER_SMOOTHING_SECONDS)
   local velocity = currentVelocity or vec3(0, 0, 0)
   local displacement = currentPosition - targetPosition
   local temp = (velocity + displacement * omega) * dt
@@ -2632,7 +2644,8 @@ local function dampedSpringStep(currentPosition, currentVelocity, targetPosition
   local nextPosition = targetPosition + (displacement + temp) * decay
   local nextVelocity = (velocity - temp * omega) * decay
   local speed = nextVelocity:length()
-  if speed > 60 then nextVelocity = nextVelocity * (60 / speed) end
+  local velocityLimit = math.max(1, tonumber(maxVelocity) or 60)
+  if speed > velocityLimit then nextVelocity = nextVelocity * (velocityLimit / speed) end
   return nextPosition, nextVelocity
 end
 
@@ -2829,6 +2842,121 @@ local function updateDetectedVehicleRenderStates(dt)
   for key, entry in pairs(state.vehicleRenderStates) do
     if not updated[key] and state.simulationTime - (entry.lastSeenAt or -math.huge) > TRACK_MAX_AGE then
       state.vehicleRenderStates[key] = nil
+    end
+  end
+end
+
+local VISUALIZATION_RENDER_SMOOTHING_SECONDS = 0.16
+local VISUALIZATION_RENDER_SNAP_DISTANCE = 60.0
+local VISUALIZATION_RENDER_STATE_MAX_AGE = 2.5
+local VISUALIZATION_RENDER_PRUNE_INTERVAL = 0.5
+local RENDER_IDENTITY_FIELDS = {
+  "trackId", "sourceVehicleId", "hitObjectId", "id",
+  "name", "rayIndex", "beamIndex", "kind", "offset"
+}
+
+local function getRenderArrayIdentity(item, index)
+  if type(item) ~= "table" then return tostring(index) end
+  local parts = {}
+  for i = 1, #RENDER_IDENTITY_FIELDS do
+    local field = RENDER_IDENTITY_FIELDS[i]
+    local value = item[field]
+    if type(value) == "string" or type(value) == "number" then
+      parts[#parts + 1] = field .. "=" .. tostring(value)
+    end
+  end
+  if #parts == 0 then return tostring(index) end
+  return "[" .. table.concat(parts, "|") .. "]"
+end
+
+local function smoothVisualizationValue(value, path, dt, now, seen, inertiaEnabled)
+  if type(value) ~= "table" then return value end
+
+  -- Interpolate render-only world-space positions and directions.
+  -- Source measurements and the fused World Model are never mutated.
+  if type(value.x) == "number" and type(value.y) == "number" and type(value.z) == "number" then
+    local target = vec3(value.x, value.y, value.z)
+    if not inertiaEnabled then
+      state.visualizationVectorStates[path] = nil
+      return {x = target.x, y = target.y, z = target.z}
+    end
+
+    local entry = state.visualizationVectorStates[path]
+    local current = entry and asVec3(entry.position) or nil
+    local velocity = entry and asVec3(entry.velocity) or vec3(0, 0, 0)
+    if not current or (target - current):length() > VISUALIZATION_RENDER_SNAP_DISTANCE then
+      current = target
+      velocity = vec3(0, 0, 0)
+    else
+      current, velocity = dampedSpringStep(
+        current, velocity, target, dt, VISUALIZATION_RENDER_SMOOTHING_SECONDS, 250
+      )
+    end
+    state.visualizationVectorStates[path] = {
+      position = vectorToPlainTable(current),
+      velocity = vectorToPlainTable(velocity),
+      lastSeenAt = now
+    }
+    seen[path] = true
+    return {x = current.x, y = current.y, z = current.z}
+  end
+
+  local result = {}
+  for key, child in pairs(value) do
+    local childKey = tostring(key)
+    if type(key) == "number" and type(child) == "table" then
+      childKey = getRenderArrayIdentity(child, key)
+    end
+    result[key] = smoothVisualizationValue(
+      child, path .. "/" .. childKey, dt, now, seen, inertiaEnabled
+    )
+  end
+  return result
+end
+
+local function updateVisualizationRenderState(dt)
+  dt = math.max(0, math.min(tonumber(dt) or 0, 0.10))
+  state.visualizationRenderClock = (state.visualizationRenderClock or 0) + dt
+  local now = state.visualizationRenderClock
+  local inertiaEnabled = (state.settings or DEFAULT_SETTINGS).visualizationInertiaEnabled ~= false
+  local seen = {}
+
+  if type(state.latestData) == "table" then
+    local renderFrame = {}
+    for key, value in pairs(state.latestData) do
+      -- LiDAR has its own identity-aware spring and fade layer.
+      if key == "lidar" then
+        renderFrame[key] = value
+      else
+        renderFrame[key] = smoothVisualizationValue(
+          value, "frame/" .. tostring(key), dt, now, seen, inertiaEnabled
+        )
+      end
+    end
+    state.visualizationRenderFrame = renderFrame
+  else
+    state.visualizationRenderFrame = nil
+  end
+
+  -- Route and planner coordinates are smoothed only in a separate display copy.
+  local overlays = {routePath = state.routePath, planner = state.localPlanner}
+  state.visualizationRenderOverlays = smoothVisualizationValue(
+    overlays, "overlays", dt, now, seen, inertiaEnabled
+  )
+
+  if not inertiaEnabled then
+    state.visualizationVectorStates = {}
+    state.visualizationRenderPruneTimer = 0
+    return
+  end
+
+  state.visualizationRenderPruneTimer = state.visualizationRenderPruneTimer + dt
+  if state.visualizationRenderPruneTimer >= VISUALIZATION_RENDER_PRUNE_INTERVAL then
+    state.visualizationRenderPruneTimer = 0
+    for key, entry in pairs(state.visualizationVectorStates) do
+      if now - (entry.lastSeenAt or -math.huge) > VISUALIZATION_RENDER_STATE_MAX_AGE then
+        state.visualizationVectorStates[key] = nil
+      end
     end
   end
 end
@@ -4854,6 +4982,11 @@ function M.onUpdate(dt)
     end
     if routePilotActive then updateRoutePilotSafety(dt) end
   end
+  -- Advance render-only inertia at display cadence. This covers own-vehicle
+  -- bounds/axes/mounts, radar and ultrasonic returns, camera frustums,
+  -- localization, traffic origins, route lines and planner candidates.
+  updateVisualizationRenderState(dt)
+
   -- Keep redrawing the last valid snapshot while the simulation is paused.
   drawFrame()
 end
