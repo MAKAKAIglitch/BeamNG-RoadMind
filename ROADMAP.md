@@ -105,17 +105,18 @@ The current priority is the perception foundation. Route following, parking and 
 
 **Goal:** remove visible point teleportation without changing the measurements used by autonomy.
 
-- [ ] Keep raw LiDAR measurements separate from render-only point state.
-- [ ] Timestamp every scan and point set.
-- [ ] Associate measured points with tracked moving vehicles when the association is reliable.
-- [ ] Store associated moving-object points in the target's local coordinate frame where possible.
-- [ ] Keep static-scene points in world coordinates.
-- [ ] Interpolate render positions between scans using elapsed time and bounded smoothing.
-- [ ] Use target motion to update associated points between scans without treating the result as a new measurement.
-- [ ] Fade or expire points that are no longer observed.
-- [ ] Avoid connecting unrelated hits when a ray changes from one surface/object to another.
-- [ ] Keep the point count and interpolation work bounded.
-- [ ] Ensure the planner and controller receive raw/timestamped measurements or an explicitly defined world model, never render-only interpolated values.
+- [x] Keep raw LiDAR measurements separate from render-only point state.
+- [x] Timestamp every scan and point set in the GE simulation clock.
+- [x] Associate measured points with recent tracked moving vehicles by hit object ID, with an unambiguous OBB spatial fallback.
+- [x] Store associated moving-object points in the target's vehicle-local OBB frame.
+- [x] Keep static-scene points in world coordinates.
+- [x] Smooth render positions between scans using elapsed GE time, bounded per-frame movement and a fixed smoothing constant.
+- [x] Use timestamp-derived target motion to move associated render points between scans, with a maximum 0.5 s prediction horizon and no new sensor measurement.
+- [x] Fade missed/replaced points and expire render points whose source scan is older than 2.25 s.
+- [x] Keep each ray's previous hit separate when the hit object ID, track ID or world-space location changes; do not interpolate between unrelated returns.
+- [x] Bound active render points to 99 and fading points to 198.
+- [x] Keep planner/safety inputs on raw timestamped `latestData.lidar.rays`; render-only positions are never written back to sensor measurements.
+- [ ] Validate moving-object point continuity, surface switching and missed-return fading in live BeamNG traffic and repeatable scenes.
 
 **Acceptance criteria:** moving targets and their associated visual points move smoothly between scan updates; missing or replaced returns do not create persistent false geometry; visual smoothing cannot alter the sensor data consumed by autonomy.
 
