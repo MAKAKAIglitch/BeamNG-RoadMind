@@ -111,7 +111,8 @@ The next implementation milestone is Phase 9: a bounded local planner consuming 
 - [x] Associate measured points with recent tracked moving vehicles by hit object ID, with an unambiguous OBB spatial fallback.
 - [x] Store associated moving-object points in the target's vehicle-local OBB frame.
 - [x] Keep static-scene points in world coordinates.
-- [x] Smooth render positions between scans using elapsed GE time, bounded per-frame movement and a fixed smoothing constant.
+- [x] Smooth render positions between scans using elapsed GE time and a bounded critically damped spring; make visualization inertia independently switchable.
+- [x] Add a bounded session-only world-space LiDAR map with configurable 500–10,000 point capacity, vehicle returns included and pause-safe display.
 - [x] Use timestamp-derived target motion to move associated render points between scans, with a maximum 0.5 s prediction horizon and no new sensor measurement.
 - [x] Fade missed/replaced points and expire render points whose source scan is older than 2.25 s.
 - [x] Keep each ray's previous hit separate when the hit object ID, track ID or world-space location changes; do not interpolate between unrelated returns.
