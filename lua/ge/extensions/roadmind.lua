@@ -50,6 +50,14 @@ local VEHICLE_REGISTRY_INTERVAL = 0.5
 local VEHICLE_DETECTION_INTERVAL = 0.25
 local MAX_REGISTRY_VEHICLES = 256
 local MAX_OCCLUSION_CHECKS_PER_CYCLE = 4
+local OCCLUSION_CACHE_MAX_AGE = 0.75
+local TRACK_UPDATE_INTERVAL = 0.25
+local TRACK_OBSERVATION_MAX_AGE = 0.75
+local TRACK_MAX_AGE = 1.5
+local TRACK_MAX_MISSED_SCANS = 6
+local TRACK_MAX_COUNT = 128
+local TRACK_ASSOCIATION_DISTANCE = 8.0
+local TRACK_CONFIDENCE_MAX = 0.98
 local ROUTE_MAX_SPEED_MPS = 8.0
 local ROUTE_LOOKAHEAD_M = 550.0
 local ROUTE_REPLAN_DISTANCE = 140.0
@@ -67,11 +75,19 @@ local state = {
   vehicleGeometry = nil,
   vehicleCalibrationError = nil,
   vehicleRegistry = {},
+  vehicleRegistryById = {},
+  vehicleRegistrySnapshotValid = false,
   vehicleRegistryTimer = 0,
   vehicleRegistryGeneration = 0,
   vehicleRegistryTruncated = false,
   vehicleDetectionTimer = 0,
   vehicleCandidates = {},
+  occlusionCache = {},
+  occlusionCursor = 1,
+  simulationTime = 0,
+  tracks = {},
+  nextTrackId = 1,
+  trackCount = 0,
   occlusionRaycastsLastCycle = 0,
   occlusionRaycastsPerSecond = 0,
   lidarPointCloud = {},
@@ -1405,14 +1421,35 @@ local function snapshotVehicleBounds(vehicle, vehicleId)
     return nil
   end
 
+  local forward = normalizedVec3(safeCall(vehicle, "getDirectionVector"))
+  local up = normalizedVec3(safeCall(vehicle, "getDirectionVectorUp"))
+  local right = forward and up and normalizedVec3(forward:cross(up)) or nil
+  if not forward or not right or not up then return nil end
+
+  local function projectedHalfExtent(axis)
+    return hx * math.abs(axes[1]:dot(axis))
+      + hy * math.abs(axes[2]:dot(axis))
+      + hz * math.abs(axes[3]:dot(axis))
+  end
+
+  local length = projectedHalfExtent(forward) * 2
+  local width = projectedHalfExtent(right) * 2
+  local height = projectedHalfExtent(up) * 2
+  local radius = math.sqrt(hx * hx + hy * hy + hz * hz)
+
   return {
     id = vehicleId,
     center = center,
     position = position,
     velocity = velocity,
+    forward = forward,
+    right = right,
+    up = up,
+    dimensions = {length = length, width = width, height = height},
     axes = axes,
     half = {hx, hy, hz},
-    radius = math.sqrt(hx * hx + hy * hy + hz * hz)
+    radius = radius,
+    registryTimestamp = state.simulationTime
   }
 end
 
@@ -1437,6 +1474,8 @@ local function refreshVehicleRegistry()
 
   if type(vehicles) ~= "table" then
     state.vehicleRegistry = {}
+    state.vehicleRegistryById = {}
+    state.vehicleRegistrySnapshotValid = false
     state.vehicleRegistryTruncated = false
     state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
     return false
@@ -1467,7 +1506,14 @@ local function refreshVehicleRegistry()
     end
   end
 
+  local registryById = {}
+  for i = 1, #registry do
+    registryById[tostring(registry[i].id)] = true
+  end
+
   state.vehicleRegistry = registry
+  state.vehicleRegistryById = registryById
+  state.vehicleRegistrySnapshotValid = true
   state.vehicleRegistryTruncated = truncated
   state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
   return true
