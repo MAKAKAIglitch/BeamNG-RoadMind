@@ -1700,6 +1700,7 @@ local function processRadar(radar)
     if hit then
       hit.name = beam.name
       hit.origin = beam.origin
+      hit.rayIndex = i
       returns[#returns + 1] = hit
     end
   end
@@ -1719,6 +1720,7 @@ local function processUltrasonic(ultrasonic)
       if not current or hit.distance < current.distance then
         hit.name = beam.name
         hit.origin = beam.origin
+        hit.beamIndex = i
         nearestBySensor[beam.name] = hit
       end
     end
