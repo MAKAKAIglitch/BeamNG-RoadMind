@@ -22,6 +22,13 @@ Vehicle dimensions are sampled once from the active vehicle's oriented bounding 
 
 The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/debug update at the configured pose rate and a bounded set of debug lines/points; it does not add scene raycasts.
 
+## Vehicle registry and detection budget
+
+- The shared GE vehicle OBB registry refreshes at 2 Hz (once per 0.5 s), rather than being rebuilt by individual sensors.
+- Sensor-zone/OBB tests run at up to 4 Hz against the cached registry.
+- At most 4 occlusion raycasts run per detection cycle: a hard upper bound of 16 additional scene-raycast queries/s. The actual count is lower when fewer than four candidates enter sensor zones.
+- The settings page adds the actual recent occlusion-raycast rate to the scheduled sensor-raycast estimate. This is a workload estimate, not an FPS or CPU measurement.
+
 ## Scheduling
 
 - Sensor scan frequencies are controlled by the selected profile and can be customized.
