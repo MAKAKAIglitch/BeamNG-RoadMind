@@ -63,7 +63,7 @@ local TRACK_OBSERVATION_MAX_AGE = 0.75
 local TRACK_MAX_AGE = 1.5
 local TRACK_MAX_MISSED_SCANS = 6
 local TRACK_MAX_COUNT = 128
-local TRACK_ASSOCIATION_DISTANCE = 8.0
+local TRACK_SPATIAL_CELL_SIZE = 16.0
 local TRACK_CONFIDENCE_MAX = 0.98
 local ROUTE_MAX_SPEED_MPS = 8.0
 local ROUTE_LOOKAHEAD_M = 550.0
@@ -95,6 +95,7 @@ local state = {
   simulationTime = 0,
   tracks = {},
   tracksBySourceId = {},
+  lidarTrackGrid = {},
   nextTrackId = 1,
   trackCount = 0,
   occlusionRaycastsLastCycle = 0,
@@ -471,6 +472,7 @@ end
 local function resetTrackingState(resetClock)
   state.tracks = {}
   state.tracksBySourceId = {}
+  state.lidarTrackGrid = {}
   state.trackCount = 0
   state.occlusionCache = {}
   state.occlusionCursor = 1
@@ -682,6 +684,38 @@ local function updateObjectTracks(candidates)
       result[#result + 1] = track
     end
   end
+
+  -- Build a coarse spatial index once per tracking update. A LiDAR hit can
+  -- query one cell instead of testing every active target OBB.
+  local trackGrid = {}
+  local cellSize = TRACK_SPATIAL_CELL_SIZE
+  for i = 1, #result do
+    local track = result[i]
+    if track.position and track.dimensions then
+      local position = asVec3(track.position)
+      local dimensions = track.dimensions
+      local length = tonumber(dimensions.length) or 0
+      local width = tonumber(dimensions.width) or 0
+      local height = tonumber(dimensions.height) or 0
+      local radius = math.sqrt(length * length + width * width + height * height) * 0.5 + 0.5
+      if position and radius > 0 then
+        local minX, maxX = math.floor((position.x - radius) / cellSize), math.floor((position.x + radius) / cellSize)
+        local minY, maxY = math.floor((position.y - radius) / cellSize), math.floor((position.y + radius) / cellSize)
+        local minZ, maxZ = math.floor((position.z - radius) / cellSize), math.floor((position.z + radius) / cellSize)
+        for x = minX, maxX do
+          for y = minY, maxY do
+            for z = minZ, maxZ do
+              local key = x .. ":" .. y .. ":" .. z
+              local bucket = trackGrid[key]
+              if not bucket then bucket = {}; trackGrid[key] = bucket end
+              bucket[#bucket + 1] = track
+            end
+          end
+        end
+      end
+    end
+  end
+  state.lidarTrackGrid = trackGrid
 
   table.sort(result, function(a, b)
     local origin = playerPosition or vec3(0, 0, 0)
@@ -1751,12 +1785,23 @@ local function findTrackForLidarPoint(point)
     local direct = state.tracksBySourceId[tostring(sourceVehicleId)]
     local localPosition = direct and localizeLidarPointOnTrack(point, direct) or nil
     if localPosition then return direct, localPosition end
+    -- The hit belongs to a known non-tracked object or an expired vehicle;
+    -- do not spatially reassign it to a different target.
+    return nil, nil
   end
 
-  -- Some static raycast hits do not expose an object handle. In that case,
-  -- associate only when exactly one recent tracked OBB contains the hit.
+  -- When the raycast does not expose an object handle, query only the coarse
+  -- spatial cell covering the hit. Ambiguous overlapping OBBs remain static.
+  local worldPoint = asVec3(point)
+  if not worldPoint then return nil, nil end
+  local cellSize = TRACK_SPATIAL_CELL_SIZE
+  local key = math.floor(worldPoint.x / cellSize) .. ":"
+    .. math.floor(worldPoint.y / cellSize) .. ":"
+    .. math.floor(worldPoint.z / cellSize)
+  local bucket = state.lidarTrackGrid[key] or {}
   local match, matchLocal = nil, nil
-  for _, track in pairs(state.tracks) do
+  for i = 1, #bucket do
+    local track = bucket[i]
     if trackCanOwnLidarPoint(track) then
       local localPosition = localizeLidarPointOnTrack(point, track)
       if localPosition then
@@ -2685,6 +2730,7 @@ function M.onVehicleDestroyed(vehicleId)
   end
   state.vehicleRegistryById[key] = nil
   state.occlusionCache[key] = nil
+  state.lidarTrackGrid = {}
 end
 
 return M
