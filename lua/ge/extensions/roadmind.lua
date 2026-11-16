@@ -554,6 +554,7 @@ local function updateObjectTracks(candidates)
           lastObservedAt = nil,
           lastUpdatedAt = now,
           velocitySource = "not-yet-available",
+          positionSource = "simulator-obb-center",
           sourceKind = observation.sourceKind,
           measurementKind = observation.measurementKind
         }
@@ -599,6 +600,7 @@ local function updateObjectTracks(candidates)
             track.estimatedRelativeSpeed = round2(
               (estimatedVelocity - playerVelocity):dot(relativeDirection:normalized())
             )
+            track.relativeSpeedSource = "timestamped-track-velocity-minus-simulator-player-velocity"
           end
         end
       end
@@ -660,10 +662,15 @@ local function updateObjectTracks(candidates)
   end
 
   table.sort(result, function(a, b)
-    local da = asVec3(a.position)
-    local db = asVec3(b.position)
     local origin = playerPosition or vec3(0, 0, 0)
-    return da and db and (da - origin):length() < (db - origin):length() or a.trackId < b.trackId
+    local aPosition = asVec3(a.position)
+    local bPosition = asVec3(b.position)
+    local aDistance = aPosition and (aPosition - origin):length() or math.huge
+    local bDistance = bPosition and (bPosition - origin):length() or math.huge
+    if math.abs(aDistance - bDistance) < 0.001 then
+      return a.trackId < b.trackId
+    end
+    return aDistance < bDistance
   end)
   return result
 end
@@ -899,19 +906,27 @@ local function drawPersistentLidarCloud(drawer)
   end
 end
 
-local function drawDetectedVehicles(drawer, vehicles)
-  if type(vehicles) ~= "table" then return end
-  for i = 1, #vehicles do
-    local target = vehicles[i]
-    if target.visibility == "visible" and target.sourceKind == "simulator-assisted" then
-      local position = toPoint3F(target.position)
-      local origin = toPoint3F(target.sensorOrigin)
+local function drawDetectedVehicles(drawer, tracks)
+  if type(tracks) ~= "table" then return end
+  for i = 1, #tracks do
+    local track = tracks[i]
+    if track.sourceKind == "simulator-assisted" then
+      local displayPosition = track.status == "confirmed"
+        and track.position or (track.predictedPosition or track.position)
+      local position = toPoint3F(displayPosition)
+      local origin = toPoint3F(track.sensorOrigin)
       if position then
-        local color = type(target.relativeSpeedEstimate) == "number" and target.relativeSpeedEstimate < -1.0
-          and ColorF(1.0, 0.18, 0.12, 1.0)
-          or ColorF(0.30, 1.0, 0.40, 1.0)
+        local color
+        if type(track.estimatedRelativeSpeed) == "number" and track.estimatedRelativeSpeed < -1.0 then
+          color = ColorF(1.0, 0.18, 0.12, 1.0)
+        elseif track.status == "confirmed" then
+          color = ColorF(0.30, 1.0, 0.40, 1.0)
+        else
+          color = ColorF(1.0, 0.72, 0.18, 0.8)
+        end
         if origin then drawLine(drawer, origin, position, color) end
-        drawSphere(drawer, position, 0.42, color)
+        local radius = track.status == "confirmed" and 0.42 or 0.32
+        drawSphere(drawer, position, radius, color)
       end
     end
   end
@@ -1068,7 +1083,7 @@ local function drawFrame()
   end
   if settings.showRadar then drawRadar(drawer, frame.radar) end
   if settings.showUltrasonic then drawUltrasonic(drawer, frame.ultrasonic) end
-  if settings.showDetectedVehicles then drawDetectedVehicles(drawer, frame.vehicles) end
+  if settings.showDetectedVehicles then drawDetectedVehicles(drawer, frame.tracks or {}) end
 
   if settings.showCameras then
     local cameras = frame.cameras or {}
