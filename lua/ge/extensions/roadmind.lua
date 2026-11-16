@@ -447,6 +447,227 @@ local function clearPersistentLidarPoints()
   state.lidarPointWriteIndex = 1
 end
 
+local function resetTrackingState(resetClock)
+  state.tracks = {}
+  state.trackCount = 0
+  state.occlusionCache = {}
+  state.occlusionCursor = 1
+  state.vehicleCandidates = {}
+  if resetClock then state.simulationTime = 0 end
+  if state.latestData then
+    state.latestData.vehicles = {}
+    state.latestData.tracks = {}
+  end
+end
+
+local function allocateRoadMindTrackId()
+  local id = string.format("RM-%06d", state.nextTrackId)
+  state.nextTrackId = state.nextTrackId + 1
+  return id
+end
+
+local function copySensorSources(sources)
+  local result = {}
+  for i = 1, #(sources or {}) do
+    result[i] = {
+      sensor = sources[i].sensor,
+      name = sources[i].name
+    }
+  end
+  return result
+end
+
+local function vectorToPlainTable(value)
+  if not value then return nil end
+  return {x = value.x, y = value.y, z = value.z}
+end
+
+local function makeTrackObservation(candidate)
+  if candidate.visibility ~= "visible" then return nil end
+  local now = state.simulationTime
+  local visibilityTimestamp = tonumber(candidate.visibilityTimestamp)
+  local observationTimestamp = tonumber(candidate.observationTimestamp)
+  if not visibilityTimestamp or not observationTimestamp then return nil end
+  if now - visibilityTimestamp > TRACK_OBSERVATION_MAX_AGE
+      or now - observationTimestamp > TRACK_OBSERVATION_MAX_AGE then
+    return nil
+  end
+
+  local position = asVec3(candidate.position)
+  if not position or type(candidate.dimensions) ~= "table"
+      or type(candidate.orientation) ~= "table" then return nil end
+
+  return {
+    sourceVehicleId = candidate.sourceVehicleId or candidate.id,
+    position = position,
+    dimensions = candidate.dimensions,
+    orientation = candidate.orientation,
+    simulatorVelocity = asVec3(candidate.simulatorVelocity),
+    observationTimestamp = observationTimestamp,
+    visibilityTimestamp = visibilityTimestamp,
+    visibilityAge = math.max(0, now - visibilityTimestamp),
+    sourceSensors = copySensorSources(candidate.sensorSources),
+    sourceKind = candidate.sourceKind or "simulator-assisted",
+    measurementKind = candidate.measurementKind or "vehicle OBB registry"
+  }
+end
+
+local function estimateTrackVelocity(track, position, timestamp)
+  local previousPosition = asVec3(track.position)
+  local elapsed = timestamp - (track.lastObservedAt or timestamp)
+  if not previousPosition or elapsed < 0.05 or elapsed > TRACK_MAX_AGE then return end
+
+  local rawVelocity = (position - previousPosition) / elapsed
+  local speed = rawVelocity:length()
+  if speed > 100 then return end
+
+  local previousVelocity = asVec3(track.estimatedVelocity)
+  if previousVelocity then
+    rawVelocity = previousVelocity * 0.35 + rawVelocity * 0.65
+  end
+  track.estimatedVelocity = vectorToPlainTable(rawVelocity)
+  track.estimatedSpeed = round2(rawVelocity:length())
+  track.velocitySource = "timestamped-position-difference"
+end
+
+local function updateObjectTracks(candidates)
+  local now = state.simulationTime
+  local seenTracks = {}
+  local playerPosition = state.activeVehicle and asVec3(safeCall(state.activeVehicle, "getPosition")) or nil
+  local playerVelocity = state.activeVehicle and asVec3(safeCall(state.activeVehicle, "getVelocity")) or nil
+
+  for i = 1, #(candidates or {}) do
+    local observation = makeTrackObservation(candidates[i])
+    if observation then
+      local sourceKey = tostring(observation.sourceVehicleId)
+      local track = nil
+      for _, existing in pairs(state.tracks) do
+        if tostring(existing.sourceVehicleId) == sourceKey then
+          track = existing
+          break
+        end
+      end
+
+      if not track and state.trackCount < TRACK_MAX_COUNT then
+        track = {
+          trackId = allocateRoadMindTrackId(),
+          sourceVehicleId = observation.sourceVehicleId,
+          confidence = 0.55,
+          missedScans = 0,
+          lastObservedAt = observation.observationTimestamp,
+          lastUpdatedAt = now,
+          velocitySource = "not-yet-available",
+          sourceKind = observation.sourceKind,
+          measurementKind = observation.measurementKind
+        }
+        state.tracks[track.trackId] = track
+        state.trackCount = state.trackCount + 1
+      end
+
+      if track then
+        local isFreshObservation =
+          observation.observationTimestamp > (track.lastObservedAt or -math.huge) + 0.001
+
+        if isFreshObservation then
+          estimateTrackVelocity(track, observation.position, observation.observationTimestamp)
+          track.position = vectorToPlainTable(observation.position)
+          track.orientation = observation.orientation
+          track.dimensions = {
+            length = observation.dimensions.length,
+            width = observation.dimensions.width,
+            height = observation.dimensions.height
+          }
+          track.lastObservedAt = observation.observationTimestamp
+          track.lastVisibilityAt = observation.visibilityTimestamp
+          track.confidence = math.min(TRACK_CONFIDENCE_MAX, (track.confidence or 0.55) + 0.08)
+          track.missedScans = 0
+          track.registryMissingSnapshots = 0
+        end
+
+        track.lastUpdatedAt = now
+        track.sourceSensors = observation.sourceSensors
+        track.simulatorVelocity = vectorToPlainTable(observation.simulatorVelocity)
+        track.sourceKind = observation.sourceKind
+        track.measurementKind = observation.measurementKind
+        track.visibilityAge = observation.visibilityAge
+        track.registryGeneration = state.vehicleRegistryGeneration
+        seenTracks[track.trackId] = true
+
+        local estimatedVelocity = asVec3(track.estimatedVelocity)
+        if estimatedVelocity and playerPosition and playerVelocity then
+          local relativeDirection = observation.position - playerPosition
+          if relativeDirection:length() > 0.001 then
+            track.estimatedRelativeSpeed = round2(
+              (estimatedVelocity - playerVelocity):dot(relativeDirection:normalized())
+            )
+          end
+        end
+      end
+    end
+  end
+
+  local result = {}
+  for trackId, track in pairs(state.tracks) do
+    if not seenTracks[trackId] then
+      if state.vehicleRegistrySnapshotValid
+          and (track.lastRegistryGeneration or -1) < state.vehicleRegistryGeneration then
+        track.lastRegistryGeneration = state.vehicleRegistryGeneration
+        if state.vehicleRegistryById[tostring(track.sourceVehicleId)] then
+          track.registryMissingSnapshots = 0
+        else
+          track.registryMissingSnapshots = (track.registryMissingSnapshots or 0) + 1
+        end
+      end
+      track.missedScans = (track.missedScans or 0) + 1
+      track.confidence = math.max(0, (track.confidence or 0) - 0.07)
+      track.lastUpdatedAt = now
+    else
+      track.lastRegistryGeneration = state.vehicleRegistryGeneration
+    end
+
+    local dataAge = math.max(0, now - (track.lastObservedAt or now))
+    track.dataAge = round2(dataAge)
+    track.timestamp = track.lastObservedAt
+    track.predictionHorizon = math.min(dataAge, 0.5)
+
+    local position = asVec3(track.position)
+    local velocity = asVec3(track.estimatedVelocity)
+    if position and velocity then
+      track.predictedPosition = vectorToPlainTable(position + velocity * track.predictionHorizon)
+    else
+      track.predictedPosition = track.position
+    end
+
+    if dataAge <= 0.55 and (track.confidence or 0) >= 0.25 then
+      track.status = "confirmed"
+    elseif dataAge <= 1.0 then
+      track.status = "coasting"
+    else
+      track.status = "stale"
+    end
+
+    local expired = dataAge > TRACK_MAX_AGE
+      or (track.missedScans or 0) > TRACK_MAX_MISSED_SCANS
+      or (track.registryMissingSnapshots or 0) >= 2
+      or (track.confidence or 0) < 0.10
+
+    if expired then
+      state.tracks[trackId] = nil
+      state.trackCount = math.max(0, state.trackCount - 1)
+    else
+      result[#result + 1] = track
+    end
+  end
+
+  table.sort(result, function(a, b)
+    local da = asVec3(a.position)
+    local db = asVec3(b.position)
+    local origin = playerPosition or vec3(0, 0, 0)
+    return da and db and (da - origin):length() < (db - origin):length() or a.trackId < b.trackId
+  end)
+  return result
+end
+
 local function vehicleSettingsCommand()
   local encoded = "{}"
   if type(jsonEncode) == "function" then
