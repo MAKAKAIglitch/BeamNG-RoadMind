@@ -62,9 +62,9 @@ When the experimental route pilot is active, the forward stop guard evaluates at
 
 ## Rendering budget
 
-The High preset scans 51 LiDAR directions (17 × 3); the configurable slider allows up to 99 directions (33 × 3). Radar and ultrasonic limits remain 17 and 36 directions respectively.
+The High preset scans 51 LiDAR directions (17 × 3); the horizontal ray count and range are profile-controlled rather than exposed as sliders. Radar and ultrasonic limits remain 17 and 36 directions respectively.
 
-The time-consistent LiDAR renderer is capped at 99 active points plus 198 fading points. It updates at most 297 render markers per graphics frame, with a 0.5 s maximum target-motion prediction horizon and a 0.75 m per-frame movement cap. The fading lifetime is 0.4 s and an unobserved render point expires after 2.25 s. This work performs no scene raycasts and does not alter raw sensor hits. Seven camera frustums add a fixed number of debug lines.
+The live LiDAR renderer is capped at 99 active ray returns plus 198 fading markers. Inertia uses a critically damped spring and adds no raycasts. A separate session-only point map can retain 500–10,000 deduplicated world-space returns; at the 10,000-point limit it issues up to 10,000 debug-sphere draw calls per graphics frame, so a lower cap is recommended on weaker systems. The map is not aged or cleared by pause; it is cleared only by the explicit clear action or a vehicle switch. Vehicle OBB outlines are limited to the 64 nearest non-occluded candidates. These debug draws are separate from sensor query budgets and can materially affect rendering performance.
 
 ## Profiling procedure
 
