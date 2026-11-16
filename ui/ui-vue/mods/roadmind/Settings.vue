@@ -52,7 +52,11 @@
       <div class="roadmind-world-model">
         <div class="roadmind-track-heading">
           <strong>{{ t("worldModel") }} v{{ status.worldModelSchemaVersion || 2 }}</strong>
-          <span>{{ status.worldModelRegistryFresh ? t("sourceFresh") : t("sourceStale") }}</span>
+          <span>{{
+            !status.worldModelRegistryEnabled
+              ? t("sourceDisabled")
+              : (status.worldModelRegistryFresh ? t("sourceFresh") : t("sourceStale"))
+          }}</span>
         </div>
         <div class="roadmind-track-metrics">
           <span>{{ t("worldTargets") }}: {{ status.worldModelTargetCount || 0 }}</span>
@@ -324,6 +328,7 @@ const EN = {
   worldQuality: "Invalid / dropped / conflicting",
   sourceFresh: "Registry fresh",
   sourceStale: "Registry stale",
+  sourceDisabled: "Registry disabled",
   trackConfirmed: "Confirmed",
   trackCoasting: "Coasting",
   trackStale: "Stale",
@@ -419,6 +424,7 @@ const RU = {
   worldQuality: "Ошибки / отброшено / конфликты",
   sourceFresh: "Реестр актуален",
   sourceStale: "Реестр устарел",
+  sourceDisabled: "Реестр отключён",
   trackConfirmed: "Подтверждён",
   trackCoasting: "Потеря видимости",
   trackStale: "Устарел",
@@ -581,6 +587,7 @@ const status = ref({
   worldModelInvalidObservationCount: 0,
   worldModelDroppedObservationCount: 0,
   worldModelConflictingObservationCount: 0,
+  worldModelRegistryEnabled: false,
   worldModelRegistryFresh: false,
   vehicleCalibration: { calibrated: false, error: "Calibration has not been run" },
 })
