@@ -17,6 +17,10 @@
             {{ t("vehiclesDetected") }}: {{ status.visibleVehicleCount || status.detectedVehicleCount || 0 }}
           </span>
           <span class="roadmind-budget">
+            {{ t("trafficUpdateRate") }}:
+            {{ status.trafficUpdateHz ? status.trafficUpdateHz.toFixed(1) : "—" }} Hz
+          </span>
+          <span class="roadmind-budget">
             {{ t("vehicleCandidates") }}: {{ status.vehicleCandidateCount || 0 }}
           </span>
           <span class="roadmind-budget">
@@ -31,6 +35,13 @@
         >{{ status.visualizationEnabled ? t("stop") : t("start") }}</BngButton>
       </div>
       <p class="roadmind-note">{{ t("runtimeNote") }}</p>
+      <p v-if="status.currentFps !== undefined" class="roadmind-budget">
+        {{ t("currentFps") }}: {{ status.currentFps.toFixed(0) }} / {{ settings.targetFps }} FPS
+        · {{ t("sensorQuality") }}: {{ (status.adaptiveQualityTier || 0) + 1 }}/5
+      </p>
+      <p v-if="status.performanceLimitReached" class="roadmind-error">
+        {{ t("targetFpsUnreachable") }}
+      </p>
       <p class="roadmind-note">{{ t("detectionNote") }}</p>
       <div v-if="status.trackedObjects && status.trackedObjects.length" class="roadmind-track-list">
         <strong>{{ t("trackedObjects") }} ({{ status.trackedVehicleCount || 0 }})</strong>
@@ -173,6 +184,25 @@
         <div><strong>{{ t("economy") }}</strong><span>≈ 9 {{ t("queriesPerSecond") }}</span></div>
         <div><strong>{{ t("balanced") }}</strong><span>≈ 74 {{ t("queriesPerSecond") }}</span></div>
         <div><strong>{{ t("high") }}</strong><span>≈ 310 {{ t("queriesPerSecond") }}</span></div>
+      </div>
+      <div class="roadmind-adaptive">
+        <strong>{{ t("adaptivePerformance") }}</strong>
+        <p class="roadmind-note">{{ t("adaptivePerformanceNote") }}</p>
+        <BngRow>
+          <template #label>{{ t("adaptiveFpsEnabled") }}</template>
+          <BngSwitch :modelValue="settings.adaptiveFpsEnabled" :disabled="busy"
+            @update:modelValue="value => setSetting('adaptiveFpsEnabled', value)" />
+        </BngRow>
+        <BngRow :vertical="true" v-if="settings.adaptiveFpsEnabled">
+          <template #label>{{ t("targetFps") }}: {{ settings.targetFps }} FPS</template>
+          <BngSlider :min="30" :max="165" :step="5" :modelValue="settings.targetFps"
+            :with-input="true" :disabled="busy" @update:modelValue="queueTargetFps" />
+        </BngRow>
+        <BngRow>
+          <template #label>{{ t("speedAdaptiveRate") }}</template>
+          <BngSwitch :modelValue="settings.speedAdaptiveRateEnabled" :disabled="busy"
+            @update:modelValue="value => setSetting('speedAdaptiveRateEnabled', value)" />
+        </BngRow>
       </div>
     </section>
 
@@ -339,6 +369,15 @@ const EN = {
   runtimeNote: "The estimate counts scheduled scene raycasts. It is not a measured FPS or CPU result.",
   performance: "Performance",
   performanceNote: "Economy runs only the forward LiDAR. Radar and ultrasonic start off; Balanced enables all three sensor groups. Changing a setting switches to Custom.",
+  adaptivePerformance: "Experimental load control",
+  adaptivePerformanceNote: "RoadMind adjusts sensor ray count and scan rates to approach the target FPS. It cannot make the game reach an FPS that the rest of the scene, traffic or hardware cannot sustain.",
+  adaptiveFpsEnabled: "Automatically adapt sensor quality",
+  targetFps: "Desired FPS",
+  speedAdaptiveRate: "Adjust sensor rate to vehicle speed",
+  currentFps: "Measured FPS",
+  sensorQuality: "Sensor quality",
+  trafficUpdateRate: "Traffic position updates",
+  targetFpsUnreachable: "Minimum sensor workload reached. RoadMind cannot force the rest of the game to reach the target FPS.",
   activeProfile: "Active profile",
   custom: "Custom",
   economy: "Economy (LiDAR only)",
@@ -457,6 +496,15 @@ const RU = {
   runtimeNote: "Показано расчётное число запросов к сцене. Это не замер FPS или загрузки процессора.",
   performance: "Производительность",
   performanceNote: "В режиме «Экономный» работает только передний LiDAR. Радар и ультразвук выключены; «Сбалансированный» включает все три группы. Изменение параметра переключает профиль на свои настройки.",
+  adaptivePerformance: "Экспериментальная подстройка нагрузки",
+  adaptivePerformanceNote: "RoadMind меняет число лучей и частоту датчиков, пытаясь приблизиться к целевому FPS. Он не сможет обеспечить FPS, недостижимый для самой игры, сцены, трафика или оборудования.",
+  adaptiveFpsEnabled: "Автоматически менять качество датчиков",
+  targetFps: "Желаемый FPS",
+  speedAdaptiveRate: "Менять частоту датчиков по скорости",
+  currentFps: "Текущий FPS",
+  sensorQuality: "Качество датчиков",
+  trafficUpdateRate: "Обновление позиций трафика",
+  targetFpsUnreachable: "Достигнута минимальная нагрузка датчиков. RoadMind не может заставить остальную игру держать заданный FPS.",
   activeProfile: "Активный профиль",
   custom: "Свои настройки",
   economy: "Экономный (только LiDAR)",
@@ -645,6 +693,9 @@ const settings = ref({
   lidarPersistenceEnabled: false,
   lidarPointCloudLimit: 5000,
   visualizationInertiaEnabled: true,
+  adaptiveFpsEnabled: false,
+  targetFps: 60,
+  speedAdaptiveRateEnabled: true,
   showLidar: true,
   showRadar: false,
   showUltrasonic: false,
@@ -668,6 +719,11 @@ const status = ref({
   roadDistanceToSegment: undefined,
   persistentLidarPointCount: 0,
   persistentLidarPointLimit: 5000,
+  currentFps: undefined,
+  targetFps: 60,
+  adaptiveQualityTier: 4,
+  performanceLimitReached: false,
+  trafficUpdateHz: 0,
   unverifiedVehicleCount: 0,
   detectedVehicleCount: 0,
   visibleVehicleCount: 0,
@@ -733,6 +789,8 @@ function acceptResult(result) {
 
 let pointCloudLimitTimer = null
 let pendingPointCloudLimit = null
+let targetFpsTimer = null
+let pendingTargetFps = null
 
 function queuePointCloudLimit(value) {
   pendingPointCloudLimit = Number(value)
@@ -743,6 +801,18 @@ function queuePointCloudLimit(value) {
     pendingPointCloudLimit = null
     pointCloudLimitTimer = null
     setSetting("lidarPointCloudLimit", nextValue)
+  }, 180)
+}
+
+function queueTargetFps(value) {
+  pendingTargetFps = Number(value)
+  settings.value.targetFps = pendingTargetFps
+  if (targetFpsTimer) clearTimeout(targetFpsTimer)
+  targetFpsTimer = setTimeout(() => {
+    const nextValue = pendingTargetFps
+    pendingTargetFps = null
+    targetFpsTimer = null
+    setSetting("targetFps", nextValue)
   }, 180)
 }
 
@@ -758,6 +828,12 @@ onBeforeUnmount(() => {
       setSetting("lidarPointCloudLimit", pendingPointCloudLimit)
     }
     pendingPointCloudLimit = null
+  }
+  if (targetFpsTimer) {
+    clearTimeout(targetFpsTimer)
+    targetFpsTimer = null
+    if (pendingTargetFps !== null) setSetting("targetFps", pendingTargetFps)
+    pendingTargetFps = null
   }
 })
 
@@ -893,6 +969,7 @@ onMounted(() => {
     try {
       const result = await callRoadMind("getSettings")
       if (result && result.status) status.value = { ...status.value, ...result.status }
+      if (result && result.language) locale.value = result.language
     } catch (e) {
       console.warn("RoadMind: background status refresh failed", e)
     }

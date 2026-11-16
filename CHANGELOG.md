@@ -17,6 +17,11 @@
 - Add a session-only accumulated LiDAR map with a configurable 500–10,000 point cap, including vehicle hits and pause-safe rendering.
 - Add optional critically damped inertia for LiDAR endpoints and detected vehicle outlines.
 - Remove the manual LiDAR range and horizontal-point sliders; these remain controlled by performance profiles.
+- Add speed-adaptive traffic OBB updates (3.3–10 Hz) independently from scene-raycast work, with a bounded rotating occlusion-check budget.
+- Add a round-robin Vehicle Lua scheduler that handles at most one due LiDAR/radar/ultrasonic/pose/detection-zone job per graphics frame.
+- Add optional FPS-target feedback that scales sensor ray counts, resolution and rates down from the selected profile with hysteresis; report when the minimum sensor tier still cannot meet the target.
+- Add speed-adaptive sensor scan intervals and desired-FPS/current-FPS diagnostics in the performance section.
+- Normalize English/Russian UI language from BeamNG's selected language setting and refresh it while the settings page remains open.
 - Default to LiDAR-only Economy scanning (about 9 queries/s) and the LiDAR overlay to reduce overhead.
 - Keep sensor scanning disabled until explicitly started.
 

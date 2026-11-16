@@ -32,6 +32,8 @@ Open **ESC → Mods → RoadMind** (BeamNG.drive 0.39+). The bilingual settings 
 - A session-only accumulated LiDAR map with a 500–10,000 point limit, vehicle-surface returns included, a clear button and pause-safe display.
 - Optional critically damped inertia for LiDAR endpoints and detected-vehicle outlines.
 - A live estimate of scheduled scene-raycast queries per second.
+- Optional adaptive sensor quality with a desired FPS setting, plus speed-adaptive scan intervals.
+- Asynchronous round-robin sensor scheduling (at most one due sensor/pose job per graphics frame) and 3.3–10 Hz traffic OBB refresh without extra sensor raycasts.
 
 Settings are saved to the BeamNG user settings folder and applied while scanning is active. Scanning is stopped by default. Press **Start scanning** in the page, or use the existing **RoadMind: Toggle Sensor Suite** Controls binding as a quick toggle.
 
@@ -56,7 +58,7 @@ Therefore:
 - IMU acceleration comes from BeamNG vehicle electrics; yaw rate is estimated from heading changes.
 - GNSS-like localization reports BeamNG world coordinates. It is not geodetic latitude/longitude.
 - Odometry reads the vehicle wheel-speed and odometer electrics where present.
-- Vehicle candidates are found from a shared Game Engine vehicle OBB registry (0.5 s refresh) and tested against fresh calibrated sensor zones (0.25 s detection cadence). A maximum of four occlusion raycasts are used per detection cycle. A session-scoped RoadMind track ID associates repeated observations; speed is estimated from timestamped positions, while simulator velocity is kept as a separate field. Tracks coast briefly through occlusion and expire after bounded time/missed snapshots. These observations are simulator-assisted registry results, not raw physical-style sensor measurements.
+- Vehicle candidates are found from a shared Game Engine vehicle OBB registry (0.30–0.10 s speed-adaptive refresh) and tested against fresh calibrated sensor zones. A maximum of two occlusion raycasts are used per detection cycle (up to 20 additional checks/s at 10 Hz). A session-scoped RoadMind track ID associates repeated observations; speed is estimated from timestamped positions, while simulator velocity is kept as a separate field. Tracks coast briefly through occlusion and expire after bounded time/missed snapshots. These observations are simulator-assisted registry results, not raw physical-style sensor measurements.
 
 These boundaries are kept explicit so a simulated geometric measurement is not mistaken for a full physical sensor model.
 

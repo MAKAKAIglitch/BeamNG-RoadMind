@@ -14,6 +14,13 @@ The page reads the selected game language and displays Russian or English. Chang
 
 These are calculated query budgets, not measured FPS or CPU percentages. Actual cost depends on the map, vehicle geometry, traffic and hardware.
 
+## Experimental performance controls
+
+- **Automatic sensor quality:** optional FPS feedback controller with a 30–165 FPS target (5 FPS steps). It lowers ray count, sensor resolution and scan frequency when the smoothed FPS remains below target; it restores detail more slowly when FPS has headroom.
+- **Speed-adaptive sensor cadence:** reduces sensor scan frequency below 5 m/s and raises it above 25 m/s. Traffic OBB position refresh independently adapts between 0.30 s, 0.15 s and 0.10 s based on player speed; it does not add scene raycasts.
+- **Asynchronous work:** Vehicle Lua processes at most one of LiDAR, radar, ultrasonic, pose or detection-zone jobs per graphics frame. Simultaneously due jobs are spread across successive frames.
+- The FPS target is an optimization goal, not a frame-rate lock or guarantee. With minimum sensor settings active, RoadMind cannot force BeamNG.drive to meet a target it cannot sustain.
+
 ## Individual sensor settings
 
 - **LiDAR:** enable/disable, profile-controlled density and frequency (1/2/4 Hz). Range and horizontal sample count are kept inside the performance profiles rather than exposed as manual sliders.

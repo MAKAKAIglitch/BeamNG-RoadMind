@@ -16,6 +16,9 @@ local DEFAULT_SETTINGS = {
   lidarPersistenceEnabled = false,
   lidarPointCloudLimit = 5000,
   visualizationInertiaEnabled = true,
+  adaptiveFpsEnabled = false,
+  targetFps = 60,
+  speedAdaptiveRateEnabled = true,
   showLidar = true, showRadar = false, showUltrasonic = false,
   showCameras = false, showLocalization = false, showDetectedVehicles = true,
   showCalibration = false
@@ -43,7 +46,8 @@ local SENSOR_SETTING_KEYS = {
   lidarEnabled = true, lidarQuality = true, lidarPointCount = true, lidarHz = true, lidarRange = true,
   radarEnabled = true, radarDensity = true, radarHz = true,
   ultrasonicEnabled = true, ultrasonicDensity = true, ultrasonicHz = true,
-  poseHz = true, showCameras = true, showLocalization = true, showCalibration = true
+  poseHz = true, showCameras = true, showLocalization = true, showCalibration = true,
+  adaptiveFpsEnabled = true, targetFps = true, speedAdaptiveRateEnabled = true
 }
 
 local MAX_PERSISTENT_LIDAR_POINTS = 10000
@@ -74,10 +78,12 @@ local WORLD_MODEL_REGISTRY_MAX_AGE = 1.0
 local WORLD_MODEL_OBSTACLE_CELL_SIZE = 0.75
 local WORLD_MODEL_MAX_OBSERVATIONS = 512
 local WORLD_MODEL_MAX_TRACKS = 128
-local VEHICLE_REGISTRY_INTERVAL = 0.5
-local VEHICLE_DETECTION_INTERVAL = 0.25
+local VEHICLE_REGISTRY_INTERVAL = 0.15
+local VEHICLE_DETECTION_INTERVAL = 0.15
+local VEHICLE_SLOW_UPDATE_INTERVAL = 0.30
+local VEHICLE_FAST_UPDATE_INTERVAL = 0.10
 local MAX_REGISTRY_VEHICLES = 256
-local MAX_OCCLUSION_CHECKS_PER_CYCLE = 4
+local MAX_OCCLUSION_CHECKS_PER_CYCLE = 2
 local OCCLUSION_CACHE_MAX_AGE = 0.75
 local TRACK_UPDATE_INTERVAL = 0.25
 local TRACK_OBSERVATION_MAX_AGE = 0.75
@@ -119,6 +125,7 @@ local state = {
   vehicleRegistryGeneration = 0,
   vehicleRegistryTruncated = false,
   vehicleDetectionTimer = 0,
+  currentTrafficUpdateInterval = VEHICLE_DETECTION_INTERVAL,
   vehicleCandidates = {},
   occlusionCache = {},
   occlusionCursor = 1,
@@ -163,7 +170,13 @@ local state = {
   routeDestinationSnapDistance = nil,
   routeSafetyLastCheckAt = -math.huge,
   roadUpdateTimer = 0,
-  roadState = nil
+  roadState = nil,
+  performanceFps = nil,
+  performanceFpsSamples = 0,
+  performanceDecisionTimer = 0,
+  performanceLowFpsTimer = 0,
+  performanceHighFpsTimer = 0,
+  adaptiveQualityTier = 4
 }
 
 local checkTimer = 0
@@ -987,10 +1000,59 @@ local function updateObjectTracks(candidates)
   return result
 end
 
-local function vehicleSettingsCommand()
+local function getEffectiveSensorSettings()
+  local base = state.settings or DEFAULT_SETTINGS
+  local effective = {}
+  for key, value in pairs(base) do effective[key] = value end
+  if base.adaptiveFpsEnabled ~= true then return effective end
+
+  local tier = math.max(0, math.min(4, math.floor(tonumber(state.adaptiveQualityTier) or 4)))
+  local basePoints = tonumber(base.lidarPointCount) or 9
+  local pointScale = {[0] = 0.35, [1] = 0.50, [2] = 0.70, [3] = 0.85, [4] = 1.0}
+  local scaledPoints = 9 + (basePoints - 9) * pointScale[tier]
+  effective.lidarPointCount = math.max(9,
+    math.min(basePoints, 9 + math.floor((scaledPoints - 9) / 4) * 4))
+
+  local baseLayers = base.lidarQuality == "high" and 3
+    or (base.lidarQuality == "balanced" and 2 or 1)
+  local effectiveLayers = baseLayers
+  if baseLayers == 3 then
+    effectiveLayers = tier <= 0 and 1 or (tier <= 2 and 2 or 3)
+  elseif baseLayers == 2 then
+    effectiveLayers = tier <= 1 and 1 or 2
+  end
+  effective.lidarQuality = effectiveLayers == 1 and "low"
+    or (effectiveLayers == 2 and "balanced" or "high")
+
+  local function adaptiveRate(baseRate)
+    if baseRate == 4 then
+      return tier <= 0 and 1 or (tier <= 2 and 2 or 4)
+    end
+    if baseRate == 2 then return tier <= 0 and 1 or 2 end
+    return 1
+  end
+  effective.lidarHz = adaptiveRate(base.lidarHz)
+  effective.radarHz = adaptiveRate(base.radarHz)
+  effective.ultrasonicHz = adaptiveRate(base.ultrasonicHz)
+
+  if base.radarDensity == "high" then
+    effective.radarDensity = tier <= 1 and "low" or (tier <= 3 and "medium" or "high")
+  elseif base.radarDensity == "medium" then
+    effective.radarDensity = tier <= 1 and "low" or "medium"
+  end
+  if base.ultrasonicDensity == "wide" then
+    effective.ultrasonicDensity = tier <= 2 and "single" or "wide"
+  end
+  if base.poseHz == 5 then
+    effective.poseHz = tier <= 1 and 2 or (tier <= 3 and 4 or 5)
+  elseif base.poseHz == 4 then
+    effective.poseHz = tier <= 1 and 2 or 4
+  end
+  return effective
+endlocal function vehicleSettingsCommand()
   local encoded = "{}"
   if type(jsonEncode) == "function" then
-    local ok, value = pcall(jsonEncode, state.settings or DEFAULT_SETTINGS)
+    local ok, value = pcall(jsonEncode, getEffectiveSensorSettings())
     if ok and type(value) == "string" then encoded = value end
   end
   return "roadmind_sensors.setSettings(" .. string.format("%q", encoded) .. "); "
@@ -1525,6 +1587,9 @@ local function normalizeSettings(source)
   if source.radarHz == 1 or source.radarHz == 2 then result.radarHz = source.radarHz end
   if source.ultrasonicHz == 1 or source.ultrasonicHz == 2 then result.ultrasonicHz = source.ultrasonicHz end
   if source.poseHz == 2 or source.poseHz == 4 or source.poseHz == 5 then result.poseHz = source.poseHz end
+  if type(source.targetFps) == "number" and source.targetFps >= 30 and source.targetFps <= 165 then
+    result.targetFps = math.floor((source.targetFps - 30) / 5 + 0.5) * 5 + 30
+  end
   if type(source.lidarPointCloudLimit) == "number"
       and source.lidarPointCloudLimit >= MIN_PERSISTENT_LIDAR_POINTS
       and source.lidarPointCloudLimit <= MAX_PERSISTENT_LIDAR_POINTS then
@@ -1572,9 +1637,16 @@ end
 
 local function getGameLanguage()
   if type(settings) == "table" and type(settings.getValue) == "function" then
+    -- BeamNG exposes the selected game/UI language through userLanguage.
     local ok, language = pcall(settings.getValue, "userLanguage")
     if ok and type(language) == "string" and language ~= "" then
-      return language
+      local normalized = string.lower(language):gsub("_", "-")
+      if normalized:sub(1, 2) == "ru" or normalized:find("russian", 1, true) then
+        return "ru-RU"
+      end
+      if normalized:sub(1, 2) == "en" or normalized:find("english", 1, true) then
+        return "en-US"
+      end
     end
   end
   return "en-US"
@@ -1582,6 +1654,7 @@ end
 
 local function settingsResult()
   local settings = state.settings or DEFAULT_SETTINGS
+  local effectiveSettings = getEffectiveSensorSettings()
   local trackedObjects = {}
   local tracks = state.latestData and state.latestData.tracks or {}
   for i = 1, math.min(#tracks, 8) do
@@ -1611,7 +1684,21 @@ local function settingsResult()
       visualizationEnabled = state.visualizationEnabled,
       activeVehicle = state.activeVehicleId ~= nil,
       estimatedRaycastsPerSecond = state.visualizationEnabled
-        and (rayCountFor(settings) + state.occlusionRaycastsPerSecond) or 0,
+        and (rayCountFor(effectiveSettings) + state.occlusionRaycastsPerSecond) or 0,
+      currentFps = state.performanceFps and round2(state.performanceFps) or nil,
+      targetFps = settings.targetFps or 60,
+      adaptiveFpsEnabled = settings.adaptiveFpsEnabled == true,
+      adaptiveQualityTier = settings.adaptiveFpsEnabled == true and state.adaptiveQualityTier or 4,
+      effectiveLidarRayCount = (effectiveSettings.lidarPointCount or 9)
+        * (effectiveSettings.lidarQuality == "high" and 3
+          or (effectiveSettings.lidarQuality == "balanced" and 2 or 1)),
+      performanceLimitReached = settings.adaptiveFpsEnabled == true
+        and state.adaptiveQualityTier <= 0
+        and state.performanceFps ~= nil
+        and state.performanceFps < (settings.targetFps or 60) * 0.92,
+      speedAdaptiveRateEnabled = settings.speedAdaptiveRateEnabled ~= false,
+      trafficUpdateHz = 1 / math.max(0.01,
+        state.currentTrafficUpdateInterval or VEHICLE_DETECTION_INTERVAL),
       vehicleRegistryCount = #state.vehicleRegistry,
       vehicleRegistryGeneration = state.vehicleRegistryGeneration,
       vehicleRegistryTruncated = state.vehicleRegistryTruncated,
@@ -1734,7 +1821,7 @@ function M.setSetting(key, value)
   end
   if type(DEFAULT_SETTINGS[key]) == "number" and key ~= "lidarRange"
       and key ~= "lidarPointCount" and key ~= "lidarPointCloudLimit"
-      and normalized[key] ~= value then
+      and key ~= "targetFps" and normalized[key] ~= value then
     return {ok = false, error = "Invalid numeric option"}
   end
   if key == "lidarRange" and (value < 30 or value > 160) then
@@ -1749,7 +1836,20 @@ function M.setSetting(key, value)
         or math.abs((value - MIN_PERSISTENT_LIDAR_POINTS) % 500) > 0.001) then
     return {ok = false, error = "LiDAR cloud limit must be 500–10000 in steps of 500"}
   end
+  if key == "targetFps"
+      and (value < 30 or value > 165 or math.abs((value - 30) % 5) > 0.001) then
+    return {ok = false, error = "Target FPS must be 30–165 in steps of 5"}
+  end
   state.settings = normalized
+  if key == "adaptiveFpsEnabled" and value == true then
+    state.adaptiveQualityTier = 4
+    state.performanceLowFpsTimer = 0
+    state.performanceHighFpsTimer = 0
+  elseif SENSOR_SETTING_KEYS[key] and key ~= "targetFps" then
+    state.adaptiveQualityTier = 4
+    state.performanceLowFpsTimer = 0
+    state.performanceHighFpsTimer = 0
+  end
   if key == "lidarPointCloudLimit" and trimPersistentLidarPoints then trimPersistentLidarPoints() end
   saveSettings()
 
@@ -1768,6 +1868,9 @@ function M.setPreset(name)
   candidate.preset = name
   for key, value in pairs(preset) do candidate[key] = value end
   state.settings = normalizeSettings(candidate)
+  state.adaptiveQualityTier = 4
+  state.performanceLowFpsTimer = 0
+  state.performanceHighFpsTimer = 0
   saveSettings()
 
   if state.visualizationEnabled and state.activeVehicle then
@@ -1791,7 +1894,12 @@ function M.setVisualizationEnabled(enabled)
     state.vehicleRegistryTimestamp = nil
     state.vehicleRegistryTimer = 0
     state.vehicleDetectionTimer = 0
+    state.currentTrafficUpdateInterval = VEHICLE_DETECTION_INTERVAL
     state.vehicleCandidates = {}
+    state.adaptiveQualityTier = 4
+    state.performanceLowFpsTimer = 0
+    state.performanceHighFpsTimer = 0
+    state.performanceDecisionTimer = 0
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
     resetFrame()
@@ -3685,13 +3793,30 @@ local function detectNearbyVehicles(data)
 
   state.vehicleCandidates = candidates
   state.occlusionRaycastsLastCycle = checked
-  state.occlusionRaycastsPerSecond = checked / VEHICLE_DETECTION_INTERVAL
+  state.occlusionRaycastsPerSecond = checked / math.max(
+    0.01, state.currentTrafficUpdateInterval or VEHICLE_DETECTION_INTERVAL
+  )
   return candidates
+end
+
+local function getTrafficUpdateInterval()
+  local settings = state.settings or DEFAULT_SETTINGS
+  if settings.speedAdaptiveRateEnabled == false then
+    return VEHICLE_DETECTION_INTERVAL
+  end
+  local velocity = state.activeVehicle
+    and asVec3(safeCall(state.activeVehicle, "getVelocity")) or nil
+  local speed = velocity and velocity:length() or 0
+  if speed < 5 then return VEHICLE_SLOW_UPDATE_INTERVAL end
+  if speed >= 20 then return VEHICLE_FAST_UPDATE_INTERVAL end
+  return VEHICLE_DETECTION_INTERVAL
 end
 
 local function updateVehicleDetection(dt)
   local elapsed = math.max(0, tonumber(dt) or 0)
   local settings = state.settings or DEFAULT_SETTINGS
+  local updateInterval = getTrafficUpdateInterval()
+  state.currentTrafficUpdateInterval = updateInterval
   if not state.activeVehicle or not vehicleDetectionEnabled(settings) then
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
@@ -3710,14 +3835,14 @@ local function updateVehicleDetection(dt)
   end
 
   state.vehicleRegistryTimer = state.vehicleRegistryTimer + elapsed
-  if state.vehicleRegistryTimer >= VEHICLE_REGISTRY_INTERVAL then
-    state.vehicleRegistryTimer = state.vehicleRegistryTimer % VEHICLE_REGISTRY_INTERVAL
+  if state.vehicleRegistryTimer >= updateInterval then
+    state.vehicleRegistryTimer = state.vehicleRegistryTimer % updateInterval
     refreshVehicleRegistry()
   end
 
   state.vehicleDetectionTimer = state.vehicleDetectionTimer + elapsed
-  if state.vehicleDetectionTimer < VEHICLE_DETECTION_INTERVAL then return end
-  state.vehicleDetectionTimer = state.vehicleDetectionTimer % VEHICLE_DETECTION_INTERVAL
+  if state.vehicleDetectionTimer < updateInterval then return end
+  state.vehicleDetectionTimer = state.vehicleDetectionTimer % updateInterval
 
   local candidates = {}
   local zoneTimestamp = state.latestData and state.latestData.sensorTimestamps
@@ -4098,11 +4223,69 @@ end
 
 
 
-function M.onUpdate(dt)
+local function updateAdaptivePerformance(dt)
+  local elapsed = math.max(0, tonumber(dt) or 0)
+  if elapsed > 0 and elapsed < 1.0 then
+    local instantFps = math.min(300, 1 / elapsed)
+    local alpha = 1 - math.exp(-elapsed / 1.5)
+    if state.performanceFps == nil then
+      state.performanceFps = instantFps
+    else
+      state.performanceFps = state.performanceFps + (instantFps - state.performanceFps) * alpha
+    end
+    state.performanceFpsSamples = (state.performanceFpsSamples or 0) + 1
+  end
+
+  local settings = state.settings or DEFAULT_SETTINGS
+  if settings.adaptiveFpsEnabled ~= true then return end
+  if state.performanceFps == nil or (state.performanceFpsSamples or 0) < 10 then return end
+
+  state.performanceDecisionTimer = (state.performanceDecisionTimer or 0) + elapsed
+  if state.performanceDecisionTimer < 0.5 then return end
+  local decisionDt = state.performanceDecisionTimer
+  state.performanceDecisionTimer = 0
+
+  local target = tonumber(settings.targetFps) or 60
+  local measured = state.performanceFps
+  if measured < target * 0.92 then
+    state.performanceLowFpsTimer = (state.performanceLowFpsTimer or 0) + decisionDt
+    state.performanceHighFpsTimer = 0
+  elseif measured > target * 1.08 then
+    state.performanceHighFpsTimer = (state.performanceHighFpsTimer or 0) + decisionDt
+    state.performanceLowFpsTimer = 0
+  else
+    state.performanceLowFpsTimer = 0
+    state.performanceHighFpsTimer = 0
+  end
+
+  local oldTier = state.adaptiveQualityTier or 4
+  local nextTier = oldTier
+  if state.performanceLowFpsTimer >= 2.0 and oldTier > 0 then
+    nextTier = oldTier - 1
+    state.performanceLowFpsTimer = 0
+    state.performanceHighFpsTimer = 0
+  elseif state.performanceHighFpsTimer >= 4.0 and oldTier < 4 then
+    nextTier = oldTier + 1
+    state.performanceLowFpsTimer = 0
+    state.performanceHighFpsTimer = 0
+  end
+
+  if nextTier ~= oldTier then
+    state.adaptiveQualityTier = nextTier
+    if state.visualizationEnabled and state.activeVehicle then
+      setVehicleSensorSettings(state.activeVehicle)
+    end
+    log("I", "roadmind", string.format(
+      "Adaptive sensor quality changed to tier %d (FPS %.1f / target %d)",
+      nextTier, measured, target
+    ))
+  end
+endfunction M.onUpdate(dt)
   dt = tonumber(dt) or 0
   if dt < 0 then dt = 0 end
   if not state.visualizationEnabled then return end
 
+  updateAdaptivePerformance(dt)
   state.frameAge = state.frameAge + dt
   local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
   local routePilotActive = state.routePilotEnabled

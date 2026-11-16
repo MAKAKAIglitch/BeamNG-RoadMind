@@ -203,6 +203,8 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 - [ ] Add repeatable test routes and scenario scripts.
 - [ ] Record sensor, tracking, route, planner and controller telemetry.
 - [ ] Profile with RoadMind disabled, scanning only, detection/tracking enabled and visualization enabled.
+- [x] Add an optional FPS-feedback sensor-quality controller with a target FPS slider and a visible minimum-quality limit state.
+- [x] Spread due Vehicle Lua sensor/pose jobs over graphics frames and adapt scan and traffic update cadence to vehicle speed.
 - [ ] Measure CPU time, frame time, FPS, Lua garbage-collection pressure and raycast counts.
 - [ ] Test light and dense traffic on comparable hardware and settings.
 - [ ] Add regression checks for stale targets, duplicate tracks, sensor mount positions and point-cloud continuity.

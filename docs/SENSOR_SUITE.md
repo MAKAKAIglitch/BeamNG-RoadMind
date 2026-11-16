@@ -19,9 +19,9 @@ This document describes the current Drive-compatible sensor layout and the exact
 
 ## Vehicle detection zones
 
-RoadMind keeps one Game Engine vehicle registry made from oriented bounding boxes (OBBs). The registry refreshes every 0.5 s. It excludes the player vehicle, invalid entries and entries reported as deleted/destroyed; a vehicle without valid OBB data is not registered.
+RoadMind keeps one Game Engine vehicle registry made from oriented bounding boxes (OBBs). The registry refreshes independently of sensor raycasts, using a speed-adaptive 0.30/0.15/0.10 s cadence (about 3.3–10 Hz). It excludes the player vehicle, invalid entries and entries reported as deleted/destroyed; a vehicle without valid OBB data is not registered.
 
-At 0.25 s intervals, the latest calibrated sensor mounts define independent detection volumes:
+At the same speed-adaptive cadence, the latest calibrated sensor mounts define independent detection volumes:
 
 - LiDAR uses its 120° horizontal and 16° vertical coverage plus configured range.
 - Each radar uses its own horizontal/vertical coverage and range.
@@ -29,7 +29,7 @@ At 0.25 s intervals, the latest calibrated sensor mounts define independent dete
 
 A target's complete OBB is projected onto the sensor's forward/right/up axes. Broad-phase range filtering happens before the detailed bounds test. Multiple sensors observing the same vehicle produce one candidate record with a list of sensor zones.
 
-Up to four candidate targets per detection cycle receive an occlusion raycast (maximum 16 additional queries/s). Candidates are classified as **visible**, **occluded** or **unverified**. Confirmed-visible targets feed the experimental obstacle guard. The 3D visualizer also draws non-occluded candidates before their visibility check completes: green OBB wireframes are confirmed visible, while amber/yellow wireframes are still unverified. Explicitly occluded candidates remain hidden.
+Up to two candidate targets per detection cycle receive an occlusion raycast (maximum 20 additional queries/s at the 10 Hz traffic cadence). Candidates are classified as **visible**, **occluded** or **unverified**. The 3D visualizer draws non-occluded candidates before their visibility check completes: green OBB wireframes are confirmed visible, while amber/yellow wireframes are still unverified. Explicitly occluded candidates remain hidden; confirmed-visible targets feed the experimental obstacle guard.
 
 This is simulator-assisted vehicle discovery based on the game's vehicle registry and OBB data. It is not a raw physical-style LiDAR or radar point return, and camera frustums do not participate in vehicle recognition. Confirmed-visible candidates feed the implemented session-scoped RoadMind tracker described below; stable identity and visibility behavior still need live-traffic validation.
 
@@ -76,6 +76,8 @@ The renderer keeps a separate point state:
 The optional accumulated scan map stores every accepted world-space LiDAR hit, including vehicle surfaces. Moving vehicles therefore leave a spatial scan trail in the map; it is not a live deforming mesh. The render layer separately smooths moving returns and vehicle OBB outlines. This visual layer performs no raycasts and never feeds its interpolated coordinates back into the raw LiDAR measurements used by sensor safety/planning.
 
 ## LiDAR
+
+The Vehicle Lua scheduler spreads LiDAR, radar, ultrasonic, pose and detection-zone work over successive graphics frames, with at most one due job executed per frame. Vehicle speed optionally changes scan intervals: 1.5× slower below 5 m/s and 0.75× faster at or above 25 m/s.
 
 The forward LiDAR uses 9–33 horizontal samples and 1–3 vertical elevations (up to 99 ray directions; the High preset uses 51, while Economy uses 9). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
 

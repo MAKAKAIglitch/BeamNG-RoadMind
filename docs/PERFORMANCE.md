@@ -24,15 +24,15 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 
 ## Vehicle registry and detection budget
 
-- The shared GE vehicle OBB registry refreshes at 2 Hz (once per 0.5 s), rather than being rebuilt by individual sensors.
+- The shared GE vehicle OBB registry refreshes at 3.3–10 Hz depending on player speed, rather than being rebuilt by individual sensors.
 - Sensor-zone/OBB tests run at up to 4 Hz against the cached registry.
-- At most 4 occlusion raycasts run per detection cycle: a hard upper bound of 16 additional scene-raycast queries/s. The actual count is lower when fewer than four candidates enter sensor zones.
+- At most 2 occlusion raycasts run per detection cycle: at the fastest 10 Hz cadence, a hard upper bound of 20 additional scene-raycast queries/s. The actual count is lower when fewer than two candidates enter sensor zones.
 - The settings page adds the actual recent occlusion-raycast rate to the scheduled sensor-raycast estimate. This is a workload estimate, not an FPS or CPU measurement.
 
 ## Object tracking budget
 
 - The target registry contains at most 256 valid vehicle OBB snapshots.
-- Sensor-zone detection and tracker ageing run at 4 Hz (0.25 s cadence) against the cached registry and latest zone frame.
+- Sensor-zone detection and tracker ageing run at 3.3–10 Hz against the cached registry and latest zone frame.
 - The track store is capped at 128 objects. Association uses a source-ID index; the tracker does not perform scene raycasts.
 - Timestamped velocity estimation runs only when a new registry observation arrives. Cached visibility and repeated frames do not count as new measurements.
 - Tracks use a 0.75 s visibility-cache limit and a 1.5 s maximum observation age, with an additional missed-scan and registry-removal check.
@@ -48,9 +48,18 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 - Obstacle clusters use a 0.75 m spatial cell. They are geometric hit clusters, not semantic object identities.
 - Confidence fields are uncalibrated heuristics. Freshness and provenance must be considered by consumers.
 
+## Adaptive workload and scheduling
+
+- The FPS controller samples the Game Engine graphics update delta and uses a smoothed estimate. It changes sensor quality in one tier at a time, requiring sustained low FPS before reducing quality and a longer recovery window before raising it.
+- Adaptive quality only scales down from the user's selected profile; it does not exceed that profile's ray count or scan frequency.
+- Speed adaptation multiplies sensor intervals by 1.5 below 5 m/s, keeps the base interval from 5 to 25 m/s, and multiplies by 0.75 at or above 25 m/s.
+- Traffic OBB registry and tracking updates use a separate speed-based cadence: 0.30 s below 5 m/s, 0.15 s from 5–20 m/s and 0.10 s at or above 20 m/s. These updates use BeamNG vehicle-object position/OBB data rather than raycasts.
+- The Vehicle Lua scheduler executes only one due sensor/pose/detection-zone job per graphics frame in round-robin order. It spreads simultaneously due jobs across successive frames instead of issuing all scans in the same update.
+- Target FPS is best-effort. If quality reaches its minimum and measured FPS remains below target, the game or the rest of the scene is the limiting factor.
+
 ## Scheduling
 
-- Sensor scan frequencies are controlled by the selected profile and can be customized.
+- Sensor scan frequencies are controlled by the selected profile and can be customized, then optionally scaled by the FPS and vehicle-speed controllers.
 - Camera frustums, IMU, GNSS-like position and odometry use the selected 2–5 Hz pose rate when enabled.
 - The complete suite is disabled until the player activates it from the settings page or Controls binding.
 - Sensor data is cached between updates.

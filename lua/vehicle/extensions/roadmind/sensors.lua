@@ -38,6 +38,7 @@ local sensorSettings = {
   ultrasonicDensity = "single",
   ultrasonicHz = 1,
   poseHz = 2,
+  speedAdaptiveRateEnabled = true,
   cameraFrustumsEnabled = false,
   localizationEnabled = false
 }
@@ -89,6 +90,7 @@ local state = {
   ultrasonicTimer = 0,
   poseTimer = 0,
   detectionZoneTimer = 0,
+  schedulerCursor = 1,
   sequence = 0,
   lastLidarCount = 0,
   lastRadarCount = 0,
@@ -751,7 +753,7 @@ local function applySensorSettings(source)
   if type(source) ~= "table" then return false end
 
   local booleanKeys = {
-    "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
+    "lidarEnabled", "radarEnabled", "ultrasonicEnabled", "speedAdaptiveRateEnabled",
     "cameraFrustumsEnabled", "localizationEnabled", "calibrationDebugEnabled"
   }
   for i = 1, #booleanKeys do
@@ -829,6 +831,8 @@ local function applySensorSettings(source)
   state.radarTimer = 0
   state.ultrasonicTimer = 0
   state.poseTimer = 0
+  state.detectionZoneTimer = 0
+  state.schedulerCursor = 1
   state.pendingReset = true
   return true
 end
@@ -857,6 +861,7 @@ function M.setEnabled(enabled, sourceVehicleId)
   state.ultrasonicTimer = 0
   state.poseTimer = 0
   state.detectionZoneTimer = 0
+  state.schedulerCursor = 1
   state.lastForward = nil
   state.lastLidarCount = 0
   state.lastRadarCount = 0
@@ -948,22 +953,39 @@ function M.onReset()
   state.radarTimer = 0
   state.ultrasonicTimer = 0
   state.poseTimer = 0
+  state.detectionZoneTimer = 0
+  state.schedulerCursor = 1
   state.lastForward = nil
   state.pendingReset = true
   state.frame = state.enabled and buildEmptyFrame() or nil
 end
 
 function M.updateGFX(dt)
-  if not state.enabled then
-    return
-  end
+  if not state.enabled then return end
 
   dt = tonumber(dt) or 0
-  if dt < 0 then
-    dt = 0
+  if dt < 0 then dt = 0 end
+  state.elapsed = state.elapsed + dt
+
+  local frame = getVehicleFrame()
+  if not frame then return end
+
+  -- Let stationary vehicles use a lower sensor cadence. At higher speed,
+  -- tighten the intervals because the scene changes more between scans.
+  local speedMultiplier = 1.0
+  if sensorSettings.speedAdaptiveRateEnabled ~= false then
+    if frame.speed < 5 then
+      speedMultiplier = 1.5
+    elseif frame.speed >= 25 then
+      speedMultiplier = 0.75
+    end
   end
 
-  state.elapsed = state.elapsed + dt
+  local lidarInterval = CONFIG.lidar.interval * speedMultiplier
+  local radarInterval = CONFIG.radarInterval * speedMultiplier
+  local ultrasonicInterval = CONFIG.ultrasonicInterval * speedMultiplier
+  local poseInterval = CONFIG.poseInterval * speedMultiplier
+
   if sensorSettings.lidarEnabled then state.lidarTimer = state.lidarTimer + dt end
   if sensorSettings.radarEnabled then state.radarTimer = state.radarTimer + dt end
   if sensorSettings.ultrasonicEnabled then state.ultrasonicTimer = state.ultrasonicTimer + dt end
@@ -975,14 +997,8 @@ function M.updateGFX(dt)
     state.detectionZoneTimer = state.detectionZoneTimer + dt
   end
 
-  local frame = getVehicleFrame()
-  if not frame then
-    return
-  end
-
   local changed = false
   local updatedSensors = {}
-
   if state.pendingReset then
     state.frame = state.frame or buildEmptyFrame()
     state.frame.lidar = {origin = nil, rays = {}, rayCount = 0}
@@ -1002,52 +1018,64 @@ function M.updateGFX(dt)
     changed = true
   end
 
-  if sensorSettings.lidarEnabled and state.lidarTimer >= CONFIG.lidar.interval then
-    state.lidarTimer = state.lidarTimer % CONFIG.lidar.interval
-    state.frame = state.frame or buildEmptyFrame()
-    state.frame.lidar = scanLidar(frame)
-    updatedSensors.lidar = true
-    changed = true
+  local lidarDue = sensorSettings.lidarEnabled and state.lidarTimer >= lidarInterval
+  local radarDue = sensorSettings.radarEnabled and state.radarTimer >= radarInterval
+  local ultrasonicDue = sensorSettings.ultrasonicEnabled
+    and state.ultrasonicTimer >= ultrasonicInterval
+  local poseDue = (sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled
+      or sensorSettings.calibrationDebugEnabled) and state.poseTimer >= poseInterval
+  local zonesDue = state.detectionZoneTimer >= poseInterval
+    and (sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled)
+
+  -- Round-robin over five independent jobs. A graphics frame handles at most
+  -- one due scan/pose/zone job, spreading simultaneous deadlines over frames.
+  local selectedJob = nil
+  for offset = 0, 4 do
+    local job = ((state.schedulerCursor + offset - 1) % 5) + 1
+    if job == 1 and lidarDue then
+      state.lidarTimer = state.lidarTimer % lidarInterval
+      state.frame = state.frame or buildEmptyFrame()
+      state.frame.lidar = scanLidar(frame)
+      updatedSensors.lidar = true
+      selectedJob = job
+    elseif job == 2 and radarDue then
+      state.radarTimer = state.radarTimer % radarInterval
+      state.frame = state.frame or buildEmptyFrame()
+      state.frame.radar = scanRadars(frame)
+      updatedSensors.radar = true
+      selectedJob = job
+    elseif job == 3 and ultrasonicDue then
+      state.ultrasonicTimer = state.ultrasonicTimer % ultrasonicInterval
+      state.frame = state.frame or buildEmptyFrame()
+      state.frame.ultrasonic = scanUltrasonics(frame)
+      updatedSensors.ultrasonic = true
+      selectedJob = job
+    elseif job == 4 and poseDue then
+      local poseDt = state.poseTimer
+      state.poseTimer = state.poseTimer % poseInterval
+      state.frame = state.frame or buildEmptyFrame()
+      state.frame.cameras = buildCameras(frame)
+      state.frame.localization = sensorSettings.localizationEnabled
+        and updateLocalization(frame, poseDt) or nil
+      state.frame.geometryDebug = sensorSettings.calibrationDebugEnabled
+        and buildGeometryDebug(frame) or nil
+      state.frame.mounts = sensorSettings.calibrationDebugEnabled
+        and buildSensorMountDebug(frame) or {}
+      updatedSensors.pose = true
+      selectedJob = job
+    elseif job == 5 and zonesDue then
+      state.detectionZoneTimer = state.detectionZoneTimer % poseInterval
+      state.frame = state.frame or buildEmptyFrame()
+      state.frame.detectionZones = buildDetectionZones(frame)
+      updatedSensors.detectionZones = true
+      selectedJob = job
+    end
+
+    if selectedJob ~= nil then break end
   end
 
-  if sensorSettings.radarEnabled and state.radarTimer >= CONFIG.radarInterval then
-    state.radarTimer = state.radarTimer % CONFIG.radarInterval
-    state.frame = state.frame or buildEmptyFrame()
-    state.frame.radar = scanRadars(frame)
-    updatedSensors.radar = true
-    changed = true
-  end
-
-  if sensorSettings.ultrasonicEnabled and state.ultrasonicTimer >= CONFIG.ultrasonicInterval then
-    state.ultrasonicTimer = state.ultrasonicTimer % CONFIG.ultrasonicInterval
-    state.frame = state.frame or buildEmptyFrame()
-    state.frame.ultrasonic = scanUltrasonics(frame)
-    updatedSensors.ultrasonic = true
-    changed = true
-  end
-
-  if (sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled
-      or sensorSettings.calibrationDebugEnabled) and state.poseTimer >= CONFIG.poseInterval then
-    local poseDt = state.poseTimer
-    state.poseTimer = state.poseTimer % CONFIG.poseInterval
-    state.frame = state.frame or buildEmptyFrame()
-    state.frame.cameras = buildCameras(frame)
-    state.frame.localization = sensorSettings.localizationEnabled
-      and updateLocalization(frame, poseDt) or nil
-    state.frame.geometryDebug = sensorSettings.calibrationDebugEnabled
-      and buildGeometryDebug(frame) or nil
-    state.frame.mounts = sensorSettings.calibrationDebugEnabled
-      and buildSensorMountDebug(frame) or {}
-    updatedSensors.pose = true
-    changed = true
-  end
-
-  if state.detectionZoneTimer >= CONFIG.poseInterval
-      and (sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled) then
-    state.detectionZoneTimer = state.detectionZoneTimer % CONFIG.poseInterval
-    state.frame = state.frame or buildEmptyFrame()
-    state.frame.detectionZones = buildDetectionZones(frame)
-    updatedSensors.detectionZones = true
+  if selectedJob ~= nil then
+    state.schedulerCursor = (selectedJob % 5) + 1
     changed = true
   end
 
