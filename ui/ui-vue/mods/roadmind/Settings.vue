@@ -32,7 +32,23 @@
       </div>
       <p class="roadmind-note">{{ t("runtimeNote") }}</p>
       <p class="roadmind-note">{{ t("detectionNote") }}</p>
-    </section>
+      <div v-if="status.trackedObjects && status.trackedObjects.length" class="roadmind-track-list">
+        <strong>{{ t("trackedObjects") }} ({{ status.trackedVehicleCount || 0 }})</strong>
+        <div v-for="track in status.trackedObjects" :key="track.trackId" class="roadmind-track">
+          <div class="roadmind-track-heading">
+            <strong>{{ track.trackId }}</strong>
+            <span>{{ t("track" + track.status.charAt(0).toUpperCase() + track.status.slice(1)) }}</span>
+          </div>
+          <div class="roadmind-track-metrics">
+            <span>{{ t("trackRange") }}: {{ track.distance === undefined ? "—" : track.distance.toFixed(1) + " m" }}</span>
+            <span>{{ t("trackSpeed") }}: {{ track.estimatedSpeedKph === undefined ? "—" : track.estimatedSpeedKph.toFixed(1) + " km/h" }}</span>
+            <span>{{ t("trackRelativeSpeed") }}: {{ track.estimatedRelativeSpeedKph === undefined ? "—" : track.estimatedRelativeSpeedKph.toFixed(1) + " km/h" }}</span>
+            <span>{{ t("trackAge") }}: {{ track.dataAge.toFixed(2) }} s</span>
+            <span>{{ t("trackConfidence") }}: {{ track.confidencePercent }}%</span>
+          </div>
+          <span class="roadmind-track-sensors">{{ (track.sensors || []).join(" · ") }}</span>
+        </div>
+      </div>
 
     <section class="roadmind-section">
       <BngCardHeading>{{ t("vehicleGeometry") }}</BngCardHeading>
@@ -279,6 +295,15 @@ const EN = {
   detectedVehicles: "Detected vehicles",
   vehiclesDetected: "Vehicles confirmed visible",
   vehicleCandidates: "Vehicle candidates in sensor zones",
+  trackedObjects: "RoadMind object tracks",
+  trackConfirmed: "Confirmed",
+  trackCoasting: "Coasting",
+  trackStale: "Stale",
+  trackRange: "Range",
+  trackSpeed: "Estimated speed",
+  trackRelativeSpeed: "Relative speed",
+  trackAge: "Data age",
+  trackConfidence: "Confidence",
   registrySize: "Cached vehicle registry",
   registryLimited: "limit reached",
   detectionNote: "Vehicle presence is simulator-assisted: RoadMind checks vehicle OBBs against calibrated sensor zones and verifies visibility with a bounded number of occlusion raycasts. It is not a raw LiDAR/radar/camera detection stream.",
@@ -357,6 +382,15 @@ const RU = {
   detectedVehicles: "Обнаруженные автомобили",
   vehiclesDetected: "Подтверждённо видимых машин",
   vehicleCandidates: "Кандидатов в зонах датчиков",
+  trackedObjects: "Треки RoadMind",
+  trackConfirmed: "Подтверждён",
+  trackCoasting: "Потеря видимости",
+  trackStale: "Устарел",
+  trackRange: "Дальность",
+  trackSpeed: "Расчётная скорость",
+  trackRelativeSpeed: "Относительная скорость",
+  trackAge: "Возраст данных",
+  trackConfidence: "Достоверность",
   registrySize: "Машин в общем реестре",
   registryLimited: "достигнут лимит",
   detectionNote: "Обнаружение машин использует данные симулятора: RoadMind проверяет OBB автомобилей в зонах датчиков и видимость ограниченным числом лучей. Это не поток физических измерений LiDAR, радара или камер.",
@@ -501,6 +535,8 @@ const status = ref({
   vehicleRegistryCount: 0,
   vehicleRegistryTruncated: false,
   occlusionRaycastsPerSecond: 0,
+  trackedVehicleCount: 0,
+  trackedObjects: [],
   vehicleCalibration: { calibrated: false, error: "Calibration has not been run" },
 })
 const error = ref("")
@@ -766,6 +802,36 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 0.75em;
+}
+.roadmind-track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+  margin-top: 0.35em;
+}
+.roadmind-track {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+  padding: 0.4em 0.5em;
+  border: 1px solid var(--bng-cool-gray-700, rgba(255,255,255,0.12));
+  border-radius: 0.25em;
+}
+.roadmind-track-heading,
+.roadmind-track-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25em 0.8em;
+}
+.roadmind-track-metrics,
+.roadmind-track-sensors {
+  color: var(--bng-cool-gray-300, #bbb);
+  font-size: 0.82em;
+  font-variant-numeric: tabular-nums;
+}
+.roadmind-track-sensors {
+  overflow-wrap: anywhere;
 }
 .roadmind-error {
   color: var(--bng-add-red-400, #f88);
