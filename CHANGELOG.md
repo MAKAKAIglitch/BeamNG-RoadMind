@@ -13,7 +13,10 @@
 - Add persistent Economy, Balanced and High performance profiles.
 - Add live LiDAR resolution, range and scan-rate controls.
 - Add independent radar and ultrasonic density, frequency and enable controls.
-- Add independent 3D overlay visibility controls.
+- Add independent 3D overlay visibility controls and green/yellow OBB outlines for confirmed/unverified vehicle candidates.
+- Add a session-only accumulated LiDAR map with a configurable 500–10,000 point cap, including vehicle hits and pause-safe rendering.
+- Add optional critically damped inertia for LiDAR endpoints and detected vehicle outlines.
+- Remove the manual LiDAR range and horizontal-point sliders; these remain controlled by performance profiles.
 - Default to LiDAR-only Economy scanning (about 9 queries/s) and the LiDAR overlay to reduce overhead.
 - Keep sensor scanning disabled until explicitly started.
 
