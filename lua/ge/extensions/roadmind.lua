@@ -1283,6 +1283,7 @@ local function drawDetectedVehicles(drawer, candidates, tracks)
     if key == "" or seen[key] then return end
     local renderState = state.vehicleRenderStates[key]
     local position = renderState and renderState.position or item.position
+    local orientation = renderState and renderState.orientation or item.orientation
     if not position then return end
     local itemState = isTrack and item.status or item.visibility
     local color
@@ -1293,7 +1294,7 @@ local function drawDetectedVehicles(drawer, candidates, tracks)
     else
       color = ColorF(1.0, 0.78, 0.16, 0.72)
     end
-    drawVehicleObb(drawer, position, item.orientation, item.dimensions, color)
+    drawVehicleObb(drawer, position, orientation, item.dimensions, color)
     local sensorOrigin = toPoint3F(item.sensorOrigin)
     local centerPoint = toPoint3F(position)
     if sensorOrigin and centerPoint then drawLine(drawer, sensorOrigin, centerPoint, color) end
@@ -2530,9 +2531,11 @@ local function updateDetectedVehicleRenderStates(dt)
   local settings = state.settings or DEFAULT_SETTINGS
   local inertiaEnabled = settings.visualizationInertiaEnabled ~= false
   local updated = {}
-  local function updatePosition(key, targetValue)
+
+  local function updatePosition(key, targetValue, orientationValue)
     local target = asVec3(targetValue)
     if not target then return end
+
     local entry = state.vehicleRenderStates[key]
     if type(entry) ~= "table" then
       entry = {position = vectorToPlainTable(target), velocity = {x = 0, y = 0, z = 0}}
@@ -2551,27 +2554,81 @@ local function updateDetectedVehicleRenderStates(dt)
         entry.velocity = vectorToPlainTable(nextVelocity)
       end
     end
+
+    local targetForward = orientationValue and normalizedVec3(orientationValue.forward)
+    local targetUp = orientationValue and normalizedVec3(orientationValue.up)
+    if targetForward and targetUp then
+      local currentForward = asVec3(entry.forward)
+      local currentUp = asVec3(entry.up)
+      if inertiaEnabled and currentForward and currentUp then
+        local nextForward, forwardVelocity = dampedSpringStep(
+          currentForward,
+          asVec3(entry.forwardVelocity) or vec3(0, 0, 0),
+          targetForward,
+          dt
+        )
+        local nextUp, upVelocity = dampedSpringStep(
+          currentUp,
+          asVec3(entry.upVelocity) or vec3(0, 0, 0),
+          targetUp,
+          dt
+        )
+        entry.forward = vectorToPlainTable(normalizedVec3(nextForward) or targetForward)
+        entry.up = vectorToPlainTable(normalizedVec3(nextUp) or targetUp)
+        entry.forwardVelocity = vectorToPlainTable(forwardVelocity)
+        entry.upVelocity = vectorToPlainTable(upVelocity)
+      else
+        entry.forward = vectorToPlainTable(targetForward)
+        entry.up = vectorToPlainTable(targetUp)
+        entry.forwardVelocity = {x = 0, y = 0, z = 0}
+        entry.upVelocity = {x = 0, y = 0, z = 0}
+      end
+
+      local forward = normalizedVec3(entry.forward)
+      local up = normalizedVec3(entry.up)
+      local right = forward and up and normalizedVec3(forward:cross(up)) or nil
+      if right and forward then
+        up = normalizedVec3(right:cross(forward)) or up
+        entry.orientation = {
+          forward = vectorToPlainTable(forward),
+          right = vectorToPlainTable(right),
+          up = vectorToPlainTable(up)
+        }
+      else
+        entry.orientation = orientationValue
+      end
+    end
+
     entry.lastSeenAt = state.simulationTime
     state.vehicleRenderStates[key] = entry
     updated[key] = true
   end
+
   local candidates = state.latestData and state.latestData.vehicles or state.vehicleCandidates
   for i = 1, #(candidates or {}) do
     local candidate = candidates[i]
     if candidate.visibility ~= "occluded" then
       local key = tostring(candidate.sourceVehicleId or candidate.id)
       local track = state.tracksBySourceId[key]
-      updatePosition(key, track and (track.predictedPosition or track.position) or candidate.position)
+      updatePosition(
+        key,
+        track and (track.predictedPosition or track.position) or candidate.position,
+        track and track.orientation or candidate.orientation
+      )
     end
   end
+
   local tracks = state.latestData and state.latestData.tracks or {}
   for i = 1, #tracks do
     local track = tracks[i]
     if track.status == "confirmed" or track.status == "coasting" then
       local key = tostring(track.sourceVehicleId)
-      if not updated[key] then updatePosition(key, track.predictedPosition or track.position) end
+      if not updated[key] then
+        updatePosition(key, track.predictedPosition or track.position, track.orientation)
+      end
     end
   end
+
   for key, entry in pairs(state.vehicleRenderStates) do
     if not updated[key] and state.simulationTime - (entry.lastSeenAt or -math.huge) > TRACK_MAX_AGE then
       state.vehicleRenderStates[key] = nil
