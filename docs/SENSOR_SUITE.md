@@ -17,6 +17,22 @@ This document describes the current Drive-compatible sensor layout and the exact
 | GNSS-like position | 1 | Roof | BeamNG world position and altitude | 5 Hz |
 | Wheel odometry | 1 data source | Vehicle electrics | Wheel speed and odometer | 5 Hz sample |
 
+## Vehicle detection zones
+
+RoadMind keeps one Game Engine vehicle registry made from oriented bounding boxes (OBBs). The registry refreshes every 0.5 s. It excludes the player vehicle, invalid entries and entries reported as deleted/destroyed; a vehicle without valid OBB data is not registered.
+
+At 0.25 s intervals, the latest calibrated sensor mounts define independent detection volumes:
+
+- LiDAR uses its 120° horizontal and 16° vertical coverage plus configured range.
+- Each radar uses its own horizontal/vertical coverage and range.
+- Each ultrasonic unit uses its close-range coverage and configured minimum/maximum range.
+
+A target's complete OBB is projected onto the sensor's forward/right/up axes. Broad-phase range filtering happens before the detailed bounds test. Multiple sensors observing the same vehicle produce one candidate record with a list of sensor zones.
+
+Up to four candidate targets per detection cycle receive an occlusion raycast (maximum 16 additional queries/s). Candidates are classified as **visible**, **occluded** or **unverified**. Only confirmed-visible targets are drawn and passed to the experimental obstacle guard.
+
+This is simulator-assisted vehicle discovery based on the game's vehicle registry and OBB data. It is not a raw physical-style LiDAR or radar point return, and camera frustums do not participate in vehicle recognition. Persistent track IDs and temporal association belong to the next tracking phase.
+
 ## LiDAR
 
 The forward LiDAR samples 17 horizontal azimuths and 3 vertical elevations (51 ray directions). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
