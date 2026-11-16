@@ -941,6 +941,7 @@ end
 
 function M.getSettings()
   if not state.settings then loadSettings() end
+  if not state.activeVehicle then syncPlayerVehicle() end
   return settingsResult()
 end
 
