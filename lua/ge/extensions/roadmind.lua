@@ -729,6 +729,14 @@ local function detachPreviousVehicle()
   state.routePathEnd = nil
   state.vehicleGeometry = nil
   state.vehicleCalibrationError = nil
+  resetTrackingState(true)
+  state.vehicleRegistry = {}
+  state.vehicleRegistryById = {}
+  state.vehicleRegistrySnapshotValid = false
+  state.vehicleRegistryTimer = 0
+  state.vehicleRegistryGeneration = 0
+  state.vehicleRegistryTruncated = false
+  state.vehicleDetectionTimer = 0
   state.activeVehicle = nil
   state.activeVehicleId = nil
   state.vehicleRegistry = {}
@@ -1199,6 +1207,15 @@ local function settingsResult()
       routePilotError = state.routePilotError,
       routeWaypointCount = #state.routePath,
       persistentLidarPointCount = #state.lidarPointCloud,
+      trackedVehicleCount = state.trackCount,
+      coastingTrackCount = state.latestData and (function()
+        local count = 0
+        for i = 1, #(state.latestData.tracks or {}) do
+          if state.latestData.tracks[i].status == "coasting"
+              or state.latestData.tracks[i].status == "stale" then count = count + 1 end
+        end
+        return count
+      end)() or 0,
       detectedVehicleCount = state.latestData and (function()
         local count = 0
         for i = 1, #(state.latestData.vehicles or {}) do
@@ -1292,7 +1309,10 @@ function M.setVisualizationEnabled(enabled)
   if wanted then
     local previousId = state.activeVehicleId
     state.visualizationEnabled = true
+    resetTrackingState(true)
     state.vehicleRegistry = {}
+    state.vehicleRegistryById = {}
+    state.vehicleRegistrySnapshotValid = false
     state.vehicleRegistryTimer = 0
     state.vehicleDetectionTimer = 0
     state.vehicleCandidates = {}
@@ -1312,10 +1332,13 @@ function M.setVisualizationEnabled(enabled)
       stopNativeRouteAI(state.activeVehicle)
     end
     state.vehicleRegistry = {}
+    state.vehicleRegistryById = {}
+    state.vehicleRegistrySnapshotValid = false
     state.vehicleRegistryTimer = 0
     state.vehicleRegistryTruncated = false
     state.vehicleDetectionTimer = 0
     state.vehicleCandidates = {}
+    resetTrackingState(false)
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
     state.routePilotEnabled = false
@@ -2032,13 +2055,17 @@ local function updateVehicleDetection(dt)
   local settings = state.settings or DEFAULT_SETTINGS
   if not state.activeVehicle or not vehicleDetectionEnabled(settings) then
     state.vehicleRegistry = {}
+    state.vehicleRegistryById = {}
+    state.vehicleRegistrySnapshotValid = false
     state.vehicleCandidates = {}
     state.vehicleRegistryTimer = 0
     state.vehicleRegistryTruncated = false
     state.vehicleDetectionTimer = 0
+    state.occlusionCache = {}
+    state.occlusionCursor = 1
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
-    if state.latestData then state.latestData.vehicles = {} end
+    resetTrackingState(false)
     return
   end
 
@@ -2052,12 +2079,24 @@ local function updateVehicleDetection(dt)
   if state.vehicleDetectionTimer < VEHICLE_DETECTION_INTERVAL then return end
   state.vehicleDetectionTimer = state.vehicleDetectionTimer % VEHICLE_DETECTION_INTERVAL
 
-  if state.latestData then
-    state.latestData.vehicles = detectNearbyVehicles(state.latestData)
+  local candidates = {}
+  local zoneTimestamp = state.latestData and state.latestData.sensorTimestamps
+    and state.latestData.sensorTimestamps.detectionZones or nil
+  local zonesFresh = type(zoneTimestamp) == "number"
+    and (state.simulationTime - zoneTimestamp) <= TRACK_OBSERVATION_MAX_AGE
+
+  if state.latestData and zonesFresh then
+    candidates = detectNearbyVehicles(state.latestData)
   else
     state.vehicleCandidates = {}
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
+  end
+
+  local tracks = updateObjectTracks(candidates)
+  if state.latestData then
+    state.latestData.vehicles = candidates
+    state.latestData.tracks = tracks
   end
 end
 
@@ -2203,6 +2242,7 @@ local function mergeSensorFrame(frame)
     ultrasonic = {mounts = {}, returns = {}},
     detectionZones = {timestamp = 0, zones = {}},
     sensorTimestamps = {},
+    tracks = {},
     cameras = {}
   }
   latest.sensorTimestamps = latest.sensorTimestamps or {}
