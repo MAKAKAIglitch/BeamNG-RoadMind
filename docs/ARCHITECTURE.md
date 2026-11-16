@@ -1,53 +1,79 @@
 # RoadMind architecture
 
-RoadMind is a layered sensor and driving stack for BeamNG.drive.
+RoadMind is a layered sensor and driving-stack prototype for BeamNG.drive. Current development follows the perception-first roadmap: vehicle geometry, calibrated sensors, target observations and a timestamped world model come before custom trajectory planning and control.
+
+## Vehicle geometry and calibration
+
+The Game Engine Lua coordinator reads the active vehicle's oriented spawn bounding box through `getSpawnWorldOOBB()` when a vehicle is attached, or when the user requests recalibration. It compares the OBB axes with the vehicle's live forward/right/up basis and projects the OBB center and half-extents into vehicle-local coordinates.
+
+The cached geometry profile contains:
+
+- Local forward/rear, left/right and lower/upper bounds relative to the vehicle reference position.
+- Length, width and height.
+- OBB-axis alignment quality and the geometry source.
+- A vehicle key when the engine exposes one.
+
+The profile is sent to Vehicle Lua through the vehicle command queue. Vehicle Lua derives a cached sensor layout from those local bounds. LiDAR, radar, ultrasonic and camera mounts therefore use vehicle-relative positions; their world-space transforms are calculated from the current vehicle pose only when a sensor or pose frame is due.
+
+If the OBB is missing, invalid or does not align with the live vehicle basis, the sensor backend uses its conservative fallback mount layout and reports calibration as unavailable. The settings page provides an explicit recalibration action. Reset/configuration callback entry points are present, but their dispatch still requires live validation on supported BeamNG versions.
+
+The optional calibration overlay draws the body bounds, forward/right/up axes and all sensor mount positions. It is disabled by default and requests pose updates only while enabled.
+
+Per-vehicle manual mount overrides and validation across vehicle classes remain unfinished roadmap work.
 
 ## Vehicle Lua sensor backend
 
-Location: lua/vehicle/extensions/roadmind_sensors.lua
+Location: `lua/vehicle/extensions/roadmind/sensors.lua`
 
-The Vehicle Lua extension owns vehicle-local sensor geometry and scan scheduling:
+The Vehicle Lua extension owns vehicle-local scan geometry and scheduling:
 
-- Forward LiDAR: 51 rays, 4 Hz, 120° horizontal FOV, 65 m.
-- Five radar ray fans: 17 directions total, 2 Hz.
-- Twelve ultrasonic units: 36 short-range rays total, 2 Hz.
-- Seven camera mount poses and FOV values, refreshed at 5 Hz.
-- IMU-like acceleration and estimated yaw rate, refreshed at 5 Hz.
-- GNSS-like world position and vehicle odometry signals, refreshed at 5 Hz.
+- Forward LiDAR: configurable horizontal sample count and 1/2/3 vertical layers, up to 51 rays in the High profile.
+- Five radar ray fans: 17 directions total in the High profile.
+- Twelve ultrasonic units: up to 36 short-range directions.
+- Seven camera mount poses and FOV values. In regular Drive these are coverage frustums, not RGB image sources.
+- IMU-like acceleration and estimated yaw-rate data.
+- GNSS-like world-position and wheel-odometry data.
 
-The extension serializes only the rays for sensors whose scan interval has elapsed. It does not call the Game Engine-only `castRay` API.
+Sensor layout is calculated and cached when the GE sends a validated geometry profile. The Vehicle Lua module updates world-space mount transforms from the current vehicle frame when a scan/pose update is due. It does not call the Game Engine-only scene-raycast API.
 
 ## Game Engine Lua coordinator and renderer
 
-Location: lua/ge/extensions/roadmind.lua
+Location: `lua/ge/extensions/roadmind.lua`
 
 The Game Engine Lua extension:
 
-- Attaches the sensor backend to the active player vehicle when the sensor-suite binding is enabled.
-- Receives the latest serialized sensor frame and performs scheduled scene raycasts through `castRay`.
-- Checks the source vehicle ID and discards delayed frames from a vehicle that is no longer active.
-- Merges raycast hits into the latest sensor frame.
-- Draws LiDAR returns, radar returns, ultrasonic close-range returns, camera frustums, IMU and GNSS mount markers using the game's world debug drawer.
+- Attaches the sensor backend to the active player vehicle and caches its geometry profile.
+- Receives serialized sensor frames through the cross-VM command queue.
+- Performs scheduled scene raycasts through `castRay`.
+- Rejects delayed frames from a vehicle that is no longer active.
+- Merges raycast returns and sensor state into the current frame.
+- Draws LiDAR returns, radar returns, ultrasonic returns, camera frustums, localization markers, detected-vehicle markers and optional calibration geometry.
 - Redraws cached geometry each graphics frame because debug primitives are transient.
 
-Scene raycasts run only on incoming scan updates, not on every render frame.
+Scene raycasts run only when a sensor scan is due, not in the render loop.
 
-## Input
+## Current vehicle-detection limitation
 
-Location: lua/ge/extensions/core/input/actions/roadmind_actions.json
+A preliminary simulator-assisted vehicle visibility check exists, but it currently uses vehicle-center positions and simple sensor cones. It does not yet test full target bounding boxes, share a scheduled vehicle registry, or perform raycast occlusion tests. It is not the Phase 4 optimized detection-zone service and must not be treated as a physical LiDAR/radar/camera measurement.
 
-The regular Controls action **RoadMind: Toggle Sensor Suite** calls the Game Engine Lua coordinator. The user assigns a keyboard key or controller button in Options → Controls.
+## Input and settings
+
+The sensor-suite binding is defined in `lua/ge/extensions/core/input/actions/roadmind_actions.json`. The in-game settings page is under `ui/ui-vue/mods/roadmind/`.
+
+The settings page supports performance profiles, sensor density/rates, point-cloud visualization, vehicle-geometry status, manual recalibration and the optional calibration overlay. It follows the game's language (Russian/English).
 
 ## Sensor model boundaries
 
-The base mod targets BeamNG.drive. LiDAR, radar and ultrasonic use geometric raycasts; camera mounts display FOV frustums but do not return RGB images. IMU-like values use vehicle electrics and heading differences. GNSS-like positioning uses simulator world coordinates. Wheel speed and odometer come from vehicle electrics.
+The base mod targets regular BeamNG.drive. LiDAR, radar and ultrasonic use geometric scene raycasts; radar is not RF/FMCW simulation and ultrasonic is not an acoustic propagation model. Camera mounts display FOV frustums but do not return RGB frames. IMU-like values use vehicle electrics and heading differences. GNSS-like positioning uses simulator world coordinates. Wheel speed and odometer come from vehicle electrics.
 
-BeamNG.tech provides a separate native suite with rendered camera, LiDAR, RADAR, ultrasonic, GPS and IMU sensors. The planned native adapter can use those APIs without changing the upper-level route-planning interface.
+BeamNG.tech provides a separate native suite with rendered camera, LiDAR, RADAR, ultrasonic, GPS and IMU sensors. A future adapter can provide native measurements without changing the upper-level observation interface.
 
 ## Planned autonomy stack
 
-1. **Route manager:** road graph, route points and local road corridor.
-2. **Object tracker:** radar returns and LiDAR points associated over time.
-3. **Local planner:** candidate trajectory generation, collision checks and scoring.
-4. **Vehicle controller:** steering, throttle, braking and gear management.
-5. **Safety supervisor:** controlled stop on stale sensors, invalid route or blocked path.
+1. **Vehicle registry and detection zones:** one scheduled vehicle snapshot, bounds-based target checks and bounded occlusion tests.
+2. **Object tracker:** persistent RoadMind IDs, timestamped association, confidence and motion estimates.
+3. **World model:** a unified interface for vehicles and non-vehicle obstacles.
+4. **Route manager:** road graph, route points and local road corridor.
+5. **Local planner:** candidate trajectories, footprint collision checks and scoring.
+6. **Vehicle controller:** steering, throttle, braking and gear management.
+7. **Safety supervisor:** controlled stop on stale sensors, invalid routes or blocked paths.
