@@ -662,6 +662,57 @@ local function drawRoutePath(drawer)
   end
 end
 
+local function drawCalibrationGeometry(drawer, geometry, mounts)
+  if type(geometry) == "table" and geometry.valid == true
+      and type(geometry.corners) == "table" and #geometry.corners == 8 then
+    local corners = {}
+    for i = 1, 8 do corners[i] = toPoint3F(geometry.corners[i]) end
+    local edges = {
+      {1, 2}, {2, 3}, {3, 4}, {4, 1},
+      {5, 6}, {6, 7}, {7, 8}, {8, 5},
+      {1, 5}, {2, 6}, {3, 7}, {4, 8}
+    }
+    local boundsColor = ColorF(1.0, 0.70, 0.12, 0.9)
+    for i = 1, #edges do
+      local edge = edges[i]
+      drawLine(drawer, corners[edge[1]], corners[edge[2]], boundsColor)
+    end
+    for i = 1, #corners do
+      drawSphere(drawer, corners[i], 0.035, boundsColor)
+    end
+  end
+
+  if type(geometry) == "table" and type(geometry.axes) == "table" then
+    local origin = toPoint3F(geometry.axes.origin)
+    drawLine(drawer, origin, toPoint3F(geometry.axes.forward), ColorF(0.2, 1.0, 0.25, 1.0))
+    drawLine(drawer, origin, toPoint3F(geometry.axes.right), ColorF(1.0, 0.2, 0.2, 1.0))
+    drawLine(drawer, origin, toPoint3F(geometry.axes.up), ColorF(0.25, 0.55, 1.0, 1.0))
+  end
+
+  if type(mounts) ~= "table" then return end
+  for i = 1, #mounts do
+    local mount = mounts[i]
+    local position = toPoint3F(mount.position)
+    local direction = vectorFromTable and vectorFromTable(mount.direction) or nil
+    local color = ColorF(0.65, 0.8, 1.0, 0.95)
+    if mount.kind == "lidar" then
+      color = ColorF(0.1, 0.78, 1.0, 1.0)
+    elseif mount.kind == "radar" then
+      color = ColorF(0.2, 1.0, 0.35, 1.0)
+    elseif mount.kind == "ultrasonic" then
+      color = ColorF(0.1, 1.0, 0.82, 1.0)
+    end
+    if position then
+      drawSphere(drawer, position, 0.07, color)
+      if direction then
+        local endpoint = vec3(position.x, position.y, position.z)
+          + direction:normalized() * 0.65
+        drawLine(drawer, position, endpoint:toPoint3F(), color)
+      end
+    end
+  end
+end
+
 local function drawCameraFrustum(drawer, camera)
   local origin = toPoint3F(camera.position)
   local forward = camera.direction
@@ -758,6 +809,9 @@ local function drawFrame()
   end
 
   if settings.showLocalization then drawLocalization(drawer, frame.localization) end
+  if settings.showCalibration then
+    drawCalibrationGeometry(drawer, frame.geometryDebug, frame.mounts)
+  end
   drawRoutePath(drawer)
 end
 
@@ -1538,6 +1592,7 @@ local function mergeSensorFrame(frame)
     latest.cameras = type(frame.cameras) == "table" and frame.cameras or {}
     latest.localization = type(frame.localization) == "table" and frame.localization or nil
     latest.mounts = type(frame.mounts) == "table" and frame.mounts or {}
+    latest.geometryDebug = type(frame.geometryDebug) == "table" and frame.geometryDebug or nil
   end
   if type(frame.vehicleVelocity) == "table" then latest.vehicleVelocity = frame.vehicleVelocity end
 
