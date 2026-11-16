@@ -68,18 +68,19 @@ The current priority is the perception foundation. Route following, parking and 
 
 **Goal:** identify candidate vehicles efficiently and expose them as targets to the sensor and tracking systems.
 
-- [ ] Add a Game Engine vehicle registry/snapshot service using the available vehicle iteration APIs.
-- [ ] Exclude the player's vehicle, destroyed vehicles and invalid/stale entries.
-- [ ] Update the registry on a controlled schedule rather than independently scanning the complete vehicle list for every sensor.
-- [ ] Define sensor-specific detection volumes using each calibrated mount, orientation, range and field of view.
-- [ ] Use cheap distance and broad-phase bounds checks before detailed geometry tests.
-- [ ] Test the target vehicle's bounding box against the detection volume; do not rely only on its center point.
-- [ ] Apply sensor-specific horizontal/vertical coverage and minimum/maximum range.
-- [ ] Check occlusion for candidate targets with a bounded number of scene-raycasts where visibility matters.
-- [ ] Record which sensors can currently observe each target.
-- [ ] Deduplicate detections from multiple sensors into one tracked target.
-- [ ] Keep simulator-assisted vehicle detection explicitly separate from physical-style sensor returns.
-- [ ] Continue using LiDAR scene raycasts for actual LiDAR point measurements and scene raycasts for non-vehicle obstacles.
+- [x] Add a Game Engine vehicle registry/snapshot service using `getAllVehicles()`, with an object-pool fallback.
+- [x] Exclude the player's vehicle, invalid OBBs and entries reported as deleted/destroyed; each new snapshot replaces stale entries.
+- [x] Refresh the registry on a controlled 0.5 s schedule instead of scanning the list from each sensor.
+- [x] Define sensor-specific detection volumes from calibrated mount position, orientation, range and horizontal/vertical FOV.
+- [x] Use a distance broad phase and projected OBB radii before detailed sensor-volume checks.
+- [x] Test the target vehicle's complete OBB against each detection volume, not only its center.
+- [x] Apply per-sensor horizontal/vertical coverage and minimum/maximum range.
+- [x] Run at most four occlusion raycasts per 0.25 s detection cycle; classify candidates as visible, occluded or unverified.
+- [x] Record all sensor zones that currently contain each vehicle OBB.
+- [x] Deduplicate multiple sensor-zone matches into one candidate record per vehicle.
+- [x] Label these results as simulator-assisted vehicle-registry observations, separate from physical-style sensor returns.
+- [x] Keep LiDAR scene raycasts as the source of actual LiDAR point measurements and scene raycasts for non-vehicle obstacles.
+- [ ] Validate registry completeness, OBB overlap and occlusion behavior in live traffic scenarios.
 
 **Acceptance criteria:** one nearby vehicle produces one target record even when several sensors detect it; objects outside sensor coverage or behind occluders are not reported as visible; the detection service does not run once per LiDAR ray or in the render loop.
 
