@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Add NavGraph road localization, short road-centerline context and route-state export for future planners.
+- Add NavGraph road localization, short road-centerline context and route-state export.
+- Add a bounded Phase 9 local trajectory planner with five candidates, full ego/target footprint checks, obstacle and road-corridor costs, preview visualization and a fail-safe route-AI stop.
 - Add ordered world-coordinate route points, connected NavGraph path construction and route progress reporting.
 - Add route-deviation detection and a stop/replan response; use only current enabled sensor streams in the experimental obstacle guard.
 - Reject route candidates whose first waypoint would send the vehicle backwards to a node behind it.
@@ -29,6 +30,7 @@
 - Send only due sensor beams to the Game Engine to preserve the 4 Hz / 2 Hz scan schedules.
 - Keep missed rays empty instead of inventing returns at maximum range.
 - Preserve full floating-point precision for beam directions.
+- Fix a missing newline between the adaptive FPS controller and the GE onUpdate callback.
 - Clarify that radar radial velocity and stable target tracking are not implemented yet.
 
 ## 0.3.0 — Virtual automotive sensor suite
