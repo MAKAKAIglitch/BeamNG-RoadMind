@@ -125,7 +125,15 @@ The GE coordinator samples the active vehicle against BeamNG's current NavGraph 
 
 The route manager accepts 1–12 ordered XYZ points in BeamNG world coordinates (metres). It resolves each point to nearby road nodes, joins successive points with map.getPath, validates node positions and graph links, and bounds the combined path to 256 nodes. The settings UI accepts one X, Y, Z point per line. The final input point is snapped to a nearby NavGraph node; the UI reports the snap distance, so "destination reached" means that final graph node was reached, not necessarily the exact entered coordinate. Route progress is measured against nearby path segments at 4 Hz. A deviation above 30 m for four consecutive checks stops the AI, marks route localization as lost and schedules a replan attempt after a cooldown.
 
-The GE API function extensions.roadmind.getRouteState() returns a cloned snapshot containing the current road segment, local corridor, localization quality, ordered input points, route polyline, progress, next target, endpoint snap distance and safety state. Callers cannot mutate the coordinator's internal tables through the returned snapshot; this is the intended input contract for the next planning phase.
+The GE API function extensions.roadmind.getRouteState() returns a cloned snapshot containing the current road segment, local corridor, localization quality, ordered input points, route polyline, progress, next target, endpoint snap distance, safety state and local-planner snapshot. Callers cannot mutate the coordinator's internal tables through the returned snapshot.
+
+### Phase 9 — bounded local trajectory planner
+
+While the experimental route pilot is armed, the GE coordinator evaluates five lateral-offset trajectory candidates up to 25 m ahead, at a 5 Hz maximum planning rate. The path sampler uses the current NavGraph route polyline and the calibrated vehicle-local OBB profile. Each sample evaluates the complete ego footprint against fresh non-vehicle obstacle clusters and confirmed/coasting tracked vehicle OBBs. Candidates are rejected when their footprint intersects an obstacle/target, exceeds the conservative NavGraph corridor band, or requires a turning radius below a length-based vehicle heuristic.
+
+The selected safe candidate is shown in green; rejected candidates are shown in red, while other valid candidates are blue. Planner state, selected offset, road margin, obstacle clearance and rejection reason are exposed through settings status and the cloned route-state API. If all candidates fail or required road/sensor geometry is stale, the coordinator stops the built-in Vehicle AI route pilot. The selected trajectory is currently a preview and safety-decision input only; it does not steer or control pedals. Low-level trajectory tracking belongs to Phase 10.
+
+The road boundary is an explicit approximation: a 3.5 m half-width band around the NavGraph centerline, not a detected lane boundary or exact drivable polygon. The turning-radius estimate is derived from vehicle length rather than measured steering geometry. These assumptions require in-game validation and must not be treated as a collision guarantee.
 
 The active route is previewed in world space and passed as a waypoint list to the built-in Vehicle Lua ai.driveUsingPath. The base Drive-mode route pilot remains experimental: it uses the game's AI for lane following, and RoadMind runs a best-effort stop guard at up to 10 Hz using only enabled, fresh sensor returns plus recently confirmed vehicle OBBs. Vehicle obstacles are checked by their projected footprint, not only their center. This is not a collision guarantee or a replacement for the future swept-footprint trajectory planner. Camera frustums do not provide image measurements. Complex intersections, road splits, map compatibility, coordinate entry and progress still need live validation on several maps.
 
@@ -149,8 +157,7 @@ The current route pilot delegates path following to BeamNG's built-in Vehicle AI
 
 Next implementation phases:
 
-1. **Local planner:** bounded candidate trajectories, full-footprint collision checks, road/obstacle costs and a controlled stop when no safe path exists.
-2. **Vehicle controller:** trajectory tracking, steering, throttle, braking and gear management.
-3. **Independent safety supervisor:** manual takeover, stale-sensor handling, route-loss handling and controller-fault stops.
-4. **Parking:** parking-space estimation, reverse/multi-point maneuvers and swept-footprint validation.
-5. **Recording and learning:** local, bounded data recording and deterministic replay before optional offline learning.
+1. **Vehicle controller:** trajectory tracking, steering, throttle, braking and gear management.
+2. **Independent safety supervisor:** manual takeover, stale-sensor handling, route-loss handling and controller-fault stops.
+3. **Parking:** parking-space estimation, reverse/multi-point maneuvers and swept-footprint validation.
+4. **Recording and learning:** local, bounded data recording and deterministic replay before optional offline learning.
