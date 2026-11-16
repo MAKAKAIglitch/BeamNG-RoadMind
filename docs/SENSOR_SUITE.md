@@ -29,7 +29,7 @@ At 0.25 s intervals, the latest calibrated sensor mounts define independent dete
 
 A target's complete OBB is projected onto the sensor's forward/right/up axes. Broad-phase range filtering happens before the detailed bounds test. Multiple sensors observing the same vehicle produce one candidate record with a list of sensor zones.
 
-Up to four candidate targets per detection cycle receive an occlusion raycast (maximum 16 additional queries/s). Candidates are classified as **visible**, **occluded** or **unverified**. Only confirmed-visible targets are drawn and passed to the experimental obstacle guard.
+Up to four candidate targets per detection cycle receive an occlusion raycast (maximum 16 additional queries/s). Candidates are classified as **visible**, **occluded** or **unverified**. Confirmed-visible targets feed the experimental obstacle guard. The 3D visualizer also draws non-occluded candidates before their visibility check completes: green OBB wireframes are confirmed visible, while amber/yellow wireframes are still unverified. Explicitly occluded candidates remain hidden.
 
 This is simulator-assisted vehicle discovery based on the game's vehicle registry and OBB data. It is not a raw physical-style LiDAR or radar point return, and camera frustums do not participate in vehicle recognition. Confirmed-visible candidates feed the implemented session-scoped RoadMind tracker described below; stable identity and visibility behavior still need live-traffic validation.
 
@@ -70,9 +70,10 @@ The renderer keeps a separate point state:
 - A target can be extrapolated for display by at most 0.5 s. This extrapolation is render-only, not a new sensor measurement.
 - Static scene points stay in world coordinates. Known hit object IDs help avoid mixing adjacent surfaces; unknown static hits are continued only when their world point stays within 0.35 m on the same ray.
 - A changed/missing return or lost object association causes the old marker to fade, not travel toward an unrelated new hit.
-- The renderer caps active points at 99 and fading points at 198, fades for 0.4 s and expires points after 2.25 s without a new scan.
+- The live renderer caps the active ray layer at 99 points and the fading layer at 198 markers. When inertia is enabled, same-ray returns use a critically damped spring so changed measurements glide instead of snapping.
+- A separate session-only world-space point map deduplicates all LiDAR hits (including other-vehicle surfaces) into 0.35 m cells. Its user-configurable capacity is 500–10,000 points; old points are overwritten only after the selected capacity is reached. The accumulated map does not age out and remains drawn while the simulation is paused.
 
-The optional persistent scan map stores static world-space hits only; tracked moving-object returns are kept in the render layer instead. This visual layer performs no raycasts and never feeds its interpolated coordinates back into the raw LiDAR measurements used by sensor safety/planning.
+The optional accumulated scan map stores every accepted world-space LiDAR hit, including vehicle surfaces. Moving vehicles therefore leave a spatial scan trail in the map; it is not a live deforming mesh. The render layer separately smooths moving returns and vehicle OBB outlines. This visual layer performs no raycasts and never feeds its interpolated coordinates back into the raw LiDAR measurements used by sensor safety/planning.
 
 ## LiDAR
 
