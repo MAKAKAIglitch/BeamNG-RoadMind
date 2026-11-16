@@ -2079,18 +2079,21 @@ buildWorldModel = function()
     coordinateUnits = "meters",
     targets = {},
     obstacles = {},
-    observations = {lidar = {}, radar = {}, ultrasonic = {}},
+    observations = {lidar = {}, radar = {}, ultrasonic = {}, vehicleRegistry = {}},
     observationCount = 0,
     sourceStatus = {},
     quality = {
       invalidObservationCount = 0,
       staleObservationCount = 0,
       staleSourceCount = 0,
+      truncatedSourceCount = 0,
       lowConfidenceObservationCount = 0,
       conflictingObservationCount = 0,
       droppedObservationCount = 0,
       staleTargetCount = 0,
-      unassociatedVehicleHitCount = 0
+      unassociatedVehicleHitCount = 0,
+      unverifiedVehicleCandidateCount = 0,
+      occludedVehicleCandidateCount = 0
     }
   }
 
@@ -2126,6 +2129,29 @@ buildWorldModel = function()
       confidence = 0.63
     }
   }
+
+  local registryAge = state.vehicleRegistryTimestamp
+    and math.max(0, now - state.vehicleRegistryTimestamp) or nil
+  local registryEnabled = vehicleDetectionEnabled(settings)
+  local registryFresh = registryEnabled and state.vehicleRegistrySnapshotValid
+    and registryAge ~= nil and registryAge <= WORLD_MODEL_REGISTRY_MAX_AGE
+  model.sourceStatus.vehicleRegistry = {
+    enabled = registryEnabled,
+    timestamp = state.vehicleRegistryTimestamp,
+    dataAge = registryAge and round2(registryAge) or nil,
+    fresh = registryFresh == true,
+    stale = registryEnabled and not registryFresh,
+    truncated = state.vehicleRegistryTruncated == true,
+    generation = state.vehicleRegistryGeneration,
+    sourceKind = "simulator-assisted",
+    measurementKind = "vehicle-oriented-bounding-box-snapshot"
+  }
+  if registryEnabled and not registryFresh then
+    model.quality.staleSourceCount = model.quality.staleSourceCount + 1
+  end
+  if registryEnabled and state.vehicleRegistryTruncated then
+    model.quality.truncatedSourceCount = model.quality.truncatedSourceCount + 1
+  end
 
   local obstacleMap = {}
   local obstacleCount = 0
@@ -2255,9 +2281,12 @@ buildWorldModel = function()
             confidenceModel = "uncalibrated-raycast-proxy-heuristic",
             sourceKind = "scene-raycast-measurement",
             measurementKind = "geometric-scene-raycast-proxy",
+            sensorOrigin = finiteWorldVector(hit.origin),
+            rayDirection = finiteWorldVector(hit.direction),
             range = tonumber(hit.distance),
             rayIndex = tonumber(hit.rayIndex or hit.beamIndex),
             hitObjectId = sourceVehicleId,
+            isPredicted = false,
             targetTrackId = track and track.trackId or nil,
             targetVehicleId = knownVehicle and sourceVehicleId or nil,
             orientation = track and {
@@ -2291,6 +2320,95 @@ buildWorldModel = function()
     end
   end
 
+  -- Simulator-assisted vehicle observations use the same envelope as
+  -- scene-raycast observations, while keeping their origin explicitly labelled.
+  local vehicleCandidates = latest.vehicles or state.vehicleCandidates or {}
+  for i = 1, #vehicleCandidates do
+    local candidate = vehicleCandidates[i]
+    if candidate.visibility == "occluded" then
+      model.quality.occludedVehicleCandidateCount =
+        model.quality.occludedVehicleCandidateCount + 1
+    elseif candidate.visibility ~= "visible" then
+      model.quality.unverifiedVehicleCandidateCount =
+        model.quality.unverifiedVehicleCandidateCount + 1
+    elseif registryFresh then
+      local timestamp = tonumber(candidate.observationTimestamp or candidate.registryTimestamp)
+      local visibilityTimestamp = tonumber(candidate.visibilityTimestamp)
+      local position = finiteWorldVector(candidate.position)
+      local dataAge = timestamp and math.max(0, now - timestamp) or math.huge
+      local visibilityAge = visibilityTimestamp and math.max(0, now - visibilityTimestamp) or math.huge
+      local dimensions = candidate.dimensions
+      local orientation = candidate.orientation
+      local validDimensions = type(dimensions) == "table"
+        and type(dimensions.length) == "number" and dimensions.length > 0
+        and type(dimensions.width) == "number" and dimensions.width > 0
+        and type(dimensions.height) == "number" and dimensions.height > 0
+      local validOrientation = type(orientation) == "table"
+        and finiteWorldVector(orientation.forward) ~= nil
+        and finiteWorldVector(orientation.right) ~= nil
+        and finiteWorldVector(orientation.up) ~= nil
+
+      if not position or not timestamp or timestamp > now + 0.05
+          or not visibilityTimestamp or visibilityTimestamp > now + 0.05
+          or dataAge > WORLD_MODEL_OBSERVATION_MAX_AGE
+          or visibilityAge > TRACK_OBSERVATION_MAX_AGE
+          or not validDimensions or not validOrientation then
+        model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
+      elseif model.observationCount >= WORLD_MODEL_MAX_OBSERVATIONS then
+        model.quality.droppedObservationCount = model.quality.droppedObservationCount + 1
+      else
+        local sourceVehicleId = candidate.sourceVehicleId or candidate.id
+        local track = sourceVehicleId ~= nil
+          and state.tracksBySourceId[tostring(sourceVehicleId)] or nil
+        local confidence = track and track.confidence or 0.68
+        local observation = {
+          observationId = string.format(
+            "vehicleRegistry:%s:%s",
+            tostring(sourceVehicleId),
+            tostring(timestamp)
+          ),
+          targetTrackId = track and track.trackId or nil,
+          sourceVehicleId = sourceVehicleId,
+          position = position,
+          orientation = {
+            forward = finiteWorldVector(orientation.forward),
+            right = finiteWorldVector(orientation.right),
+            up = finiteWorldVector(orientation.up)
+          },
+          dimensions = {
+            length = dimensions.length,
+            width = dimensions.width,
+            height = dimensions.height
+          },
+          timestamp = timestamp,
+          dataAge = round2(dataAge),
+          visibilityTimestamp = visibilityTimestamp,
+          visibilityAge = round2(visibilityAge),
+          sourceSensor = "vehicleRegistry",
+          sensorName = candidate.visibleFrom or candidate.bestSensorName or "Vehicle OBB registry",
+          sourceSensors = copySensorSources(candidate.sensorSources),
+          confidence = confidence,
+          confidenceModel = "tracked-observation-confidence-heuristic",
+          sourceKind = "simulator-assisted",
+          measurementKind = "vehicle-obb-center-and-extents",
+          simulatorVelocity = finiteWorldVector(candidate.simulatorVelocity),
+          estimatedVelocity = track and finiteWorldVector(track.estimatedVelocity) or nil,
+          estimatedSpeed = track and track.estimatedSpeed or nil,
+          relativeSpeedEstimate = track and track.estimatedRelativeSpeed or nil,
+          visibility = "visible",
+          coordinateFrame = "beamng-world",
+          isPredicted = false
+        }
+        model.observations.vehicleRegistry[#model.observations.vehicleRegistry + 1] = observation
+        model.observationCount = model.observationCount + 1
+        if confidence < 0.4 then
+          model.quality.lowConfidenceObservationCount =
+            model.quality.lowConfidenceObservationCount + 1
+        end
+      end
+    end
+  end
+
   local tracks = latest.tracks or {}
   for i = 1, math.min(#tracks, WORLD_MODEL_MAX_TRACKS) do
     local track = tracks[i]
@@ -2300,7 +2418,9 @@ buildWorldModel = function()
       model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
     else
       local dataAge = math.max(0, now - timestamp)
-      if track.status == "stale" or dataAge > TRACK_OBSERVATION_MAX_AGE then
+      if timestamp > now + 0.05 then
+        model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
+      elseif track.status == "stale" or dataAge > TRACK_OBSERVATION_MAX_AGE then
         model.quality.staleTargetCount = model.quality.staleTargetCount + 1
       end
       if (track.confidence or 0) < 0.4 then
@@ -2337,7 +2457,11 @@ buildWorldModel = function()
         simulatorVelocity = finiteWorldVector(track.simulatorVelocity),
         velocitySource = track.velocitySource or "not-yet-available",
         relativeSpeedSource = track.relativeSpeedSource,
-        sourceSensors = copySensorSources(track.sourceSensors)
+        simulatorVelocity = finiteWorldVector(track.simulatorVelocity),
+        predictionHorizon = track.predictionHorizon,
+        predictedPositionKind = track.estimatedVelocity and "short-horizon-linear-extrapolation" or nil,
+        sourceSensors = copySensorSources(track.sourceSensors),
+        isPredicted = false
       }
     end
   end
@@ -3159,11 +3283,31 @@ function M.getWorldModel()
       coordinateFrame = "beamng-world",
       timestamp = state.simulationTime,
       generation = state.worldModelGeneration,
+      coordinateUnits = "meters",
       targets = {},
       obstacles = {},
-      observations = {lidar = {}, radar = {}, ultrasonic = {}},
+      observations = {lidar = {}, radar = {}, ultrasonic = {}, vehicleRegistry = {}},
       observationCount = 0,
-      summary = {targetCount = 0, obstacleCount = 0, observationCount = 0}
+      summary = {targetCount = 0, obstacleCount = 0, observationCount = 0},
+      sourceStatus = {
+        lidar = {enabled = false, fresh = false, stale = false},
+        radar = {enabled = false, fresh = false, stale = false},
+        ultrasonic = {enabled = false, fresh = false, stale = false},
+        vehicleRegistry = {enabled = false, fresh = false, stale = false}
+      },
+      quality = {
+        invalidObservationCount = 0,
+        staleObservationCount = 0,
+        staleSourceCount = 0,
+        truncatedSourceCount = 0,
+        lowConfidenceObservationCount = 0,
+        conflictingObservationCount = 0,
+        droppedObservationCount = 0,
+        staleTargetCount = 0,
+        unassociatedVehicleHitCount = 0,
+        unverifiedVehicleCandidateCount = 0,
+        occludedVehicleCandidateCount = 0
+      }
     }
   end
   -- Callers receive an independent snapshot and cannot mutate GE-owned fusion state.
