@@ -50,6 +50,16 @@ The tracker uses a 0.75 s recent-visibility cache and retains a missed target fo
 
 All vehicle positions, dimensions, orientation and the simulator-provided velocity originate from BeamNG's vehicle OBB/object data. The estimated velocities are derived values, not radar Doppler measurements. This is a simulator-assisted tracking prototype, not camera recognition or physical sensor-only tracking.
 
+## Unified world model
+
+The GE extension exports `extensions.roadmind.getWorldModel()`. It returns schema version 2 as an independent snapshot in `beamng-world` coordinates and metres.
+
+The model has separate `observations.lidar`, `observations.radar`, `observations.ultrasonic` and `observations.vehicleRegistry` arrays. Raycast observations keep their sensor origin, ray direction, range, timestamp, data age and source. Vehicle OBB observations are explicitly labelled simulator-assisted and are included only after a candidate is confirmed visible.
+
+The model exposes one tracked target per RoadMind track ID, plus spatially clustered non-vehicle raycast obstacles. A target's observed `position` is distinct from its short-horizon `predictedPosition`; simulator velocity and timestamp-derived estimated velocity are separate fields. Each source has a freshness/status record and the model reports invalid, stale, conflicting, low-confidence, truncated and dropped data counters.
+
+Vehicle targets are merged by RoadMind track ID. Non-vehicle returns are grouped into 0.75 m spatial cells; these clusters are not semantic object identities. Confidence values are heuristics, not calibrated probabilities. The complete schema and consumer guidance are in [WORLD_MODEL.md](WORLD_MODEL.md).
+
 ## Time-consistent LiDAR point display
 
 Raw scan hits are timestamped in the GE simulation clock and retain their ray index and hit object ID when the engine supplies one. The raw array remains the measurement source for downstream logic.
