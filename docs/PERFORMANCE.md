@@ -38,6 +38,16 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 - Tracks use a 0.75 s visibility-cache limit and a 1.5 s maximum observation age, with an additional missed-scan and registry-removal check.
 - A coasting track's predicted display position is limited to a 0.5 s horizon; it is not fed back as a new measurement.
 
+## Unified world-model budget
+
+- World-model schema v2 contains separate LiDAR, radar, ultrasonic and simulator-assisted vehicle-registry observation streams.
+- The snapshot is bounded to 512 observations and 128 tracked targets.
+- Building the model reuses already computed raycast hits and track data; it performs no additional scene raycasts.
+- The builder runs on incoming sensor frames and the 0.25 s detection/tracking cadence, not in the render loop.
+- `getWorldModel()` returns a deep-copied snapshot so consumers cannot mutate the live fusion state.
+- Obstacle clusters use a 0.75 m spatial cell. They are geometric hit clusters, not semantic object identities.
+- Confidence fields are uncalibrated heuristics. Freshness and provenance must be considered by consumers.
+
 ## Scheduling
 
 - Sensor scan frequencies are controlled by the selected profile and can be customized.
