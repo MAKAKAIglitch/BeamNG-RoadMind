@@ -46,6 +46,10 @@ local SENSOR_SETTING_KEYS = {
 
 local MAX_PERSISTENT_LIDAR_POINTS = 600
 local PERSISTENT_POINT_CELL_SIZE = 0.35
+local VEHICLE_REGISTRY_INTERVAL = 0.5
+local VEHICLE_DETECTION_INTERVAL = 0.25
+local MAX_REGISTRY_VEHICLES = 256
+local MAX_OCCLUSION_CHECKS_PER_CYCLE = 4
 local ROUTE_MAX_SPEED_MPS = 8.0
 local ROUTE_LOOKAHEAD_M = 550.0
 local ROUTE_REPLAN_DISTANCE = 140.0
@@ -62,6 +66,14 @@ local state = {
   frameAge = math.huge,
   vehicleGeometry = nil,
   vehicleCalibrationError = nil,
+  vehicleRegistry = {},
+  vehicleRegistryTimer = 0,
+  vehicleRegistryGeneration = 0,
+  vehicleRegistryTruncated = false,
+  vehicleDetectionTimer = 0,
+  vehicleCandidates = {},
+  occlusionRaycastsLastCycle = 0,
+  occlusionRaycastsPerSecond = 0,
   lidarPointCloud = {},
   lidarPointCells = {},
   lidarPointWriteIndex = 1,
@@ -482,6 +494,14 @@ local function detachPreviousVehicle()
   state.vehicleCalibrationError = nil
   state.activeVehicle = nil
   state.activeVehicleId = nil
+  state.vehicleRegistry = {}
+  state.vehicleRegistryTimer = 0
+  state.vehicleRegistryGeneration = 0
+  state.vehicleRegistryTruncated = false
+  state.vehicleDetectionTimer = 0
+  state.vehicleCandidates = {}
+  state.occlusionRaycastsLastCycle = 0
+  state.occlusionRaycastsPerSecond = 0
   clearPersistentLidarPoints()
   resetFrame()
 end
@@ -898,6 +918,10 @@ local function rayCountFor(settings)
   return total
 end
 
+local function vehicleDetectionEnabled(settings)
+  return settings.lidarEnabled or settings.radarEnabled or settings.ultrasonicEnabled
+end
+
 local function getGameLanguage()
   if type(settings) == "table" and type(settings.getValue) == "function" then
     local ok, language = pcall(settings.getValue, "userLanguage")
@@ -917,13 +941,26 @@ local function settingsResult()
     status = {
       visualizationEnabled = state.visualizationEnabled,
       activeVehicle = state.activeVehicleId ~= nil,
-      estimatedRaycastsPerSecond = state.visualizationEnabled and rayCountFor(settings) or 0,
+      estimatedRaycastsPerSecond = state.visualizationEnabled
+        and (rayCountFor(settings) + state.occlusionRaycastsPerSecond) or 0,
+      vehicleRegistryCount = #state.vehicleRegistry,
+      vehicleRegistryGeneration = state.vehicleRegistryGeneration,
+      vehicleRegistryTruncated = state.vehicleRegistryTruncated,
+      vehicleCandidateCount = #state.vehicleCandidates,
+      visibleVehicleCount = state.latestData and #(state.latestData.vehicles or {}) or 0,
+      occlusionRaycastsPerSecond = state.occlusionRaycastsPerSecond,
       routePilotEnabled = state.routePilotEnabled,
       routeSafetyStopped = state.routeSafetyStopped,
       routePilotError = state.routePilotError,
       routeWaypointCount = #state.routePath,
       persistentLidarPointCount = #state.lidarPointCloud,
-      detectedVehicleCount = state.latestData and #(state.latestData.vehicles or {}) or 0,
+      detectedVehicleCount = state.latestData and (function()
+        local count = 0
+        for i = 1, #(state.latestData.vehicles or {}) do
+          if state.latestData.vehicles[i].visibility == "visible" then count = count + 1 end
+        end
+        return count
+      end)() or 0,
       vehicleCalibration = state.vehicleGeometry and {
         calibrated = true,
         source = state.vehicleGeometry.source,
@@ -1227,6 +1264,7 @@ local function processLidar(lidar)
     range = lidar.range,
     forward = lidar.forward,
     right = lidar.right,
+    up = lidar.up,
     rays = returns,
     pointCount = #returns,
     rayCount = #beams
@@ -1325,120 +1363,338 @@ local function rememberLidarPoints(lidar)
   end
 end
 
-local function pointInsideSensorCone(targetPosition, mountPosition, direction, range, fovDegrees)
-  local target = vectorFromTable(targetPosition)
-  local origin = vectorFromTable(mountPosition)
-  local forward = vectorFromTable(direction)
-  if not target or not origin or not forward or type(range) ~= "number" then return false end
+local function snapshotVehicleBounds(vehicle, vehicleId)
+  local position = asVec3(safeCall(vehicle, "getPosition"))
+  local velocity = asVec3(safeCall(vehicle, "getVelocity"))
+  local box = safeCall(vehicle, "getSpawnWorldOOBB")
+  if not position or not velocity or not box then return nil end
 
-  local delta = target - origin
-  local distance = delta:length()
-  if distance < 0.5 or distance > range then return false end
-  if forward:length() < 0.00001 then return false end
+  local center = asVec3(safeCall(box, "getCenter"))
+  local half = asVec3(safeCall(box, "getHalfExtents"))
+  local axes = {
+    normalizedVec3(safeCall(box, "getAxis", 0)),
+    normalizedVec3(safeCall(box, "getAxis", 1)),
+    normalizedVec3(safeCall(box, "getAxis", 2))
+  }
+  if not center or not half or not axes[1] or not axes[2] or not axes[3] then return nil end
 
-  local cosine = math.max(-1, math.min(1, delta:normalized():dot(forward:normalized())))
-  local halfAngle = math.rad((tonumber(fovDegrees) or 0) * 0.5)
-  return cosine >= math.cos(halfAngle), distance
+  local hx, hy, hz = math.abs(half.x), math.abs(half.y), math.abs(half.z)
+  if hx < 0.1 or hy < 0.1 or hz < 0.1
+      or hx > 15 or hy > 15 or hz > 5 then
+    return nil
+  end
+
+  return {
+    id = vehicleId,
+    center = center,
+    position = position,
+    velocity = velocity,
+    axes = axes,
+    half = {hx, hy, hz},
+    radius = math.sqrt(hx * hx + hy * hy + hz * hz)
+  }
 end
 
-local function detectNearbyVehicles(data)
-  local detected = {}
-  if not state.activeVehicle or type(getAllVehicles) ~= "function" then return detected end
+local function refreshVehicleRegistry()
+  local vehicles = nil
+  if type(getAllVehicles) == "function" then
+    local ok, result = pcall(getAllVehicles)
+    if ok and type(result) == "table" then vehicles = result end
+  end
 
-  local ok, vehicles = pcall(getAllVehicles)
-  if not ok or type(vehicles) ~= "table" then return detected end
+  if not vehicles and be and type(be.getObjectCount) == "function"
+      and type(be.getObject) == "function" then
+    vehicles = {}
+    local okCount, count = pcall(be.getObjectCount, be)
+    if okCount and type(count) == "number" then
+      for index = 0, math.min(count - 1, MAX_REGISTRY_VEHICLES * 2) do
+        local okObject, vehicle = pcall(be.getObject, be, index)
+        if okObject and vehicle then vehicles[#vehicles + 1] = vehicle end
+      end
+    end
+  end
 
-  local settings = state.settings or DEFAULT_SETTINGS
-  local playerVelocity = safeCall(state.activeVehicle, "getVelocity")
+  if type(vehicles) ~= "table" then
+    state.vehicleRegistry = {}
+    state.vehicleRegistryTruncated = false
+    state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
+    return false
+  end
+
+  local registry = {}
   local examined = 0
-
-  for _, otherVehicle in pairs(vehicles) do
+  local truncated = false
+  for _, vehicle in pairs(vehicles) do
     examined = examined + 1
-    if examined > 96 then break end
+    if examined > MAX_REGISTRY_VEHICLES * 4 then
+      truncated = true
+      break
+    end
 
-    local otherId = getVehicleId(otherVehicle)
-    if otherId and otherId ~= state.activeVehicleId then
-      local position = safeCall(otherVehicle, "getPosition")
-      if position then
-        local targetPosition = {x = position.x, y = position.y, z = position.z}
-        local bestDistance = math.huge
-        local bestOrigin = nil
-        local detectedBy = {}
-
-        if settings.lidarEnabled and data.lidar then
-          local visible, distance = pointInsideSensorCone(
-            targetPosition, data.lidar.origin, data.lidar.forward,
-            data.lidar.range, data.lidar.horizontalFov or 120
-          )
-          if visible then
-            detectedBy[#detectedBy + 1] = "LiDAR"
-            bestDistance = distance
-            bestOrigin = data.lidar.origin
-          end
-        end
-
-        if settings.radarEnabled and data.radar and type(data.radar.mounts) == "table" then
-          for i = 1, #data.radar.mounts do
-            local mount = data.radar.mounts[i]
-            local visible, distance = pointInsideSensorCone(
-              targetPosition, mount.position, mount.direction, mount.range, mount.fov
-            )
-            if visible then
-              detectedBy[#detectedBy + 1] = mount.name or "Radar"
-              if distance < bestDistance then
-                bestDistance = distance
-                bestOrigin = mount.position
-              end
-            end
-          end
-        end
-
-        if settings.ultrasonicEnabled and data.ultrasonic
-            and type(data.ultrasonic.mounts) == "table" then
-          for i = 1, #data.ultrasonic.mounts do
-            local mount = data.ultrasonic.mounts[i]
-            local visible, distance = pointInsideSensorCone(
-              targetPosition, mount.position, mount.direction, mount.range, 16
-            )
-            if visible then
-              detectedBy[#detectedBy + 1] = mount.name or "Ultrasonic"
-              if distance < bestDistance then
-                bestDistance = distance
-                bestOrigin = mount.position
-              end
-            end
-          end
-        end
-
-        if #detectedBy > 0 then
-          local targetVelocity = safeCall(otherVehicle, "getVelocity")
-          local radialSpeed = nil
-          if targetVelocity and playerVelocity then
-            local relativeVelocity = targetVelocity - playerVelocity
-            local playerPosition = safeCall(state.activeVehicle, "getPosition")
-            if playerPosition then
-              local delta = position - playerPosition
-              if delta:length() > 0.001 then
-                radialSpeed = round2(relativeVelocity:dot(delta:normalized()))
-              end
-            end
-          end
-
-          detected[#detected + 1] = {
-            id = otherId,
-            position = targetPosition,
-            sensorOrigin = bestOrigin,
-            distance = round2(bestDistance),
-            radialSpeed = radialSpeed,
-            detectedBy = detectedBy
-          }
+    local vehicleId = getVehicleId(vehicle)
+    if vehicleId and tostring(vehicleId) ~= tostring(state.activeVehicleId)
+        and safeCall(vehicle, "isDeleted") ~= true
+        and safeCall(vehicle, "isDestroyed") ~= true then
+      local entry = snapshotVehicleBounds(vehicle, vehicleId)
+      if entry then
+        registry[#registry + 1] = entry
+        if #registry >= MAX_REGISTRY_VEHICLES then
+          truncated = true
+          break
         end
       end
     end
   end
 
-  table.sort(detected, function(a, b) return a.distance < b.distance end)
-  return detected
+  state.vehicleRegistry = registry
+  state.vehicleRegistryTruncated = truncated
+  state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
+  return true
+end
+
+local function projectedBoxRadius(target, axis)
+  return target.half[1] * math.abs(target.axes[1]:dot(axis))
+    + target.half[2] * math.abs(target.axes[2]:dot(axis))
+    + target.half[3] * math.abs(target.axes[3]:dot(axis))
+end
+
+local function buildSensorZones(data, settings)
+  local zones = {}
+
+  if settings.lidarEnabled and type(data.lidar) == "table" then
+    local lidar = data.lidar
+    zones[#zones + 1] = {
+      name = "Forward LiDAR",
+      sensor = "lidar",
+      origin = asVec3(lidar.origin),
+      forward = normalizedVec3(lidar.forward),
+      right = normalizedVec3(lidar.right),
+      up = normalizedVec3(lidar.up),
+      range = tonumber(lidar.range),
+      minRange = 0.35,
+      horizontalFov = tonumber(lidar.horizontalFov) or 120,
+      verticalFov = tonumber(lidar.verticalFov) or 16
+    }
+  end
+
+  if settings.radarEnabled and type(data.radar) == "table" then
+    for i = 1, #(data.radar.mounts or {}) do
+      local mount = data.radar.mounts[i]
+      zones[#zones + 1] = {
+        name = mount.name or ("Radar " .. i),
+        sensor = "radar",
+        origin = asVec3(mount.position),
+        forward = normalizedVec3(mount.direction),
+        right = normalizedVec3(mount.right),
+        up = normalizedVec3(mount.up),
+        range = tonumber(mount.range),
+        minRange = tonumber(mount.minRange) or 0.75,
+        horizontalFov = tonumber(mount.fov) or 45,
+        verticalFov = tonumber(mount.verticalFov) or 45
+      }
+    end
+  end
+
+  if settings.ultrasonicEnabled and type(data.ultrasonic) == "table" then
+    for i = 1, #(data.ultrasonic.mounts or {}) do
+      local mount = data.ultrasonic.mounts[i]
+      zones[#zones + 1] = {
+        name = mount.name or ("Ultrasonic " .. i),
+        sensor = "ultrasonic",
+        origin = asVec3(mount.position),
+        forward = normalizedVec3(mount.direction),
+        right = normalizedVec3(mount.right),
+        up = normalizedVec3(mount.up),
+        range = tonumber(mount.range) or 5,
+        minRange = tonumber(mount.minRange) or 0.08,
+        horizontalFov = tonumber(mount.fov) or 16,
+        verticalFov = tonumber(mount.verticalFov) or 20
+      }
+    end
+  end
+
+  local valid = {}
+  for i = 1, #zones do
+    local zone = zones[i]
+    if zone.origin and zone.forward and zone.right and zone.up
+        and zone.range and zone.range > zone.minRange
+        and zone.horizontalFov > 0 and zone.verticalFov > 0 then
+      valid[#valid + 1] = zone
+    end
+  end
+  return valid
+end
+
+local function targetInsideSensorZone(target, zone)
+  local delta = target.center - zone.origin
+  local distanceSquared = delta:dot(delta)
+  local maxDistance = zone.range + target.radius
+  if distanceSquared > maxDistance * maxDistance then return false end
+
+  local along = delta:dot(zone.forward)
+  local lateral = delta:dot(zone.right)
+  local vertical = delta:dot(zone.up)
+
+  local radiusForward = projectedBoxRadius(target, zone.forward)
+  local radiusRight = projectedBoxRadius(target, zone.right)
+  local radiusUp = projectedBoxRadius(target, zone.up)
+
+  local nearDistance = along - radiusForward
+  local farDistance = along + radiusForward
+  if farDistance < zone.minRange or nearDistance > zone.range then return false end
+
+  local usableDepth = math.max(0, math.min(zone.range, farDistance))
+  local horizontalHalfWidth = usableDepth * math.tan(math.rad(zone.horizontalFov * 0.5))
+  local verticalHalfHeight = usableDepth * math.tan(math.rad(zone.verticalFov * 0.5))
+  if math.abs(lateral) > horizontalHalfWidth + radiusRight then return false end
+  if math.abs(vertical) > verticalHalfHeight + radiusUp then return false end
+
+  return true, math.sqrt(distanceSquared), nearDistance, farDistance
+end
+
+local function checkTargetOcclusion(zone, target)
+  if type(castRay) ~= "function" then return "unavailable" end
+  local delta = target.center - zone.origin
+  local centerDistance = delta:length()
+  if centerDistance < 0.01 then return "unverified" end
+
+  local ok, hit = pcall(castRay, zone.origin, target.center, true, true)
+  if not ok or not hit then return "unverified" end
+
+  local hitDistance = safeField(hit, "dist")
+  local hitObject = safeField(hit, "obj")
+  local hitObjectId = getVehicleId(hitObject)
+  if hitObjectId and tostring(hitObjectId) == tostring(target.id) then
+    return "visible"
+  end
+
+  local clearance = math.max(0.35, target.radius * 0.7)
+  if type(hitDistance) == "number" and hitDistance < centerDistance - clearance then
+    return "occluded"
+  end
+  if type(hitDistance) == "number" and hitDistance <= centerDistance + target.radius then
+    return "visible"
+  end
+  return "unverified"
+end
+
+local function detectNearbyVehicles(data)
+  local candidates = {}
+  local settings = state.settings or DEFAULT_SETTINGS
+  if not state.activeVehicle or not vehicleDetectionEnabled(settings) then
+    state.vehicleCandidates = {}
+    state.occlusionRaycastsLastCycle = 0
+    state.occlusionRaycastsPerSecond = 0
+    return candidates
+  end
+
+  local zones = buildSensorZones(data, settings)
+  if #zones == 0 then
+    state.vehicleCandidates = {}
+    state.occlusionRaycastsLastCycle = 0
+    state.occlusionRaycastsPerSecond = 0
+    return candidates
+  end
+
+  local playerVelocity = safeCall(state.activeVehicle, "getVelocity")
+  for i = 1, #state.vehicleRegistry do
+    local target = state.vehicleRegistry[i]
+    local sources = {}
+    local nearestDistance = math.huge
+    local nearestZone = nil
+    local nearDistance = math.huge
+    local farDistance = 0
+
+    for zoneIndex = 1, #zones do
+      local zone = zones[zoneIndex]
+      local inside, distance, near, far = targetInsideSensorZone(target, zone)
+      if inside then
+        sources[#sources + 1] = {sensor = zone.sensor, name = zone.name}
+        if distance < nearestDistance then
+          nearestDistance = distance
+          nearestZone = zone
+        end
+        nearDistance = math.min(nearDistance, near)
+        farDistance = math.max(farDistance, far)
+      end
+    end
+
+    if #sources > 0 and nearestZone then
+      local relativeSpeed = nil
+      if playerVelocity then
+        local relativeVelocity = target.velocity - playerVelocity
+        local delta = target.center - nearestZone.origin
+        if delta:length() > 0.001 then
+          relativeSpeed = round2(relativeVelocity:dot(delta:normalized()))
+        end
+      end
+
+      candidates[#candidates + 1] = {
+        id = target.id,
+        position = {x = target.center.x, y = target.center.y, z = target.center.z},
+        velocity = {x = target.velocity.x, y = target.velocity.y, z = target.velocity.z},
+        distance = round2(nearestDistance),
+        nearDistance = round2(nearDistance),
+        farDistance = round2(farDistance),
+        relativeSpeedEstimate = relativeSpeed,
+        sensorOrigin = {x = nearestZone.origin.x, y = nearestZone.origin.y, z = nearestZone.origin.z},
+        bestSensorName = nearestZone.name,
+        sensorSources = sources,
+        sourceKind = "simulator-assisted",
+        measurementKind = "vehicle OBB registry",
+        visibility = "unverified",
+        registryGeneration = state.vehicleRegistryGeneration
+      }
+    end
+  end
+
+  table.sort(candidates, function(a, b) return a.distance < b.distance end)
+
+  local checked = 0
+  local zonesByName = {}
+  for i = 1, #zones do zonesByName[zones[i].name] = zones[i] end
+
+  local checkCount = math.min(#candidates, MAX_OCCLUSION_CHECKS_PER_CYCLE)
+  for i = 1, checkCount do
+    local candidate = candidates[i]
+    local zone = zonesByName[candidate.bestSensorName]
+    if zone then
+      for registryIndex = 1, #state.vehicleRegistry do
+        local entry = state.vehicleRegistry[registryIndex]
+        if tostring(entry.id) == tostring(candidate.id) then
+          candidate.visibility = checkTargetOcclusion(zone, entry)
+          checked = checked + 1
+          break
+        end
+      end
+    end
+  end
+
+  state.vehicleCandidates = candidates
+  state.occlusionRaycastsLastCycle = checked
+  state.occlusionRaycastsPerSecond = checked / VEHICLE_DETECTION_INTERVAL
+  return candidates
+end
+
+local function updateVehicleDetection(dt)
+  local elapsed = math.max(0, tonumber(dt) or 0)
+  state.vehicleRegistryTimer = state.vehicleRegistryTimer + elapsed
+  if state.vehicleRegistryTimer >= VEHICLE_REGISTRY_INTERVAL then
+    state.vehicleRegistryTimer = state.vehicleRegistryTimer % VEHICLE_REGISTRY_INTERVAL
+    refreshVehicleRegistry()
+  end
+
+  state.vehicleDetectionTimer = state.vehicleDetectionTimer + elapsed
+  if state.vehicleDetectionTimer < VEHICLE_DETECTION_INTERVAL then return end
+  state.vehicleDetectionTimer = state.vehicleDetectionTimer % VEHICLE_DETECTION_INTERVAL
+
+  if state.latestData then
+    state.latestData.vehicles = detectNearbyVehicles(state.latestData)
+  else
+    state.vehicleCandidates = {}
+    state.occlusionRaycastsLastCycle = 0
+    state.occlusionRaycastsPerSecond = 0
+  end
 end
 
 local function nearestForwardObstacle(data)
@@ -1488,7 +1744,10 @@ local function nearestForwardObstacle(data)
   for i = 1, #ultrasonicReturns do inspect(ultrasonicReturns[i], ultrasonicReturns[i].origin) end
 
   for i = 1, #(data.vehicles or {}) do
-    inspect(data.vehicles[i].position, originFallback)
+    local target = data.vehicles[i]
+    if target.visibility == "visible" and target.sourceKind == "simulator-assisted" then
+      inspect(target.position, originFallback)
+    end
   end
 
   return minimum
@@ -1597,7 +1856,7 @@ local function mergeSensorFrame(frame)
   end
   if type(frame.vehicleVelocity) == "table" then latest.vehicleVelocity = frame.vehicleVelocity end
 
-  latest.vehicles = detectNearbyVehicles(latest)
+  latest.vehicles = state.vehicleCandidates
   state.latestData = latest
   state.frameAge = 0
   updateRoutePilotSafety()
@@ -1630,6 +1889,7 @@ function M.onUpdate(dt)
   end
 
   state.frameAge = state.frameAge + dt
+  updateVehicleDetection(dt)
   checkTimer = checkTimer + dt
 
   if checkTimer >= CHECK_INTERVAL then
