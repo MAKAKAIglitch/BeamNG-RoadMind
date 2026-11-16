@@ -267,10 +267,10 @@ local function buildVehicleSensorLayout(geometry)
     },
     radars = {
       {name = "Front long-range", forward = front, lateral = centerLateral, up = midHeight, yaw = 0, fov = 28, range = 160, rays = 5},
-      {name = "Front left corner", forward = fMax - 0.04, lateral = left, up = midHeight, yaw = -52, fov = 58, range = 65, rays = 3},
-      {name = "Front right corner", forward = fMax - 0.04, lateral = right, up = midHeight, yaw = 52, fov = 58, range = 65, rays = 3},
-      {name = "Rear left corner", forward = fMin + 0.04, lateral = left, up = midHeight, yaw = -128, fov = 58, range = 50, rays = 3},
-      {name = "Rear right corner", forward = fMin + 0.04, lateral = right, up = midHeight, yaw = 128, fov = 58, range = 50, rays = 3}
+      {name = "Front left corner", forward = front, lateral = left, up = midHeight, yaw = -52, fov = 58, range = 65, rays = 3},
+      {name = "Front right corner", forward = front, lateral = right, up = midHeight, yaw = 52, fov = 58, range = 65, rays = 3},
+      {name = "Rear left corner", forward = rear, lateral = left, up = midHeight, yaw = -128, fov = 58, range = 50, rays = 3},
+      {name = "Rear right corner", forward = rear, lateral = right, up = midHeight, yaw = 128, fov = 58, range = 50, rays = 3}
     },
     ultrasonics = {
       {name = "Front left outer", forward = front, lateral = frontOuterLeft, up = bumperHeight, yaw = -4},
@@ -923,6 +923,8 @@ function M.updateGFX(dt)
     state.frame.ultrasonic = {mounts = {}, beams = {}}
     state.frame.cameras = {}
     state.frame.localization = nil
+    state.frame.mounts = {}
+    state.frame.geometryDebug = nil
     updatedSensors.lidar = true
     updatedSensors.radar = true
     updatedSensors.ultrasonic = true
