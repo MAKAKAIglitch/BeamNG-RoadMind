@@ -658,14 +658,16 @@ local function drawDetectedVehicles(drawer, vehicles)
   if type(vehicles) ~= "table" then return end
   for i = 1, #vehicles do
     local target = vehicles[i]
-    local position = toPoint3F(target.position)
-    local origin = toPoint3F(target.sensorOrigin)
-    if position then
-      local color = type(target.radialSpeed) == "number" and target.radialSpeed < -1.0
-        and ColorF(1.0, 0.18, 0.12, 1.0)
-        or ColorF(0.30, 1.0, 0.40, 1.0)
-      if origin then drawLine(drawer, origin, position, color) end
-      drawSphere(drawer, position, 0.42, color)
+    if target.visibility == "visible" and target.sourceKind == "simulator-assisted" then
+      local position = toPoint3F(target.position)
+      local origin = toPoint3F(target.sensorOrigin)
+      if position then
+        local color = type(target.relativeSpeedEstimate) == "number" and target.relativeSpeedEstimate < -1.0
+          and ColorF(1.0, 0.18, 0.12, 1.0)
+          or ColorF(0.30, 1.0, 0.40, 1.0)
+        if origin then drawLine(drawer, origin, position, color) end
+        drawSphere(drawer, position, 0.42, color)
+      end
     end
   end
 end
@@ -1678,6 +1680,18 @@ end
 
 local function updateVehicleDetection(dt)
   local elapsed = math.max(0, tonumber(dt) or 0)
+  local settings = state.settings or DEFAULT_SETTINGS
+  if not state.activeVehicle or not vehicleDetectionEnabled(settings) then
+    state.vehicleRegistry = {}
+    state.vehicleCandidates = {}
+    state.vehicleRegistryTimer = 0
+    state.vehicleDetectionTimer = 0
+    state.occlusionRaycastsLastCycle = 0
+    state.occlusionRaycastsPerSecond = 0
+    if state.latestData then state.latestData.vehicles = {} end
+    return
+  end
+
   state.vehicleRegistryTimer = state.vehicleRegistryTimer + elapsed
   if state.vehicleRegistryTimer >= VEHICLE_REGISTRY_INTERVAL then
     state.vehicleRegistryTimer = state.vehicleRegistryTimer % VEHICLE_REGISTRY_INTERVAL
