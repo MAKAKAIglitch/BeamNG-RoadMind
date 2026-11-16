@@ -16,6 +16,12 @@ The default is Economy: only LiDAR scans (9 queries/s). Radar and ultrasonic are
 
 These figures are calculated from configured ray counts and frequencies. They are not measured FPS or CPU percentages.
 
+## Vehicle geometry cost
+
+Vehicle dimensions are sampled once from the active vehicle's oriented bounding box during attach or explicit recalibration. The resulting local geometry and sensor layout are cached in Vehicle Lua. Each due sensor frame transforms the cached local mounts into world space using the current vehicle basis. The OBB is not queried for every ray or on the render loop.
+
+The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/debug update at the configured pose rate and a bounded set of debug lines/points; it does not add scene raycasts.
+
 ## Scheduling
 
 - Sensor scan frequencies are controlled by the selected profile and can be customized.
