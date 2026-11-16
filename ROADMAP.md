@@ -88,15 +88,16 @@ The current priority is the perception foundation. Route following, parking and 
 
 **Goal:** maintain stable target identities and motion data between sensor updates.
 
-- [ ] Introduce a RoadMind tracking ID that is separate from the transient BeamNG vehicle ID.
-- [ ] Store target position, dimensions, orientation, estimated velocity, source sensors and last-observed timestamp.
-- [ ] Associate new detections with existing tracks and prevent duplicate tracks.
-- [ ] Estimate target speed and relative speed from timestamped position changes.
-- [ ] Distinguish measured values from estimated or predicted values.
-- [ ] Add confidence, data age and track status fields.
-- [ ] Handle brief occlusion and missed scans with a bounded track-retention period.
-- [ ] Expire tracks after despawn, invalidation or timeout.
-- [ ] Reset or re-associate tracks safely when the player changes vehicle or the simulation resets.
+- [x] Introduce session-scoped RoadMind tracking IDs, separate from transient BeamNG vehicle IDs.
+- [x] Store target OBB-center position, dimensions, orientation, sensor-zone sources and last-observed simulation timestamp.
+- [x] Associate repeated observations by source vehicle ID and merge multiple sensor-zone matches into one track.
+- [x] Estimate target speed from successive timestamped positions and derive relative speed separately from simulator player velocity.
+- [x] Distinguish simulator-provided velocity, timestamp-derived estimates and short-horizon predicted display positions.
+- [x] Add confidence, data age, missed-scan count and confirmed/coasting/stale track states.
+- [x] Handle brief visibility loss with a 0.75 s visibility cache and bounded track coasting.
+- [x] Expire tracks after 1.5 s, more than six missed detection cycles, two complete registry snapshots without the source vehicle, or explicit despawn.
+- [x] Clear or re-associate tracking state on player-vehicle switch/reset and scanner shutdown.
+- [ ] Validate ID stability, velocity estimates, temporary occlusion and despawn expiry in moving-traffic scenarios.
 
 **Acceptance criteria:** moving traffic keeps stable tracking identities across scans; stale targets expire predictably; timestamps and confidence allow consumers to reject old or uncertain data.
 
