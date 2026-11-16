@@ -2023,7 +2023,355 @@ local function rememberLidarPoints(lidar)
   end
 end
 
-local function snapshotVehicleBounds(vehicle, vehicleId)
+local function worldObstacleCellKey(position)
+  local size = WORLD_MODEL_OBSTACLE_CELL_SIZE
+  return table.concat({
+    tostring(math.floor(position.x / size)),
+    tostring(math.floor(position.y / size)),
+    tostring(math.floor(position.z / size))
+  }, ":")
+end
+
+local function finiteWorldVector(value)
+  local x = safeField(value, "x")
+  local y = safeField(value, "y")
+  local z = safeField(value, "z")
+  if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number"
+      or x ~= x or y ~= y or z ~= z
+      or x == math.huge or x == -math.huge
+      or y == math.huge or y == -math.huge
+      or z == math.huge or z == -math.huge then
+    return nil
+  end
+  return {x = x, y = y, z = z}
+end
+
+local function cloneWorldModelValue(value)
+  if type(value) ~= "table" then return value end
+  local result = {}
+  for key, item in pairs(value) do
+    result[key] = cloneWorldModelValue(item)
+  end
+  return result
+end
+
+buildWorldModel = function()
+  local latest = state.latestData
+  local now = state.simulationTime
+  local settings = state.settings or DEFAULT_SETTINGS
+  state.worldModelGeneration = state.worldModelGeneration + 1
+
+  local model = {
+    schemaVersion = WORLD_MODEL_SCHEMA_VERSION,
+    generation = state.worldModelGeneration,
+    timestamp = now,
+    coordinateFrame = "beamng-world",
+    coordinateUnits = "meters",
+    targets = {},
+    obstacles = {},
+    observations = {lidar = {}, radar = {}, ultrasonic = {}},
+    observationCount = 0,
+    sourceStatus = {},
+    quality = {
+      invalidObservationCount = 0,
+      staleObservationCount = 0,
+      staleSourceCount = 0,
+      lowConfidenceObservationCount = 0,
+      conflictingObservationCount = 0,
+      droppedObservationCount = 0,
+      staleTargetCount = 0,
+      unassociatedVehicleHitCount = 0
+    }
+  }
+
+  if type(latest) ~= "table" then
+    model.summary = {targetCount = 0, obstacleCount = 0, observationCount = 0}
+    return model
+  end
+
+  local timestamps = latest.sensorTimestamps or {}
+  local sources = {
+    {
+      key = "lidar",
+      label = "Forward LiDAR",
+      enabled = settings.lidarEnabled == true,
+      data = latest.lidar,
+      hits = latest.lidar and latest.lidar.rays or {},
+      confidence = 0.68
+    },
+    {
+      key = "radar",
+      label = "Automotive radar proxy",
+      enabled = settings.radarEnabled == true,
+      data = latest.radar,
+      hits = latest.radar and latest.radar.returns or {},
+      confidence = 0.60
+    },
+    {
+      key = "ultrasonic",
+      label = "Ultrasonic raycast proxy",
+      enabled = settings.ultrasonicEnabled == true,
+      data = latest.ultrasonic,
+      hits = latest.ultrasonic and latest.ultrasonic.returns or {},
+      confidence = 0.63
+    }
+  }
+
+  local obstacleMap = {}
+  local obstacleCount = 0
+
+  local function addObstacleObservation(observation)
+    local position = observation.position
+    local key = worldObstacleCellKey(position)
+    local obstacle = obstacleMap[key]
+    if not obstacle then
+      obstacleCount = obstacleCount + 1
+      obstacle = {
+        obstacleId = "OBS:" .. key,
+        coordinateFrame = "beamng-world",
+        sumX = 0,
+        sumY = 0,
+        sumZ = 0,
+        observationCount = 0,
+        firstObservedAt = observation.timestamp,
+        lastObservedAt = observation.timestamp,
+        sourceSensors = {},
+        sourceSensorKeys = {},
+        sourceObservationIds = {},
+        conflictingObservationCount = 0
+      }
+      obstacleMap[key] = obstacle
+    end
+
+    if obstacle.observationCount > 0 then
+      local centroid = vec3(
+        obstacle.sumX / obstacle.observationCount,
+        obstacle.sumY / obstacle.observationCount,
+        obstacle.sumZ / obstacle.observationCount
+      )
+      local delta = vec3(position.x, position.y, position.z) - centroid
+      if delta:length() > WORLD_MODEL_OBSTACLE_CELL_SIZE * 1.1 then
+        obstacle.conflictingObservationCount = obstacle.conflictingObservationCount + 1
+        model.quality.conflictingObservationCount =
+          model.quality.conflictingObservationCount + 1
+      end
+    end
+
+    obstacle.sumX = obstacle.sumX + position.x
+    obstacle.sumY = obstacle.sumY + position.y
+    obstacle.sumZ = obstacle.sumZ + position.z
+    obstacle.observationCount = obstacle.observationCount + 1
+    obstacle.firstObservedAt = math.min(obstacle.firstObservedAt, observation.timestamp)
+    obstacle.lastObservedAt = math.max(obstacle.lastObservedAt, observation.timestamp)
+
+    local sourceKey = observation.sourceSensor .. ":" .. observation.sensorName
+    if not obstacle.sourceSensorKeys[sourceKey] then
+      obstacle.sourceSensorKeys[sourceKey] = true
+      obstacle.sourceSensors[#obstacle.sourceSensors + 1] = {
+        sensor = observation.sourceSensor,
+        name = observation.sensorName
+      }
+    end
+    obstacle.sourceObservationIds[#obstacle.sourceObservationIds + 1] = observation.observationId
+  end
+
+  for sourceIndex = 1, #sources do
+    local source = sources[sourceIndex]
+    local timestamp = tonumber(timestamps[source.key])
+    local age = timestamp and math.max(0, now - timestamp) or nil
+    local fresh = source.enabled and age ~= nil and age <= WORLD_MODEL_OBSERVATION_MAX_AGE
+
+    model.sourceStatus[source.key] = {
+      enabled = source.enabled,
+      timestamp = timestamp,
+      dataAge = age and round2(age) or nil,
+      fresh = fresh,
+      stale = source.enabled and not fresh,
+      sourceKind = "scene-raycast",
+      measurementKind = "geometric-raycast-proxy"
+    }
+
+    if source.enabled and not fresh then
+      model.quality.staleSourceCount = model.quality.staleSourceCount + 1
+      model.quality.staleObservationCount =
+        model.quality.staleObservationCount + #(source.hits or {})
+    elseif fresh then
+      local hits = source.hits or {}
+      for hitIndex = 1, #hits do
+        if model.observationCount >= WORLD_MODEL_MAX_OBSERVATIONS then
+          model.quality.droppedObservationCount =
+            model.quality.droppedObservationCount + (#hits - hitIndex + 1)
+          break
+        end
+
+        local hit = hits[hitIndex]
+        local position = finiteWorldVector(hit)
+        local measurementTimestamp = tonumber(hit.measurementTimestamp) or timestamp
+        local dataAge = measurementTimestamp and math.max(0, now - measurementTimestamp) or math.huge
+
+        if not position then
+          model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
+        elseif not measurementTimestamp or dataAge > WORLD_MODEL_OBSERVATION_MAX_AGE then
+          model.quality.staleObservationCount = model.quality.staleObservationCount + 1
+        else
+          local track = findTrackForLidarPoint(hit)
+          local sourceVehicleId = hit.hitObjectId
+          local knownVehicle = track ~= nil
+          if sourceVehicleId ~= nil then
+            local vehicleKey = tostring(sourceVehicleId)
+            knownVehicle = knownVehicle
+              or state.vehicleRegistryById[vehicleKey] == true
+              or state.tracksBySourceId[vehicleKey] ~= nil
+          end
+
+          local sensorName = type(hit.name) == "string" and hit.name or source.label
+          local measurementIndex = hit.rayIndex or hit.beamIndex or hitIndex
+          local observationId = string.format(
+            "%s:%s:%s",
+            source.key,
+            tostring(hit.measurementTimestamp or timestamp),
+            tostring(measurementIndex)
+          )
+
+          local observation = {
+            observationId = observationId,
+            position = position,
+            coordinateFrame = "beamng-world",
+            timestamp = measurementTimestamp,
+            dataAge = round2(dataAge),
+            sourceSensor = source.key,
+            sensorName = sensorName,
+            confidence = source.confidence,
+            confidenceModel = "uncalibrated-raycast-proxy-heuristic",
+            sourceKind = "scene-raycast-measurement",
+            measurementKind = "geometric-scene-raycast-proxy",
+            range = tonumber(hit.distance),
+            rayIndex = tonumber(hit.rayIndex or hit.beamIndex),
+            hitObjectId = sourceVehicleId,
+            targetTrackId = track and track.trackId or nil,
+            targetVehicleId = knownVehicle and sourceVehicleId or nil,
+            orientation = track and {
+              forward = vectorToPlainTable(asVec3(track.orientation.forward)),
+              right = vectorToPlainTable(asVec3(track.orientation.right)),
+              up = vectorToPlainTable(asVec3(track.orientation.up))
+            } or nil,
+            dimensions = track and {
+              length = track.dimensions.length,
+              width = track.dimensions.width,
+              height = track.dimensions.height
+            } or nil
+          }
+
+          if observation.confidence < 0.4 then
+            model.quality.lowConfidenceObservationCount =
+              model.quality.lowConfidenceObservationCount + 1
+          end
+
+          local bucket = model.observations[source.key]
+          bucket[#bucket + 1] = observation
+          model.observationCount = model.observationCount + 1
+
+          if knownVehicle and not track then
+            model.quality.unassociatedVehicleHitCount =
+              model.quality.unassociatedVehicleHitCount + 1
+          end
+          if not knownVehicle then addObstacleObservation(observation) end
+        end
+      end
+    end
+  end
+
+  local tracks = latest.tracks or {}
+  for i = 1, math.min(#tracks, WORLD_MODEL_MAX_TRACKS) do
+    local track = tracks[i]
+    local position = finiteWorldVector(track.position)
+    local timestamp = tonumber(track.timestamp or track.lastObservedAt)
+    if not position or not timestamp then
+      model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
+    else
+      local dataAge = math.max(0, now - timestamp)
+      if track.status == "stale" or dataAge > TRACK_OBSERVATION_MAX_AGE then
+        model.quality.staleTargetCount = model.quality.staleTargetCount + 1
+      end
+      if (track.confidence or 0) < 0.4 then
+        model.quality.lowConfidenceObservationCount =
+          model.quality.lowConfidenceObservationCount + 1
+      end
+
+      model.targets[#model.targets + 1] = {
+        trackId = track.trackId,
+        status = track.status,
+        position = position,
+        predictedPosition = finiteWorldVector(track.predictedPosition),
+        coordinateFrame = "beamng-world",
+        timestamp = timestamp,
+        dataAge = round2(dataAge),
+        visibilityAge = round2(math.max(0, now - (track.lastVisibilityAt or timestamp))),
+        confidence = track.confidence,
+        positionSource = track.positionSource or "simulator-obb-center",
+        sourceKind = track.sourceKind or "simulator-assisted",
+        measurementKind = track.measurementKind or "vehicle OBB registry",
+        dimensions = track.dimensions and {
+          length = track.dimensions.length,
+          width = track.dimensions.width,
+          height = track.dimensions.height
+        } or nil,
+        orientation = track.orientation and {
+          forward = vectorToPlainTable(asVec3(track.orientation.forward)),
+          right = vectorToPlainTable(asVec3(track.orientation.right)),
+          up = vectorToPlainTable(asVec3(track.orientation.up))
+        } or nil,
+        estimatedVelocity = finiteWorldVector(track.estimatedVelocity),
+        estimatedSpeed = track.estimatedSpeed,
+        estimatedRelativeSpeed = track.estimatedRelativeSpeed,
+        simulatorVelocity = finiteWorldVector(track.simulatorVelocity),
+        velocitySource = track.velocitySource or "not-yet-available",
+        relativeSpeedSource = track.relativeSpeedSource,
+        sourceSensors = copySensorSources(track.sourceSensors)
+      }
+    end
+  end
+
+  for _, obstacle in pairs(obstacleMap) do
+    local count = math.max(1, obstacle.observationCount)
+    local sourceCount = #obstacle.sourceSensors
+    model.obstacles[#model.obstacles + 1] = {
+      obstacleId = obstacle.obstacleId,
+      type = "raycast-point-cluster",
+      position = {
+        x = obstacle.sumX / count,
+        y = obstacle.sumY / count,
+        z = obstacle.sumZ / count
+      },
+      coordinateFrame = "beamng-world",
+      timestamp = obstacle.lastObservedAt,
+      dataAge = round2(math.max(0, now - obstacle.lastObservedAt)),
+      confidence = math.min(0.9, 0.55 + math.max(0, sourceCount - 1) * 0.12),
+      confidenceModel = "sensor-agreement-heuristic-not-calibrated",
+      sourceKind = "scene-raycast",
+      measurementKind = "deduplicated-geometric-raycast-points",
+      sourceSensors = obstacle.sourceSensors,
+      sourceObservationIds = obstacle.sourceObservationIds,
+      observationCount = obstacle.observationCount,
+      conflictingObservationCount = obstacle.conflictingObservationCount
+    }
+  end
+
+  table.sort(model.obstacles, function(a, b)
+    if a.dataAge == b.dataAge then return a.obstacleId < b.obstacleId end
+    return a.dataAge < b.dataAge
+  end)
+
+  model.summary = {
+    targetCount = #model.targets,
+    obstacleCount = #model.obstacles,
+    observationCount = model.observationCount,
+    staleSourceCount = model.quality.staleSourceCount
+  }
+  return model
+end
+
+
   local position = asVec3(safeCall(vehicle, "getPosition"))
   local velocity = asVec3(safeCall(vehicle, "getVelocity"))
   local box = safeCall(vehicle, "getSpawnWorldOOBB")
