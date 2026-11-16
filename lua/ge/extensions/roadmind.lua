@@ -81,6 +81,9 @@ local MAX_ROUTE_INPUT_POINTS = 12
 local MAX_ROUTE_PATH_NODES = 256
 local MAX_ROUTE_POINT_ROAD_DISTANCE = 100
 local ROUTE_DESTINATION_REACHED_M = 12
+local MAX_ROUTE_ENDPOINT_OFFSET_M = 60
+local ROUTE_MAX_DEVIATION_M = 30
+local ROUTE_MAX_LOST_UPDATES = 4
 
 local state = {
   activeVehicleId = nil,
@@ -134,6 +137,8 @@ local state = {
   routeProgressPercent = 0,
   routeProgressTimer = 0,
   routeDistanceToPath = nil,
+  routeLostUpdates = 0,
+  routeDestinationSnapDistance = nil,
   roadUpdateTimer = 0,
   roadState = nil
 }
@@ -541,7 +546,7 @@ local function buildRoadRouteThroughPoints(vehicle, routePoints)
                 local lastPoint = points[#points]
                 local dx, dy, dz = lastPoint.x - toPosition.x, lastPoint.y - toPosition.y, lastPoint.z - toPosition.z
                 local endpointError = math.sqrt(dx * dx + dy * dy + dz * dz)
-                if endpointError <= MAX_ROUTE_POINT_ROAD_DISTANCE then
+                if endpointError <= MAX_ROUTE_ENDPOINT_OFFSET_M then
                   local score = length + endpointError * 2 - headingAlignment * 25
                   if score < bestScore then
                     bestIds, bestPoints, bestScore = path, points, score
@@ -625,7 +630,17 @@ local function startNativeRouteAI(vehicle)
   state.routeProgressPercent = 0
   state.routeProgressTimer = 0
   state.routeDistanceToPath = nil
+  state.routeLostUpdates = 0
   state.routeCompleted = false
+  state.routeDestinationSnapDistance = nil
+  if #state.routeInputPoints > 0 then
+    local destination = state.routeInputPoints[#state.routeInputPoints]
+    local endpoint = state.routePathEnd
+    if destination and endpoint then
+      local dx, dy, dz = endpoint.x - destination.x, endpoint.y - destination.y, endpoint.z - destination.z
+      state.routeDestinationSnapDistance = round2(math.sqrt(dx * dx + dy * dy + dz * dz))
+    end
+  end
   return true
 end
 
@@ -1510,6 +1525,8 @@ local function settingsResult()
       routeProgressIndex = state.routeProgressIndex,
       routeProgressPercent = math.floor((state.routeProgressPercent or 0) * 10 + 0.5) / 10,
       routeDistanceToPath = state.routeDistanceToPath and round2(state.routeDistanceToPath) or nil,
+      routeLostUpdates = state.routeLostUpdates or 0,
+      routeDestinationSnapDistance = state.routeDestinationSnapDistance,
       roadLocalizationQuality = state.roadState and state.roadState.quality or "unavailable",
       roadDistanceToSegment = state.roadState and state.roadState.distanceToSegment
         and round2(state.roadState.distanceToSegment) or nil,
@@ -1803,7 +1820,14 @@ function M.setRoutePoints(encodedPoints)
   state.routeProgressPercent = 0
   state.routeProgressTimer = 0
   state.routeDistanceToPath = nil
+  state.routeLostUpdates = 0
   state.routeCompleted = false
+  state.routeDestinationSnapDistance = nil
+  local destination, endpoint = points[#points], state.routePathEnd
+  if destination and endpoint then
+    local dx, dy, dz = endpoint.x - destination.x, endpoint.y - destination.y, endpoint.z - destination.z
+    state.routeDestinationSnapDistance = round2(math.sqrt(dx * dx + dy * dy + dz * dz))
+  end
   log("I", "roadmind", string.format("Loaded %d ordered route point(s), %d NavGraph nodes", #points, #pathIds))
   return settingsResult()
 end
@@ -1821,7 +1845,10 @@ function M.clearRoutePoints()
   state.routeProgressPercent = 0
   state.routeProgressTimer = 0
   state.routeDistanceToPath = nil
+  state.routeLostUpdates = 0
+  state.routeDestinationSnapDistance = nil
   state.routeCompleted = false
+  state.routePilotVehicleId = nil
   return settingsResult()
 end
 
@@ -3482,17 +3509,34 @@ local function updateRouteProgress(dt)
   local position = asVec3(safeCall(state.activeVehicle, "getPosition"))
   if not position then return end
   local firstIndex = math.max(1, state.routeProgressIndex or 1)
-  local lastIndex = math.min(#state.routePath, firstIndex + 12)
+  local lastIndex = math.min(#state.routePath - 1, firstIndex + 12)
   local bestIndex, bestDistance = firstIndex, math.huge
+
+  -- Measure distance to route segments, not isolated nodes, to avoid false
+  -- route-loss reports on maps with long NavGraph edges.
   for i = firstIndex, lastIndex do
-    local point = state.routePath[i]
-    local dx, dy = point.x - position.x, point.y - position.y
-    local distance = math.sqrt(dx * dx + dy * dy)
+    local a, b = state.routePath[i], state.routePath[i + 1]
+    local dx, dy = b.x - a.x, b.y - a.y
+    local lengthSquared = dx * dx + dy * dy
+    local projection = 0
+    if lengthSquared > 0.0001 then
+      projection = math.max(0, math.min(1,
+        ((position.x - a.x) * dx + (position.y - a.y) * dy) / lengthSquared))
+    end
+    local nearestX, nearestY = a.x + dx * projection, a.y + dy * projection
+    local offsetX, offsetY = position.x - nearestX, position.y - nearestY
+    local distance = math.sqrt(offsetX * offsetX + offsetY * offsetY)
     if distance < bestDistance then bestDistance = distance; bestIndex = i end
   end
+
   state.routeProgressIndex = math.max(firstIndex, bestIndex)
   state.routeDistanceToPath = bestDistance
-  state.routeProgressPercent = (state.routeProgressIndex - 1) / (#state.routePath - 1) * 100
+  state.routeProgressPercent = state.routeProgressIndex / (#state.routePath - 1) * 100
+  if bestDistance > ROUTE_MAX_DEVIATION_M then
+    state.routeLostUpdates = (state.routeLostUpdates or 0) + 1
+  else
+    state.routeLostUpdates = 0
+  end
 end
 
 local function updateRoutePilotSafety(dt)
@@ -3513,6 +3557,15 @@ local function updateRoutePilotSafety(dt)
   end
 
   updateRouteProgress(dt)
+  if state.routePilotStarted and (state.routeLostUpdates or 0) >= ROUTE_MAX_LOST_UPDATES then
+    stopNativeRouteAI(state.activeVehicle)
+    state.routePilotStarted = false
+    state.routeSafetyStopped = true
+    state.routePilotError = "Route localization lost"
+    state.routeRetryCooldown = 3.0
+    log("W", "roadmind", "Route pilot stopped: vehicle left the planned route corridor")
+    return
+  end
 
   if state.frameAge > MAX_FRAME_AGE or not state.latestData then
     if state.routePilotStarted then
@@ -3537,10 +3590,10 @@ local function updateRoutePilotSafety(dt)
   end
 
   if state.routePilotStarted and #state.routeInputPoints > 0 then
-    local destination = state.routeInputPoints[#state.routeInputPoints]
+    local endpoint = state.routePathEnd
     local position = asVec3(safeCall(state.activeVehicle, "getPosition"))
-    if position and destination then
-      local dx, dy, dz = destination.x - position.x, destination.y - position.y, destination.z - position.z
+    if position and endpoint then
+      local dx, dy, dz = endpoint.x - position.x, endpoint.y - position.y, endpoint.z - position.z
       if math.sqrt(dx * dx + dy * dy + dz * dz) <= ROUTE_DESTINATION_REACHED_M then
         stopNativeRouteAI(state.activeVehicle)
         state.routePilotEnabled = false
@@ -3742,6 +3795,38 @@ local function cloneWorldModelValue(value)
     result[key] = cloneWorldModelValue(item)
   end
   return result
+end
+
+function M.getRouteState()
+  return {
+    schemaVersion = 1,
+    coordinateFrame = "beamng-world",
+    coordinateUnits = "meters",
+    timestamp = state.simulationTime,
+    road = cloneWorldModelValue(state.roadState or {
+      valid = false,
+      quality = "unavailable",
+      timestamp = state.simulationTime,
+      corridor = {}
+    }),
+    route = {
+      enabled = state.routePilotEnabled,
+      started = state.routePilotStarted,
+      safetyStopped = state.routeSafetyStopped,
+      completed = state.routeCompleted,
+      source = #state.routeInputPoints > 0 and "ordered-user-points" or "forward-navgraph",
+      inputPoints = cloneWorldModelValue(state.routeInputPoints),
+      path = cloneWorldModelValue(state.routePath),
+      progressIndex = state.routeProgressIndex,
+      progressPercent = state.routeProgressPercent,
+      distanceToPath = state.routeDistanceToPath,
+      destinationSnapDistance = state.routeDestinationSnapDistance,
+      nextTarget = cloneWorldModelValue(
+        state.routePath[math.min(#state.routePath, (state.routeProgressIndex or 1) + 1)]
+      ),
+      error = state.routePilotError
+    }
+  }
 end
 
 function M.getWorldModel()

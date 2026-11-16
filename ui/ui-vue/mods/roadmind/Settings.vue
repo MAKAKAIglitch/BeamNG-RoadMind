@@ -108,7 +108,7 @@
         :placeholder="t('routePointsPlaceholder')"
         :disabled="busy"
       ></textarea>
-      <div class="roadmind-presets">
+      <div class="roadmind-route-actions">
         <BngButton :accent="ACCENTS.main" :disabled="busy" @click="applyRoutePoints">
           {{ t("applyRoutePoints") }}
         </BngButton>
@@ -124,6 +124,12 @@
         {{ t("roadLocalization") }}: {{ t("roadQuality_" + (status.roadLocalizationQuality || "unavailable")) }}
         <span v-if="status.roadDistanceToSegment !== undefined">
           · {{ status.roadDistanceToSegment.toFixed(1) }} m
+        </span>
+        <span v-if="status.routeDistanceToPath !== undefined">
+          · {{ t("routePathOffset") }}: {{ status.routeDistanceToPath.toFixed(1) }} m
+        </span>
+        <span v-if="status.routeDestinationSnapDistance !== undefined">
+          · {{ t("destinationSnap") }}: {{ status.routeDestinationSnapDistance.toFixed(1) }} m
         </span>
       </p>
       <p v-if="status.routeCompleted" class="roadmind-status active">{{ t("routeCompleted") }}</p>
@@ -385,8 +391,15 @@ const EN = {
   routeInputCount: "Input points",
   routeProgress: "Route progress",
   roadLocalization: "Road localization",
+  routePathOffset: "Route offset",
+  destinationSnap: "Road-node snap",
   routePointsFormat: "Enter 1–12 lines with three numeric values: X, Y, Z.",
-  routeCompleted: "Destination reached",
+  routePointsJson: "Route data could not be decoded.",
+  routePointOffRoad: "One of the points is too far from a road on this map.",
+  routeNoConnectedPath: "The road graph has no connected path between these points.",
+  routePathLimit: "The route is too long for the current waypoint limit.",
+  routeLocalizationLost: "Vehicle left the planned route; the pilot stopped and will try to replan.",
+  routeCompleted: "Destination road node reached",
   roadQuality_high: "High",
   roadQuality_medium: "Medium",
   roadQuality_low: "Low",
@@ -495,8 +508,15 @@ const RU = {
   routeInputCount: "Точек задано",
   routeProgress: "Прогресс",
   roadLocalization: "Привязка к дороге",
+  routePathOffset: "Отклонение от маршрута",
+  destinationSnap: "Смещение до узла дороги",
   routePointsFormat: "Введи от 1 до 12 строк по три числа: X, Y, Z.",
-  routeCompleted: "Пункт назначения достигнут",
+  routePointsJson: "Не удалось прочитать данные маршрута.",
+  routePointOffRoad: "Одна из точек слишком далеко от дороги на этой карте.",
+  routeNoConnectedPath: "В дорожном графе нет связного пути между этими точками.",
+  routePathLimit: "Маршрут превышает текущий лимит узлов.",
+  routeLocalizationLost: "Автомобиль покинул маршрут. Автопилот остановлен и попробует перестроить путь.",
+  routeCompleted: "Достигнут конечный узел дороги",
   roadQuality_high: "Высокая",
   roadQuality_medium: "Средняя",
   roadQuality_low: "Низкая",
@@ -591,6 +611,15 @@ function routeErrorText(message) {
   if (value === "NavGraph route API is unavailable on this map") return t("routeApiMissing")
   if (value === "Vehicle heading is invalid" || value === "Could not read vehicle position or heading") return t("routeHeadingInvalid")
   if (value === "The active vehicle changed") return t("routeVehicleChanged")
+  if (value === "Route localization lost") return t("routeLocalizationLost")
+  if (value === "Route points must be supplied as JSON") return t("routePointsJson")
+  if (value === "Route requires 1-12 ordered XYZ points"
+      || value === "Route points must contain finite world X, Y and Z coordinates") return t("routePointsFormat")
+  if (value === "A route point is too far from the road network"
+      || value === "Could not find a road segment for a route point") return t("routePointOffRoad")
+  if (value === "No connected NavGraph path exists between route points"
+      || value === "The route does not contain enough connected road nodes") return t("routeNoConnectedPath")
+  if (value === "Route exceeds the NavGraph waypoint limit") return t("routePathLimit")
 
   const obstacle = value.match(/^Obstacle inside ([0-9.]+) m safety distance$/)
   if (obstacle) return t("routeObstacle").replace("{distance}", obstacle[1])
@@ -629,6 +658,8 @@ const status = ref({
   routeInputPointCount: 0,
   routeProgressPercent: 0,
   routeCompleted: false,
+  routeDistanceToPath: undefined,
+  routeDestinationSnapDistance: undefined,
   roadLocalizationQuality: "unavailable",
   roadDistanceToSegment: undefined,
   persistentLidarPointCount: 0,
@@ -683,7 +714,7 @@ const ultrasonicRateOptions = [1, 2].map(value => ({ value, label: value + " Hz"
 function acceptResult(result) {
   if (!result || result.ok === false) {
     const message = result && result.error
-    error.value = message === "No active player vehicle" ? t("noVehicle") : (message || t("error"))
+    error.value = message === "No active player vehicle" ? t("noVehicle") : (message ? routeErrorText(message) : t("error"))
     return false
   }
 
@@ -997,6 +1028,28 @@ onMounted(() => {
 }
 .roadmind-track-sensors {
   overflow-wrap: anywhere;
+}
+.roadmind-route-points-label {
+  font-size: 0.9em;
+  font-weight: 600;
+}
+.roadmind-route-points {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 5.5em;
+  padding: 0.55em;
+  border: 1px solid var(--bng-cool-gray-700, rgba(255,255,255,0.18));
+  border-radius: 0.25em;
+  color: var(--bng-cool-gray-100, #eee);
+  background: var(--bng-cool-gray-900, rgba(0,0,0,0.25));
+  font: inherit;
+  font-family: monospace;
+  resize: vertical;
+}
+.roadmind-route-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5em;
 }
 .roadmind-error {
   color: var(--bng-add-red-400, #f88);
