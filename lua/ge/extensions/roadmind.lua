@@ -1366,6 +1366,8 @@ local function settingsResult()
         and (state.worldModel.quality.conflictingObservationCount or 0) or 0,
       worldModelTruncatedSourceCount = state.worldModel
         and (state.worldModel.quality.truncatedSourceCount or 0) or 0,
+      worldModelRegistryEnabled = state.worldModel and state.worldModel.sourceStatus.vehicleRegistry
+        and state.worldModel.sourceStatus.vehicleRegistry.enabled or false,
       worldModelRegistryFresh = state.worldModel and state.worldModel.sourceStatus.vehicleRegistry
         and state.worldModel.sourceStatus.vehicleRegistry.fresh or false,
       vehicleCalibration = state.vehicleGeometry and {
