@@ -164,6 +164,21 @@
       <p v-if="status.routePilotError && status.routePilotEnabled" class="roadmind-error">
         {{ routeErrorText(status.routePilotError) }}
       </p>
+      <div class="roadmind-world-model">
+        <strong>{{ t("localPlanner") }}: {{ t("plannerStatus_" + (status.plannerStatus || "idle")) }}</strong>
+        <span class="roadmind-track-metrics">
+          {{ t("plannerCandidates") }}: {{ status.plannerCandidateCount || 0 }}
+          · {{ t("plannerRejected") }}: {{ status.plannerRejectedCandidateCount || 0 }}
+        </span>
+        <span v-if="status.plannerSelectedScore !== undefined" class="roadmind-track-metrics">
+          {{ t("plannerOffset") }}: {{ Number(status.plannerSelectedOffset || 0).toFixed(2) }} m
+          · {{ t("plannerClearance") }}: {{ Number(status.plannerMinimumClearance || 0).toFixed(2) }} m
+          · {{ t("plannerRoadMargin") }}: {{ Number(status.plannerMinimumRoadMargin || 0).toFixed(2) }} m
+        </span>
+        <span class="roadmind-note">{{ t("plannerReason_" + (status.plannerReasonCode || "inactive")) }}</span>
+        <p class="roadmind-note">{{ t("plannerBoundaryNote") }}</p>
+        <p class="roadmind-note">{{ t("plannerControlNote") }}</p>
+      </div>
     </section>
 
     <section class="roadmind-section">
@@ -454,6 +469,30 @@ const EN = {
   startRoute: "Drive on road network",
   stopRoute: "Stop route pilot",
   routeSafetyStop: "The vehicle is stopping or waiting for fresh, clear sensor data.",
+  localPlanner: "Local trajectory planner",
+  plannerStatus_idle: "Inactive",
+  plannerStatus_waiting: "Waiting for valid data",
+  plannerStatus_ready: "Safe trajectory selected",
+  plannerStatus_blocked: "No safe trajectory",
+  plannerCandidates: "Candidates",
+  plannerRejected: "Rejected",
+  plannerOffset: "Selected lateral offset",
+  plannerClearance: "Obstacle clearance",
+  plannerRoadMargin: "Road-corridor margin",
+  plannerReason_inactive: "The route pilot is inactive.",
+  plannerReason_sensor_stale: "Waiting for a fresh enabled obstacle sensor.",
+  plannerReason_road_unavailable: "Road localization is unavailable or uncertain.",
+  plannerReason_vehicle_geometry: "The calibrated vehicle footprint is unavailable.",
+  plannerReason_route_unavailable: "A valid connected route is unavailable.",
+  plannerReason_selected: "The best-scoring safe trajectory is shown in green.",
+  plannerReason_no_safe_candidate: "Every candidate failed at least one safety check.",
+  plannerReason_obstacle: "All candidates intersect a scene obstacle or lack clearance.",
+  plannerReason_vehicle: "Tracked traffic overlaps the candidate footprints.",
+  plannerReason_road_edge: "The vehicle body does not fit inside the conservative road corridor.",
+  plannerReason_turning_radius: "The route exceeds the estimated turning capability.",
+  plannerBoundaryNote: "Road edges are a conservative NavGraph-centreline width estimate, not detected lane boundaries.",
+  plannerControlNote: "This phase previews trajectories and can stop the built-in route AI. It does not steer, accelerate or brake along the selected path.",
+  plannerStopError: "The local planner stopped the route pilot because it could not approve a safe path.",
 
   scanRate: "Scan rate",
   range: "Maximum range",
@@ -581,6 +620,30 @@ const RU = {
   startRoute: "Ехать по дорожной сети",
   stopRoute: "Остановить автопилот",
   routeSafetyStop: "Автомобиль останавливается или ждёт новых данных без препятствий.",
+  localPlanner: "Локальный планировщик траектории",
+  plannerStatus_idle: "Неактивен",
+  plannerStatus_waiting: "Ожидание данных",
+  plannerStatus_ready: "Безопасная траектория выбрана",
+  plannerStatus_blocked: "Нет безопасной траектории",
+  plannerCandidates: "Вариантов",
+  plannerRejected: "Отклонено",
+  plannerOffset: "Боковое смещение",
+  plannerClearance: "Запас до препятствий",
+  plannerRoadMargin: "Запас до края коридора",
+  plannerReason_inactive: "Автопилот по маршруту выключен.",
+  plannerReason_sensor_stale: "Ожидание свежих данных включённого датчика препятствий.",
+  plannerReason_road_unavailable: "Привязка к дороге недоступна или недостаточно точна.",
+  plannerReason_vehicle_geometry: "Нет откалиброванного габарита автомобиля.",
+  plannerReason_route_unavailable: "Нет корректного связного маршрута.",
+  plannerReason_selected: "Лучший безопасный вариант показан зелёным.",
+  plannerReason_no_safe_candidate: "Все варианты не прошли хотя бы одну проверку безопасности.",
+  plannerReason_obstacle: "Все варианты пересекают препятствие или не имеют запаса.",
+  plannerReason_vehicle: "Треки машин пересекаются с габаритами вариантов.",
+  plannerReason_road_edge: "Габариты машины не помещаются в расчётный дорожный коридор.",
+  plannerReason_turning_radius: "Маршрут превышает расчётную манёвренность машины.",
+  plannerBoundaryNote: "Границы дороги оцениваются по ширине от NavGraph, а не определяются по полосам.",
+  plannerControlNote: "Этап показывает траектории и может остановить штатный AI. Рулём, газом и тормозом по выбранной траектории он пока не управляет.",
+  plannerStopError: "Планировщик остановил автопилот: безопасный путь не подтверждён.",
   routeWaitingData: "Ожидание свежих данных датчиков",
   routeNoRoadNodes: "Не удалось найти дорожные узлы рядом с автомобилем и впереди него",
   routeNoPath: "Не удалось построить связный путь по дорожному графу",
@@ -657,6 +720,7 @@ function routeErrorText(message) {
   const value = String(message || "")
   if (!String(locale.value).toLowerCase().startsWith("ru")) return value
 
+  if (value.startsWith("Local planner:")) return t("plannerStopError")
   if (value === "Waiting for fresh sensor data") return t("routeWaitingData")
   if (value === "Could not find connected road nodes near the vehicle and forward target") return t("routeNoRoadNodes")
   if (value === "No valid forward road path could be built from the current NavGraph") return t("routeNoPath")
@@ -710,6 +774,14 @@ const status = ref({
   estimatedRaycastsPerSecond: 0,
   routePilotEnabled: false,
   routeSafetyStopped: false,
+  plannerStatus: "idle",
+  plannerReasonCode: "inactive",
+  plannerCandidateCount: 0,
+  plannerRejectedCandidateCount: 0,
+  plannerSelectedScore: undefined,
+  plannerMinimumClearance: undefined,
+  plannerMinimumRoadMargin: undefined,
+  plannerSelectedOffset: undefined,
   routeInputPointCount: 0,
   routeProgressPercent: 0,
   routeCompleted: false,
