@@ -53,6 +53,11 @@ local LIDAR_POINT_FADE_SECONDS = 0.40
 local LIDAR_RENDER_POINT_MAX_AGE = 2.25
 local LIDAR_STATIC_MATCH_DISTANCE = 0.35
 local LIDAR_TRACK_LOCAL_MATCH_DISTANCE = 0.85
+local WORLD_MODEL_SCHEMA_VERSION = 1
+local WORLD_MODEL_OBSERVATION_MAX_AGE = 1.5
+local WORLD_MODEL_OBSTACLE_CELL_SIZE = 0.75
+local WORLD_MODEL_MAX_OBSERVATIONS = 256
+local WORLD_MODEL_MAX_TRACKS = 128
 local VEHICLE_REGISTRY_INTERVAL = 0.5
 local VEHICLE_DETECTION_INTERVAL = 0.25
 local MAX_REGISTRY_VEHICLES = 256
@@ -107,6 +112,8 @@ local state = {
   lidarFadingPoints = {},
   lidarRenderScanTimestamp = 0,
   lidarRenderScanSequence = 0,
+  worldModel = nil,
+  worldModelGeneration = 0,
   routePilotEnabled = false,
   routePilotStarted = false,
   routeSafetyStopped = false,
@@ -474,6 +481,7 @@ local function resetTrackingState(resetClock)
   state.tracksBySourceId = {}
   state.lidarTrackGrid = {}
   state.trackCount = 0
+  state.worldModel = nil
   state.occlusionCache = {}
   state.occlusionCursor = 1
   state.vehicleCandidates = {}
@@ -771,6 +779,7 @@ end
 local function resetFrame()
   state.latestData = nil
   state.frameAge = math.huge
+  state.worldModel = nil
   clearLidarRenderState()
 end
 
@@ -1338,6 +1347,11 @@ local function settingsResult()
         end
         return count
       end)() or 0,
+      worldModelGeneration = state.worldModel and state.worldModel.generation or 0,
+      worldModelTargetCount = state.worldModel and #(state.worldModel.targets or {}) or 0,
+      worldModelObstacleCount = state.worldModel and #(state.worldModel.obstacles or {}) or 0,
+      worldModelObservationCount = state.worldModel and (state.worldModel.observationCount or 0) or 0,
+      worldModelStaleSourceCount = state.worldModel and (state.worldModel.quality.staleSourceCount or 0) or 0,
       vehicleCalibration = state.vehicleGeometry and {
         calibrated = true,
         source = state.vehicleGeometry.source,
@@ -2444,6 +2458,7 @@ local function detectNearbyVehicles(data)
 end
 
 local buildLidarRenderPoints
+local buildWorldModel
 
 local function updateVehicleDetection(dt)
   local elapsed = math.max(0, tonumber(dt) or 0)
@@ -2492,6 +2507,7 @@ local function updateVehicleDetection(dt)
   if state.latestData then
     state.latestData.vehicles = candidates
     state.latestData.tracks = tracks
+    state.worldModel = buildWorldModel and buildWorldModel() or state.worldModel
   end
 end
 
@@ -2679,6 +2695,7 @@ local function mergeSensorFrame(frame)
   latest.vehicles = state.vehicleCandidates
   state.latestData = latest
   state.frameAge = 0
+  state.worldModel = buildWorldModel and buildWorldModel() or state.worldModel
   updateRoutePilotSafety()
 end
 
@@ -2748,6 +2765,23 @@ function M.onVehicleDestroyed(vehicleId)
   state.vehicleRegistryById[key] = nil
   state.occlusionCache[key] = nil
   state.lidarTrackGrid = {}
+end
+
+function M.getWorldModel()
+  if buildWorldModel then state.worldModel = buildWorldModel() end
+  if not state.worldModel then
+    return {
+      schemaVersion = WORLD_MODEL_SCHEMA_VERSION,
+      coordinateFrame = "beamng-world",
+      timestamp = state.simulationTime,
+      generation = state.worldModelGeneration,
+      targets = {},
+      obstacles = {},
+      observations = {lidar = {}, radar = {}, ultrasonic = {}},
+      observationCount = 0
+    }
+  end
+  return state.worldModel
 end
 
 return M
