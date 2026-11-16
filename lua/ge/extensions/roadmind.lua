@@ -147,6 +147,9 @@ local state = {
 
 local checkTimer = 0
 
+-- Forward declarations used by the sensor-frame and world-model pipeline.
+local buildLidarRenderPoints, buildWorldModel
+
 local function boolString(value)
   return value and "true" or "false"
 end
@@ -3418,9 +3421,6 @@ local function detectNearbyVehicles(data)
   state.occlusionRaycastsPerSecond = checked / VEHICLE_DETECTION_INTERVAL
   return candidates
 end
-
-local buildLidarRenderPoints
-local buildWorldModel
 
 local function updateVehicleDetection(dt)
   local elapsed = math.max(0, tonumber(dt) or 0)
