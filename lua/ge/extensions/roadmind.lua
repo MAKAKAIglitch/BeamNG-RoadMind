@@ -1959,13 +1959,16 @@ function M.onUpdate(dt)
   end
 
   state.frameAge = state.frameAge + dt
-  updateVehicleDetection(dt)
   checkTimer = checkTimer + dt
 
   if checkTimer >= CHECK_INTERVAL then
     checkTimer = 0
     syncPlayerVehicle()
   end
+
+  -- Refresh the player identity before building targets so a vehicle switch
+  -- cannot briefly register the new player car as an external target.
+  updateVehicleDetection(dt)
 
   if state.routePilotEnabled then
     updateRoutePilotSafety(dt)
