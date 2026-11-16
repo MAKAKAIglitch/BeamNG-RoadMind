@@ -48,7 +48,9 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 
 ## Rendering budget
 
-A maximum of 51 LiDAR hits, 17 radar ray directions and 36 ultrasonic ray directions are processed by the sensor backend. The number of visible return markers is bounded by the number of valid hits. Seven camera frustums add a fixed number of debug lines.
+The High preset scans 51 LiDAR directions (17 × 3); the configurable slider allows up to 99 directions (33 × 3). Radar and ultrasonic limits remain 17 and 36 directions respectively.
+
+The time-consistent LiDAR renderer is capped at 99 active points plus 198 fading points. It updates at most 297 render markers per graphics frame, with a 0.5 s maximum target-motion prediction horizon and a 0.75 m per-frame movement cap. The fading lifetime is 0.4 s and an unobserved render point expires after 2.25 s. This work performs no scene raycasts and does not alter raw sensor hits. Seven camera frustums add a fixed number of debug lines.
 
 ## Profiling procedure
 
