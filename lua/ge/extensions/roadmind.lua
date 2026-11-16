@@ -425,8 +425,21 @@ local function buildForwardRoadPath(vehicle)
             )
             local targetError = endDelta:length()
 
-            if headingAlignment > -0.15 and targetError <= 180 then
-              local score = length + targetError * 2 - headingAlignment * 25
+            local startDelta = vec3(
+              points[1].x - position.x,
+              points[1].y - position.y,
+              0
+            )
+            local startDistance = startDelta:length()
+            local startAlignment = startDistance > 0.5
+              and startDelta:dot(flatForward) / startDistance or 1
+
+            -- Vehicle AI treats the first NavGraph ID as its next waypoint.
+            -- Reject a candidate that would make it drive back to a node behind us.
+            if startDistance <= 90 and (startDistance <= 3 or startAlignment >= -0.15)
+                and headingAlignment > -0.15 and targetError <= 180 then
+              local score = length + targetError * 2
+                + startDistance * 0.5 - headingAlignment * 25 - startAlignment * 15
               if score < bestScore then
                 bestIds, bestPoints, bestScore = path, points, score
               end
@@ -532,6 +545,17 @@ local function buildRoadRouteThroughPoints(vehicle, routePoints)
 
             if valid and #points >= 2 then
               local headingAlignment = 0
+              local startDelta = vec3(
+                points[1].x - fromPosition.x,
+                points[1].y - fromPosition.y,
+                0
+              )
+              local startDistance = startDelta:length()
+              local startAlignment = startDistance > 0.5 and preferredHeading
+                and startDelta:dot(preferredHeading) / startDistance or 1
+              if preferredHeading and startDistance > 3 and startAlignment < -0.25 then
+                valid = false
+              end
               if preferredHeading then
                 local dx = points[2].x - points[1].x
                 local dy = points[2].y - points[1].y
@@ -547,7 +571,8 @@ local function buildRoadRouteThroughPoints(vehicle, routePoints)
                 local dx, dy, dz = lastPoint.x - toPosition.x, lastPoint.y - toPosition.y, lastPoint.z - toPosition.z
                 local endpointError = math.sqrt(dx * dx + dy * dy + dz * dz)
                 if endpointError <= MAX_ROUTE_ENDPOINT_OFFSET_M then
-                  local score = length + endpointError * 2 - headingAlignment * 25
+                  local score = length + endpointError * 2
+                    + startDistance * 0.5 - headingAlignment * 25 - startAlignment * 15
                   if score < bestScore then
                     bestIds, bestPoints, bestScore = path, points, score
                   end
@@ -3444,28 +3469,29 @@ local function updateVehicleDetection(dt)
 end
 
 local function nearestForwardObstacle(data)
-  if type(data) ~= "table" then return math.huge end
+  if type(data) ~= "table" or not state.activeVehicle then return math.huge end
 
-  local forward = data.lidar and vectorFromTable(data.lidar.forward) or nil
-  local right = data.lidar and vectorFromTable(data.lidar.right) or nil
-  local originFallback = data.lidar and vectorFromTable(data.lidar.origin) or nil
+  local settings = state.settings or DEFAULT_SETTINGS
+  local timestamps = data.sensorTimestamps or {}
+  local now = state.simulationTime
 
-  if not forward then
-    local mounts = data.radar and data.radar.mounts or {}
-    for i = 1, #mounts do
-      if mounts[i].name == "Front long-range" then
-        forward = vectorFromTable(mounts[i].direction)
-        right = forward and vec3(-forward.y, forward.x, 0) or nil
-        originFallback = vectorFromTable(mounts[i].position)
-        break
-      end
-    end
+  local function sourceFresh(key, enabled)
+    local timestamp = timestamps[key]
+    return enabled == true and type(timestamp) == "number"
+      and timestamp <= now + 0.05 and (now - timestamp) <= MAX_FRAME_AGE
   end
-  if not forward or forward:length() < 0.00001 then return math.huge end
-  forward = forward:normalized()
-  if not right or right:length() < 0.00001 then right = vec3(-forward.y, forward.x, 0) end
-  if right:length() < 0.00001 then return math.huge end
-  right = right:normalized()
+
+  local lidarFresh = sourceFresh("lidar", settings.lidarEnabled)
+  local radarFresh = sourceFresh("radar", settings.radarEnabled)
+  local ultrasonicFresh = sourceFresh("ultrasonic", settings.ultrasonicEnabled)
+
+  -- Use the current vehicle basis for the forward corridor. A cached sensor
+  -- pose must not rotate the safety corridor after the vehicle has moved.
+  local forward = normalizedVec3(safeCall(state.activeVehicle, "getDirectionVector"))
+  local up = normalizedVec3(safeCall(state.activeVehicle, "getDirectionVectorUp"))
+  local right = forward and up and normalizedVec3(forward:cross(up)) or nil
+  local originFallback = asVec3(safeCall(state.activeVehicle, "getPosition"))
+  if not forward or not right or not originFallback then return math.huge end
 
   local minimum = math.huge
   local function inspect(point, originData)
@@ -3475,24 +3501,44 @@ local function nearestForwardObstacle(data)
     local delta = target - origin
     local longitudinal = delta:dot(forward)
     local lateral = math.abs(delta:dot(right))
-    if longitudinal > 0.5 and lateral <= 2.4 and delta.z > -0.85 then
+    if longitudinal > 0.5 and lateral <= 2.4 and delta:dot(up) > -0.85 then
       minimum = math.min(minimum, longitudinal)
     end
   end
 
-  local lidarReturns = data.lidar and data.lidar.rays or {}
-  for i = 1, #lidarReturns do inspect(lidarReturns[i], data.lidar.origin) end
+  if lidarFresh then
+    local lidarReturns = data.lidar and data.lidar.rays or {}
+    for i = 1, #lidarReturns do inspect(lidarReturns[i], data.lidar.origin) end
+  end
 
-  local radarReturns = data.radar and data.radar.returns or {}
-  for i = 1, #radarReturns do inspect(radarReturns[i], radarReturns[i].origin) end
+  if radarFresh then
+    local radarReturns = data.radar and data.radar.returns or {}
+    for i = 1, #radarReturns do inspect(radarReturns[i], radarReturns[i].origin) end
+  end
 
-  local ultrasonicReturns = data.ultrasonic and data.ultrasonic.returns or {}
-  for i = 1, #ultrasonicReturns do inspect(ultrasonicReturns[i], ultrasonicReturns[i].origin) end
+  if ultrasonicFresh then
+    local ultrasonicReturns = data.ultrasonic and data.ultrasonic.returns or {}
+    for i = 1, #ultrasonicReturns do inspect(ultrasonicReturns[i], ultrasonicReturns[i].origin) end
+  end
 
-  for i = 1, #(data.vehicles or {}) do
-    local target = data.vehicles[i]
-    if target.visibility == "visible" and target.sourceKind == "simulator-assisted" then
-      inspect(target.position, originFallback)
+  -- A cached "visible" OBB is useful only while both its registry snapshot and
+  -- its visibility confirmation are recent.
+  local registryTimestamp = state.vehicleRegistryTimestamp
+  local registryFresh = state.vehicleRegistrySnapshotValid
+    and type(registryTimestamp) == "number"
+    and registryTimestamp <= now + 0.05
+    and (now - registryTimestamp) <= WORLD_MODEL_REGISTRY_MAX_AGE
+  if registryFresh then
+    for i = 1, #(data.vehicles or {}) do
+      local target = data.vehicles[i]
+      local visibilityTimestamp = tonumber(target.visibilityTimestamp)
+      local visibilityFresh = visibilityTimestamp ~= nil
+        and visibilityTimestamp <= now + 0.05
+        and (now - visibilityTimestamp) <= OCCLUSION_CACHE_MAX_AGE
+      if target.visibility == "visible" and target.sourceKind == "simulator-assisted"
+          and visibilityFresh then
+        inspect(target.position, originFallback)
+      end
     end
   end
 

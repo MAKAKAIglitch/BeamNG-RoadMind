@@ -141,11 +141,16 @@ The base mod targets regular BeamNG.drive. LiDAR, radar and ultrasonic use geome
 
 BeamNG.tech provides a separate native suite with rendered camera, LiDAR, RADAR, ultrasonic, GPS and IMU sensors. A future adapter can provide native measurements without changing the upper-level observation interface.
 
-## Planned autonomy stack
+## Current stack boundary and next phases
 
-1. **Vehicle registry and detection zones:** one scheduled vehicle snapshot, bounds-based target checks and bounded occlusion tests.
-2. **Object tracker:** persistent RoadMind IDs, timestamped association, confidence and motion estimates.
-3. **Route manager:** road graph, route points and local road corridor.
-4. **Local planner:** candidate trajectories, footprint collision checks and scoring.
-5. **Vehicle controller:** steering, throttle, braking and gear management.
-6. **Safety supervisor:** controlled stop on stale sensors, invalid routes or blocked paths.
+Implemented code-level layers: vehicle registry/detection zones, session-scoped object tracking, timestamped sensor fusion/world model, NavGraph road context and route input/progress. These layers still need repeatable in-game validation.
+
+The current route pilot delegates path following to BeamNG's built-in Vehicle AI. RoadMind's sensor guard can request a stop and replan, but RoadMind does not yet own the trajectory or low-level control.
+
+Next implementation phases:
+
+1. **Local planner:** bounded candidate trajectories, full-footprint collision checks, road/obstacle costs and a controlled stop when no safe path exists.
+2. **Vehicle controller:** trajectory tracking, steering, throttle, braking and gear management.
+3. **Independent safety supervisor:** manual takeover, stale-sensor handling, route-loss handling and controller-fault stops.
+4. **Parking:** parking-space estimation, reverse/multi-point maneuvers and swept-footprint validation.
+5. **Recording and learning:** local, bounded data recording and deterministic replay before optional offline learning.

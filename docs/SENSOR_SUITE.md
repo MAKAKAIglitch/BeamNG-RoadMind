@@ -6,16 +6,16 @@ This document describes the current Drive-compatible sensor layout and the exact
 
 | System | Quantity | Placement | Coverage / range | Update |
 |---|---:|---|---|---:|
-| Forward LiDAR | 1 | Front roof / windshield area | 120° × 16°, 65 m | 4 Hz |
-| Front long-range radar | 1 | Front center | 28° horizontal, 160 m | 2 Hz |
-| Corner radars | 4 | Front-left/right, rear-left/right | 58°, 50–65 m | 2 Hz |
-| Front ultrasonic | 4 | Front bumper | 5 m, 3-ray beam | 2 Hz |
-| Rear ultrasonic | 4 | Rear bumper | 5 m, 3-ray beam | 2 Hz |
-| Corner ultrasonic | 4 | Vehicle corners | 5 m, 3-ray beam | 2 Hz |
-| Cameras | 7 | Windshield, side mirrors, rear glass and rear corners | Individual frustums, 22–85 m visualization range | 5 Hz pose refresh |
-| IMU | 1 | Near vehicle center | Acceleration signals + estimated yaw rate | 5 Hz |
-| GNSS-like position | 1 | Roof | BeamNG world position and altitude | 5 Hz |
-| Wheel odometry | 1 data source | Vehicle electrics | Wheel speed and odometer | 5 Hz sample |
+| Forward LiDAR | 1 | Front roof / windshield area | 120° × 16°, 30–160 m configurable | 1–4 Hz |
+| Front long-range radar | 1 | Front center | 28° horizontal, 160 m | 1–2 Hz |
+| Corner radars | 4 | Front-left/right, rear-left/right | 58°, 50–65 m | 1–2 Hz |
+| Front ultrasonic | 4 | Front bumper | 5 m, 1/3-ray beam | 1–2 Hz |
+| Rear ultrasonic | 4 | Rear bumper | 5 m, 1/3-ray beam | 1–2 Hz |
+| Corner ultrasonic | 4 | Vehicle corners | 5 m, 1/3-ray beam | 1–2 Hz |
+| Cameras | 7 | Windshield, side mirrors, rear glass and rear corners | Individual frustums, 22–85 m visualization range | 2–5 Hz pose refresh |
+| IMU | 1 | Near vehicle center | Acceleration signals + estimated yaw rate | 2–5 Hz |
+| GNSS-like position | 1 | Roof | BeamNG world position and altitude | 2–5 Hz |
+| Wheel odometry | 1 data source | Vehicle electrics | Wheel speed and odometer | 2–5 Hz sample |
 
 ## Vehicle detection zones
 
@@ -31,7 +31,7 @@ A target's complete OBB is projected onto the sensor's forward/right/up axes. Br
 
 Up to four candidate targets per detection cycle receive an occlusion raycast (maximum 16 additional queries/s). Candidates are classified as **visible**, **occluded** or **unverified**. Only confirmed-visible targets are drawn and passed to the experimental obstacle guard.
 
-This is simulator-assisted vehicle discovery based on the game's vehicle registry and OBB data. It is not a raw physical-style LiDAR or radar point return, and camera frustums do not participate in vehicle recognition. Persistent track IDs and temporal association belong to the next tracking phase.
+This is simulator-assisted vehicle discovery based on the game's vehicle registry and OBB data. It is not a raw physical-style LiDAR or radar point return, and camera frustums do not participate in vehicle recognition. Confirmed-visible candidates feed the implemented session-scoped RoadMind tracker described below; stable identity and visibility behavior still need live-traffic validation.
 
 ## Vehicle tracks and motion estimates
 
@@ -76,7 +76,7 @@ The optional persistent scan map stores static world-space hits only; tracked mo
 
 ## LiDAR
 
-The forward LiDAR uses 9–33 horizontal samples and 1–3 vertical elevations (up to 99 ray directions; the High preset uses 51). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
+The forward LiDAR uses 9–33 horizontal samples and 1–3 vertical elevations (up to 99 ray directions; the High preset uses 51, while Economy uses 9). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
 
 The scanner is intentionally forward-facing, not a 360° roof scanner.
 

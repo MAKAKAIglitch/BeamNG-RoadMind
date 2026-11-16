@@ -23,6 +23,12 @@ These are calculated query budgets, not measured FPS or CPU percentages. Actual 
 
 Hiding a 3D overlay does not stop its sensor scans. Turn off the sensor group itself to reduce raycast work. Camera frustums and localization sampling can be disabled independently.
 
+## Experimental road route pilot
+
+The route section uses the current map's NavGraph. Enter 1–12 ordered world-coordinate points in metres, one per line as `X, Y, Z`. The route builder snaps each point to a nearby road segment and shows the final-node snap distance. The pilot sends NavGraph waypoint IDs to BeamNG's built-in Vehicle Lua AI, with a 29 km/h speed cap.
+
+When the pilot starts, RoadMind switches to the Balanced sensor profile. Fresh enabled sensor streams and recently confirmed vehicle-registry observations feed a forward stop guard. This is not a custom trajectory planner: RoadMind does not yet steer around obstacles, calculate lane boundaries or provide its own throttle/brake/steering controller. Test only in a controlled, clear area; route following and map compatibility remain experimental.
+
 ## Defaults
 
 RoadMind starts with scanning off. When started, the default Economy profile runs only the forward LiDAR (about 9 scene queries/s). Radar and ultrasonic are disabled until enabled manually or by switching to Balanced/High. Only the LiDAR overlay is visible initially; radar, ultrasonic, camera and localization overlays are hidden to keep debug drawing light.

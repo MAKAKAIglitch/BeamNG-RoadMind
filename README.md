@@ -35,6 +35,12 @@ Settings are saved to the BeamNG user settings folder and applied while scanning
 
 The 3D beams and returns are drawn directly into the game world; there is no separate HUD app.
 
+### Experimental road route pilot
+
+The Mods page also includes an early NavGraph route pilot. It can accept up to 12 ordered world-coordinate points (`X, Y, Z` in metres), build a connected path on the current map and pass its waypoint IDs to BeamNG's built-in Vehicle AI. The page reports route progress and road-localization estimates. Starting the pilot switches to the Balanced sensor profile; recent enabled sensor data provides a conservative stop guard.
+
+This is **not** the completed RoadMind autonomy stack. It does not yet generate collision-checked trajectories, steer around obstacles or control steering/throttle/brakes itself. The destination is snapped to a nearby NavGraph node, and route behavior still requires in-game testing on intersections and different maps.
+
 ## Important simulation boundaries
 
 This project targets **BeamNG.drive**. BeamNG.tech has a separate native sensor stack with rendered RGB/depth cameras, LiDAR, RADAR, ultrasonic, GPS and IMU APIs. The regular BeamNG.drive mod API does not expose the same complete native suite.

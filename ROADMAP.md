@@ -2,17 +2,18 @@
 
 RoadMind aims to become a lightweight, modular autonomous-driving system for BeamNG.drive. Development is organized around a reliable perception foundation first, followed by road understanding, route planning and vehicle control.
 
-**Current status:** virtual sensor-suite prototype. The sensor pipeline and in-game settings exist; calibration across vehicle classes, object tracking, autonomy and in-game performance validation remain future work.
+**Current status:** virtual sensor suite, simulator-assisted vehicle tracking and a first NavGraph route-following prototype. The main sensing, tracking, world-model and route-input code exists, but vehicle-class coverage, sensor/track accuracy, route behavior and performance have not been validated in repeatable in-game scenarios. Custom trajectory planning, steering/throttle control, obstacle avoidance and parking are not implemented.
 
 ## Development priorities
 
-1. Finish vehicle geometry detection and sensor-mount calibration.
-2. Build optimized vehicle detection zones and a unified target tracker.
-3. Add time-consistent LiDAR visualization and sensor fusion.
-4. Add road understanding, route planning and autonomous control.
-5. Add parking, data recording and optional learning workflows.
+1. Validate vehicle geometry and sensor mounting across vehicle classes.
+2. Validate detection zones, visibility checks, track identity and motion estimates in live traffic.
+3. Validate LiDAR point continuity, sensor freshness and world-model quality.
+4. Complete Phase 8 route behavior on intersections, splits and multiple maps.
+5. Implement the local trajectory planner and independent safety supervisor.
+6. Add vehicle control, parking, recording and optional learning only after the deterministic planner is validated.
 
-The current priority is the perception foundation. Route following, parking and learning must consume stable, timestamped sensor/world-model data rather than depend directly on individual sensor implementations.
+The next implementation milestone is Phase 9: a bounded local planner consuming the timestamped world model and current route state. Native BeamNG AI route following remains a temporary experimental baseline, not RoadMind's own autonomous controller.
 
 ## Phase 1 — Forward LiDAR and world visualization
 
