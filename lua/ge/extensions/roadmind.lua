@@ -2869,7 +2869,7 @@ local function getRenderArrayIdentity(item, index)
   return "[" .. table.concat(parts, "|") .. "]"
 end
 
-local function smoothVisualizationValue(value, path, dt, now, seen, inertiaEnabled)
+local function smoothVisualizationValue(value, path, dt, now, inertiaEnabled)
   if type(value) ~= "table" then return value end
 
   -- Interpolate render-only world-space positions and directions.
@@ -2897,7 +2897,6 @@ local function smoothVisualizationValue(value, path, dt, now, seen, inertiaEnabl
       velocity = vectorToPlainTable(velocity),
       lastSeenAt = now
     }
-    seen[path] = true
     return {x = current.x, y = current.y, z = current.z}
   end
 
@@ -2908,7 +2907,7 @@ local function smoothVisualizationValue(value, path, dt, now, seen, inertiaEnabl
       childKey = getRenderArrayIdentity(child, key)
     end
     result[key] = smoothVisualizationValue(
-      child, path .. "/" .. childKey, dt, now, seen, inertiaEnabled
+      child, path .. "/" .. childKey, dt, now, inertiaEnabled
     )
   end
   return result
@@ -2919,8 +2918,6 @@ local function updateVisualizationRenderState(dt)
   state.visualizationRenderClock = (state.visualizationRenderClock or 0) + dt
   local now = state.visualizationRenderClock
   local inertiaEnabled = (state.settings or DEFAULT_SETTINGS).visualizationInertiaEnabled ~= false
-  local seen = {}
-
   if type(state.latestData) == "table" then
     local renderFrame = {}
     for key, value in pairs(state.latestData) do
@@ -2929,7 +2926,7 @@ local function updateVisualizationRenderState(dt)
         renderFrame[key] = value
       else
         renderFrame[key] = smoothVisualizationValue(
-          value, "frame/" .. tostring(key), dt, now, seen, inertiaEnabled
+          value, "frame/" .. tostring(key), dt, now, inertiaEnabled
         )
       end
     end
@@ -2941,7 +2938,7 @@ local function updateVisualizationRenderState(dt)
   -- Route and planner coordinates are smoothed only in a separate display copy.
   local overlays = {routePath = state.routePath, planner = state.localPlanner}
   state.visualizationRenderOverlays = smoothVisualizationValue(
-    overlays, "overlays", dt, now, seen, inertiaEnabled
+    overlays, "overlays", dt, now, inertiaEnabled
   )
 
   if not inertiaEnabled then
