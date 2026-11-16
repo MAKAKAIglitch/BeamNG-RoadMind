@@ -4,7 +4,7 @@
 
 RoadMind models the sensor layout of a modern assisted/autonomous vehicle and visualizes its coverage directly in the game world. The long-term goal is a custom driving stack that plans routes, avoids obstacles and controls the vehicle without relying on a permanent neural-network runtime.
 
-> **Development status: perception foundation in progress.** The current build contains virtual LiDAR, radar and ultrasonic raycast proxies, camera coverage frustums, vehicle-state localization/odometry, OBB-based sensor calibration, scheduled simulator-assisted vehicle detection, and an initial timestamped object-tracking layer with RoadMind IDs and estimated motion. Stable tracking and occlusion behavior across live traffic, unified world-model fusion and visual validation of the time-consistent LiDAR point layer still need in-game testing. The road-AI button is experimental and is not a completed custom planner/controller. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
+> **Development status: perception foundation in progress.** The current build contains virtual LiDAR, radar and ultrasonic raycast proxies, camera coverage frustums, vehicle-state localization/odometry, OBB-based sensor calibration, scheduled simulator-assisted vehicle detection, and an initial timestamped object-tracking layer with RoadMind IDs and estimated motion. Stable tracking and occlusion behavior, plus world-model contents under real traffic and visual continuity of the time-consistent LiDAR point layer, still need in-game testing. The road-AI button is experimental and is not a completed custom planner/controller. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
 
 ## Sensor suite
 
@@ -42,7 +42,7 @@ This project targets **BeamNG.drive**. BeamNG.tech has a separate native sensor 
 Therefore:
 
 - LiDAR uses BeamNG's Game Engine scene-raycast API and produces a sparse forward point cloud.
-- Radar uses Game Engine scene-raycast returns. It is a geometric radar proxy, not an RF/FMCW waveform simulation; target radial velocity and stable target tracking are not implemented yet.
+- Radar uses Game Engine scene-raycast returns. It is a geometric radar proxy, not an RF/FMCW waveform simulation. Vehicle tracks and relative-speed estimates are simulator-assisted and timestamp-derived; they are not physical Doppler measurements.
 - Ultrasonic uses three short-range scene-raycasts per sensor and keeps the nearest hit. It approximates the sensor beam, not acoustic propagation or material-dependent reflections.
 - Camera cones show mounting positions and fields of view. They do not produce RGB frames or semantic object detections in this Drive build.
 - IMU acceleration comes from BeamNG vehicle electrics; yaw rate is estimated from heading changes.
@@ -72,6 +72,7 @@ The figures are calculated from ray counts and scan frequencies. They are not me
 - [Full sensor inventory](docs/SENSOR_SUITE.md)
 - [Roadmap](ROADMAP.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Unified world model schema](docs/WORLD_MODEL.md)
 - [Performance notes](docs/PERFORMANCE.md)
 - [Settings and profile details](docs/SETTINGS.md)
 
