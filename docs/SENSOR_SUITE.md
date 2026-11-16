@@ -33,6 +33,23 @@ Up to four candidate targets per detection cycle receive an occlusion raycast (m
 
 This is simulator-assisted vehicle discovery based on the game's vehicle registry and OBB data. It is not a raw physical-style LiDAR or radar point return, and camera frustums do not participate in vehicle recognition. Persistent track IDs and temporal association belong to the next tracking phase.
 
+## Vehicle tracks and motion estimates
+
+The GE vehicle registry provides simulator-assisted OBB observations. When a candidate is inside one or more current sensor coverage zones and scene-raycast visibility is confirmed, RoadMind creates or updates a session-scoped track ID such as `RM-000001`. Repeated observations from several sensor zones are merged into one candidate and then one track.
+
+Track fields include:
+
+- Latest OBB-center position, dimensions and vehicle orientation.
+- Sensor-zone sources that geometrically cover the target, plus a separate visibility status from the bounded occlusion checks.
+- Last-observed simulation timestamp, data age, missed-scan count, confidence and status (`confirmed`, `coasting` or `stale`).
+- Estimated velocity from timestamped position differences, plus estimated relative speed.
+- Simulator-provided velocity stored separately from RoadMind's timestamp-derived estimate.
+- A short predicted display position kept separate from the last observed position.
+
+The tracker uses a 0.75 s recent-visibility cache and retains a missed target for at most 1.5 s, six missed detection cycles, or two complete registry snapshots without that vehicle. An explicit vehicle-destroyed event removes its track immediately. The active store is limited to 128 tracks.
+
+All vehicle positions, dimensions, orientation and the simulator-provided velocity originate from BeamNG's vehicle OBB/object data. The estimated velocities are derived values, not radar Doppler measurements. This is a simulator-assisted tracking prototype, not camera recognition or physical sensor-only tracking.
+
 ## LiDAR
 
 The forward LiDAR samples 17 horizontal azimuths and 3 vertical elevations (51 ray directions). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
