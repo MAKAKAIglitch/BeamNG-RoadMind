@@ -2675,10 +2675,20 @@ local function mergeSensorFrame(frame)
   end
   if updates.radar == true then
     latest.radar = processRadar(frame.radar)
+    latest.radar.scanTimestamp = state.simulationTime
+    latest.radar.scanSequence = tonumber(frame.sequence) or 0
+    for i = 1, #(latest.radar.returns or {}) do
+      latest.radar.returns[i].measurementTimestamp = state.simulationTime
+    end
     latest.sensorTimestamps.radar = state.simulationTime
   end
   if updates.ultrasonic == true then
     latest.ultrasonic = processUltrasonic(frame.ultrasonic)
+    latest.ultrasonic.scanTimestamp = state.simulationTime
+    latest.ultrasonic.scanSequence = tonumber(frame.sequence) or 0
+    for i = 1, #(latest.ultrasonic.returns or {}) do
+      latest.ultrasonic.returns[i].measurementTimestamp = state.simulationTime
+    end
     latest.sensorTimestamps.ultrasonic = state.simulationTime
   end
   if updates.detectionZones == true then
