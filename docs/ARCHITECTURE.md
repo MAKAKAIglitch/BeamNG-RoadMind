@@ -66,6 +66,20 @@ The GE coordinator maintains one shared registry of nearby vehicle OBB snapshots
 
 This service is **simulator-assisted**: the game provides the list of vehicles and their OBBs. It is not a claim that a physical LiDAR/radar/camera independently recognized the target. It does not yet provide persistent RoadMind track IDs, temporal association or a unified world model; those are later roadmap phases.
 
+## Phase 5 — object tracking
+
+The GE coordinator associates each confirmed-visible simulator-assisted OBB observation with a session-scoped RoadMind track ID (`RM-000001`, etc.). The transient BeamNG vehicle ID is retained only as an internal association key; it is not used as the RoadMind track identifier.
+
+Each track stores the OBB center, dimensions, vehicle orientation, sensor-zone sources, simulator-provided velocity (separately labelled), last-observed simulation timestamp, confidence, data age, missed-scan count and status.
+
+Estimated target velocity is derived from successive timestamped OBB-center positions. Estimated relative speed subtracts the current simulator vehicle velocity and projects along the player-to-target direction. Neither value is physical radar Doppler. A short predicted position (capped to a 0.5 s horizon) is exposed separately from the latest observed position.
+
+Tracks remain briefly in a coasting state when a candidate is occluded or missed. Recent visibility cache lifetime is 0.75 s; tracks expire after 1.5 s of observation age, more than six missed detection cycles, two complete registry snapshots without the source vehicle, or an explicit vehicle-destroyed event. The tracker is bounded to 128 tracks. Player-vehicle switches, resets and scanner shutdown clear the active tracking state.
+
+The UI exposes up to eight closest track summaries, including RoadMind ID, state, estimated speeds, data age, confidence and sensor-zone sources. In-world markers distinguish confirmed tracks from coasting predictions.
+
+These are code-level tracking semantics. Stable identity and motion accuracy still require live-traffic validation in BeamNG.drive.
+
 ## Input and settings
 
 The sensor-suite binding is defined in `lua/ge/extensions/core/input/actions/roadmind_actions.json`. The in-game settings page is under `ui/ui-vue/mods/roadmind/`.
@@ -82,7 +96,7 @@ BeamNG.tech provides a separate native suite with rendered camera, LiDAR, RADAR,
 
 1. **Vehicle registry and detection zones:** one scheduled vehicle snapshot, bounds-based target checks and bounded occlusion tests.
 2. **Object tracker:** persistent RoadMind IDs, timestamped association, confidence and motion estimates.
-3. **World model:** a unified interface for vehicles and non-vehicle obstacles.
+3. **World model:** a unified interface for tracked vehicles and non-vehicle obstacles.
 4. **Route manager:** road graph, route points and local road corridor.
 5. **Local planner:** candidate trajectories, footprint collision checks and scoring.
 6. **Vehicle controller:** steering, throttle, braking and gear management.
