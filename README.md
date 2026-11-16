@@ -41,9 +41,9 @@ The 3D beams and returns are drawn directly into the game world; there is no sep
 
 ### Experimental road route pilot
 
-The Mods page also includes an early NavGraph route pilot. It can accept up to 12 ordered world-coordinate points (`X, Y, Z` in metres), build a connected path on the current map and pass its waypoint IDs to BeamNG's built-in Vehicle AI. The page reports route progress and road-localization estimates. Starting the pilot switches to the Balanced sensor profile; enabled, fresh sensor streams and confirmed vehicle OBB footprints feed a best-effort stop guard (not a collision guarantee).
+The Mods page also includes an early NavGraph route pilot. It can accept up to 12 ordered world-coordinate points (`X, Y, Z` in metres), build a connected path on the current map and pass its waypoint IDs to BeamNG's built-in Vehicle AI. The page reports route progress and road-localization estimates. Starting the pilot switches to the Balanced sensor profile; enabled, fresh sensor streams and confirmed vehicle OBB footprints feed a best-effort stop guard. A bounded local planner displays five candidate trajectories, checks vehicle/obstacle footprints and requests a stop if no candidate passes. Its road edge and turning limits are conservative heuristics, not exact physical boundaries or collision guarantees.
 
-This is **not** the completed RoadMind autonomy stack. It does not yet generate collision-checked trajectories, steer around obstacles or control steering/throttle/brakes itself. The destination is snapped to a nearby NavGraph node, and route behavior still requires in-game testing on intersections and different maps.
+This is **not** the completed RoadMind autonomy stack. The Phase 9 planner previews candidate trajectories and can stop the built-in AI, but it does not yet steer along the selected offset or control steering/throttle/brakes itself. The destination is snapped to a nearby NavGraph node, and route behavior still requires in-game testing on intersections and different maps.
 
 ## Important simulation boundaries
 
