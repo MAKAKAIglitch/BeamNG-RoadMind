@@ -46,6 +46,12 @@ local SENSOR_SETTING_KEYS = {
 
 local MAX_PERSISTENT_LIDAR_POINTS = 600
 local PERSISTENT_POINT_CELL_SIZE = 0.35
+local MAX_LIDAR_RENDER_POINTS = 99
+local MAX_LIDAR_FADE_POINTS = 198
+local LIDAR_RENDER_SMOOTHING_SECONDS = 0.10
+local LIDAR_POINT_FADE_SECONDS = 0.40
+local LIDAR_STATIC_MATCH_DISTANCE = 0.60
+local LIDAR_TRACK_LOCAL_MATCH_DISTANCE = 0.85
 local VEHICLE_REGISTRY_INTERVAL = 0.5
 local VEHICLE_DETECTION_INTERVAL = 0.25
 local MAX_REGISTRY_VEHICLES = 256
@@ -95,6 +101,10 @@ local state = {
   lidarPointCloud = {},
   lidarPointCells = {},
   lidarPointWriteIndex = 1,
+  lidarRenderPoints = {},
+  lidarFadingPoints = {},
+  lidarRenderScanTimestamp = 0,
+  lidarRenderScanSequence = 0,
   routePilotEnabled = false,
   routePilotStarted = false,
   routeSafetyStopped = false,
@@ -447,6 +457,10 @@ local function clearPersistentLidarPoints()
   state.lidarPointCloud = {}
   state.lidarPointCells = {}
   state.lidarPointWriteIndex = 1
+  state.lidarRenderPoints = {}
+  state.lidarFadingPoints = {}
+  state.lidarRenderScanTimestamp = 0
+  state.lidarRenderScanSequence = 0
 end
 
 local function resetTrackingState(resetClock)
@@ -830,18 +844,38 @@ local function drawRayReturns(drawer, originTable, rays, color, pointColor, poin
 end
 
 local function drawLidar(drawer, lidar)
-  if type(lidar) ~= "table" then
-    return
+  if type(lidar) ~= "table" then return end
+  local origin = toPoint3F(lidar.origin)
+  if not origin or type(lidar.rays) ~= "table" then return end
+
+  local beamColor = ColorF(0.10, 0.76, 1.0, 0.72)
+  drawSphere(drawer, origin, 0.075, beamColor)
+  for i = 1, #lidar.rays do
+    local ray = lidar.rays[i]
+    if ray.hit == true then
+      local hitPoint = toPoint3F(ray)
+      if hitPoint then drawLine(drawer, origin, hitPoint, beamColor) end
+    end
+  end
+end
+
+local function drawLidarRenderPoints(drawer)
+  for _, point in pairs(state.lidarRenderPoints) do
+    local position = toPoint3F(point.renderPosition)
+    if position then
+      local alpha = math.max(0.08, math.min(1, point.opacity or 1))
+      drawSphere(drawer, position, 0.06, ColorF(1.0, 0.45, 0.08, alpha))
+    end
   end
 
-  drawRayReturns(
-    drawer,
-    lidar.origin,
-    lidar.rays,
-    ColorF(0.10, 0.76, 1.0, 0.88),
-    ColorF(1.0, 0.45, 0.08, 1.0),
-    0.065
-  )
+  for i = 1, #state.lidarFadingPoints do
+    local point = state.lidarFadingPoints[i]
+    local position = toPoint3F(point.position)
+    if position then
+      local alpha = math.max(0, math.min(1, point.opacity or 0))
+      if alpha > 0.01 then drawSphere(drawer, position, 0.055, ColorF(1.0, 0.58, 0.22, alpha)) end
+    end
+  end
 end
 
 local function drawRadar(drawer, radar)
@@ -1082,6 +1116,7 @@ local function drawFrame()
 
   if settings.showLidar then
     drawLidar(drawer, frame.lidar)
+    drawLidarRenderPoints(drawer)
     drawPersistentLidarCloud(drawer)
   end
   if settings.showRadar then drawRadar(drawer, frame.radar) end
@@ -1567,7 +1602,8 @@ local function raycastBeam(beam, fallbackOrigin, fallbackRange)
     x = round2(point.x),
     y = round2(point.y),
     z = round2(point.z),
-    distance = round2(distance)
+    distance = round2(distance),
+    hitObjectId = getVehicleId(safeField(hit, "obj"))
   }
 end
 
@@ -1579,6 +1615,7 @@ local function processLidar(lidar)
     local hit = raycastBeam(beams[i], lidar.origin, lidar.range)
     if hit then
       hit.hit = true
+      hit.rayIndex = i
       returns[#returns + 1] = hit
     end
   end
@@ -1655,6 +1692,212 @@ local function pointCellKey(point)
   }, ":")
 end
 
+local function trackCanOwnLidarPoint(track)
+  if type(track) ~= "table" then return false end
+  local age = state.simulationTime - (track.lastObservedAt or -math.huge)
+  return age >= 0 and age <= TRACK_OBSERVATION_MAX_AGE
+    and (track.status == "confirmed" or track.status == "coasting")
+    and (track.confidence or 0) >= 0.30
+end
+
+local function localizeLidarPointOnTrack(point, track)
+  if not trackCanOwnLidarPoint(track) then return nil end
+  local position = asVec3(track.position)
+  local orientation = track.orientation or {}
+  local forward = normalizedVec3(orientation.forward)
+  local right = normalizedVec3(orientation.right)
+  local up = normalizedVec3(orientation.up)
+  if not position or not forward or not right or not up
+      or type(track.dimensions) ~= "table" then return nil end
+
+  local delta = asVec3(point)
+  if not delta then return nil end
+  delta = delta - position
+
+  local localForward = delta:dot(forward)
+  local localRight = delta:dot(right)
+  local localUp = delta:dot(up)
+  local dimensions = track.dimensions
+  local length = tonumber(dimensions.length)
+  local width = tonumber(dimensions.width)
+  local height = tonumber(dimensions.height)
+  if not length or not width or not height then return nil end
+
+  local margin = 0.35
+  if math.abs(localForward) > length * 0.5 + margin
+      or math.abs(localRight) > width * 0.5 + margin
+      or math.abs(localUp) > height * 0.5 + margin then
+    return nil
+  end
+
+  return {
+    forward = localForward,
+    right = localRight,
+    up = localUp
+  }
+end
+
+local function findTrackForLidarPoint(point)
+  local sourceVehicleId = point and point.hitObjectId
+  if sourceVehicleId ~= nil then
+    local direct = state.tracksBySourceId[tostring(sourceVehicleId)]
+    local localPosition = direct and localizeLidarPointOnTrack(point, direct) or nil
+    if localPosition then return direct, localPosition end
+  end
+
+  -- Some static raycast hits do not expose an object handle. In that case,
+  -- associate only when exactly one recent tracked OBB contains the hit.
+  local match, matchLocal = nil, nil
+  for _, track in pairs(state.tracks) do
+    if trackCanOwnLidarPoint(track) then
+      local localPosition = localizeLidarPointOnTrack(point, track)
+      if localPosition then
+        if match then return nil, nil end
+        match, matchLocal = track, localPosition
+      end
+    end
+  end
+  return match, matchLocal
+end
+
+local function pushLidarFadePoint(point)
+  if type(point) ~= "table" then return end
+  state.lidarFadingPoints[#state.lidarFadingPoints + 1] = {
+    position = point.renderPosition,
+    opacity = point.opacity or 1,
+    remaining = LIDAR_POINT_FADE_SECONDS
+  }
+  while #state.lidarFadingPoints > MAX_LIDAR_FADE_POINTS do
+    table.remove(state.lidarFadingPoints, 1)
+  end
+end
+
+local function buildLidarRenderPoints(lidar)
+  if type(lidar) ~= "table" or type(lidar.rays) ~= "table" then return end
+  local nextPoints = {}
+  local oldPoints = state.lidarRenderPoints
+  local matchedOld = {}
+  local pointCount = 0
+
+  for i = 1, #lidar.rays do
+    local rawPoint = lidar.rays[i]
+    local rayIndex = tonumber(rawPoint.rayIndex)
+    local worldPoint = asVec3(rawPoint)
+    if rawPoint.hit == true and rayIndex and worldPoint and rayIndex >= 1 then
+      local track, localPosition = findTrackForLidarPoint(rawPoint)
+      local associationKey = track and ("track:" .. track.trackId) or "static"
+      local previous = oldPoints[rayIndex]
+      local isSameReturn = false
+
+      if previous and previous.associationKey == associationKey then
+        if track and localPosition and previous.localPosition then
+          local deltaForward = localPosition.forward - previous.localPosition.forward
+          local deltaRight = localPosition.right - previous.localPosition.right
+          local deltaUp = localPosition.up - previous.localPosition.up
+          local localDistance = math.sqrt(
+            deltaForward * deltaForward + deltaRight * deltaRight + deltaUp * deltaUp
+          )
+          isSameReturn = localDistance <= LIDAR_TRACK_LOCAL_MATCH_DISTANCE
+        elseif not track and previous.worldMeasurement then
+          isSameReturn = (worldPoint - previous.worldMeasurement):length() <= LIDAR_STATIC_MATCH_DISTANCE
+        end
+      end
+
+      local renderPosition = vectorToPlainTable(worldPoint)
+      local opacity = 1
+      if isSameReturn then
+        renderPosition = previous.renderPosition
+        opacity = previous.opacity or 1
+        matchedOld[rayIndex] = true
+      elseif previous then
+        pushLidarFadePoint(previous)
+      end
+
+      pointCount = pointCount + 1
+      if pointCount <= MAX_LIDAR_RENDER_POINTS then
+        nextPoints[rayIndex] = {
+          rayIndex = rayIndex,
+          associationKey = associationKey,
+          trackId = track and track.trackId or nil,
+          localPosition = localPosition,
+          worldMeasurement = track and nil or vectorToPlainTable(worldPoint),
+          renderPosition = renderPosition,
+          opacity = opacity,
+          measurementTimestamp = tonumber(rawPoint.measurementTimestamp)
+            or tonumber(lidar.scanTimestamp) or state.simulationTime
+        }
+      end
+    end
+  end
+
+  for rayIndex, previous in pairs(oldPoints) do
+    if not matchedOld[rayIndex] and not nextPoints[rayIndex] then
+      local replaced = false
+      for i = 1, #lidar.rays do
+        if tonumber(lidar.rays[i].rayIndex) == rayIndex then replaced = true break end
+      end
+      if not replaced then pushLidarFadePoint(previous) end
+    end
+  end
+
+  state.lidarRenderPoints = nextPoints
+  state.lidarRenderScanTimestamp = tonumber(lidar.scanTimestamp) or state.simulationTime
+  state.lidarRenderScanSequence = tonumber(lidar.scanSequence) or state.lidarRenderScanSequence
+end
+
+local function getTrackedLidarWorldPosition(point)
+  if not point.trackId or not point.localPosition then return asVec3(point.worldMeasurement) end
+  local track = state.tracks[point.trackId]
+  if not track or not trackCanOwnLidarPoint(track) then return nil end
+
+  local position = asVec3(track.status == "coasting" and track.predictedPosition or track.position)
+  local orientation = track.orientation or {}
+  local forward = normalizedVec3(orientation.forward)
+  local right = normalizedVec3(orientation.right)
+  local up = normalizedVec3(orientation.up)
+  if not position or not forward or not right or not up then return nil end
+
+  local localPosition = point.localPosition
+  return position
+    + forward * localPosition.forward
+    + right * localPosition.right
+    + up * localPosition.up
+end
+
+local function updateLidarRenderPoints(dt)
+  dt = math.max(0, math.min(tonumber(dt) or 0, 0.1))
+  local smoothing = 1 - math.exp(-dt / LIDAR_RENDER_SMOOTHING_SECONDS)
+
+  for rayIndex, point in pairs(state.lidarRenderPoints) do
+    local targetPosition = getTrackedLidarWorldPosition(point)
+    local currentPosition = asVec3(point.renderPosition)
+    if not targetPosition or not currentPosition then
+      pushLidarFadePoint(point)
+      state.lidarRenderPoints[rayIndex] = nil
+    else
+      local delta = targetPosition - currentPosition
+      local distance = delta:length()
+      if distance > 4.0 then
+        -- Large discontinuities are likely a changed surface or a broken association.
+        pushLidarFadePoint(point)
+        state.lidarRenderPoints[rayIndex] = nil
+      else
+        local step = delta * smoothing
+        local stepLength = step:length()
+        if stepLength > 0.75 then step = step * (0.75 / stepLength) end
+        point.renderPosition = vectorToPlainTable(currentPosition + step)
+      end
+    end
+  end
+
+  for i = #state.lidarFadingPoints, 1, -1 do
+    local point = state.lidarFadingPoints[i]
+    point.remaining = point.remaining - dt
+    point.opacity = math.max(0, point.remaining / LIDAR_POINT_FADE_SECONDS)
+    if point.remaining <= 0 then table.remove(state.lidarFadingPoints, i) end
+  end
+end
+
 local function rememberLidarPoints(lidar)
   if not state.settings or not state.settings.lidarPersistenceEnabled
       or type(lidar) ~= "table" or type(lidar.rays) ~= "table" then
@@ -1664,7 +1907,8 @@ local function rememberLidarPoints(lidar)
   for i = 1, #lidar.rays do
     local point = lidar.rays[i]
     if point.hit == true and type(point.x) == "number"
-        and type(point.y) == "number" and type(point.z) == "number" then
+        and type(point.y) == "number" and type(point.z) == "number"
+        and not findTrackForLidarPoint(point) then
       local key = pointCellKey(point)
       if not state.lidarPointCells[key] then
         local slot
@@ -2172,6 +2416,8 @@ local function updateVehicleDetection(dt)
   if state.latestData then
     state.latestData.vehicles = candidates
     state.latestData.tracks = tracks
+    -- Re-associate the same raw scan only; this never creates new measurements.
+    if state.latestData.lidar then buildLidarRenderPoints(state.latestData.lidar) end
   end
 end
 
@@ -2326,8 +2572,14 @@ local function mergeSensorFrame(frame)
 
   if updates.lidar == true then
     latest.lidar = processLidar(frame.lidar)
+    latest.lidar.scanTimestamp = state.simulationTime
+    latest.lidar.scanSequence = tonumber(frame.sequence) or 0
+    for i = 1, #(latest.lidar.rays or {}) do
+      latest.lidar.rays[i].measurementTimestamp = state.simulationTime
+    end
     latest.sensorTimestamps.lidar = state.simulationTime
     rememberLidarPoints(latest.lidar)
+    buildLidarRenderPoints(latest.lidar)
   end
   if updates.radar == true then
     latest.radar = processRadar(frame.radar)
@@ -2394,6 +2646,7 @@ function M.onUpdate(dt)
   -- Refresh the player identity before building targets so a vehicle switch
   -- cannot briefly register the new player car as an external target.
   updateVehicleDetection(dt)
+  updateLidarRenderPoints(dt)
 
   if state.routePilotEnabled then
     updateRoutePilotSafety(dt)
