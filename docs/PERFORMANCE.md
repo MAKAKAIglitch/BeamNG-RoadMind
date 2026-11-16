@@ -29,6 +29,15 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 - At most 4 occlusion raycasts run per detection cycle: a hard upper bound of 16 additional scene-raycast queries/s. The actual count is lower when fewer than four candidates enter sensor zones.
 - The settings page adds the actual recent occlusion-raycast rate to the scheduled sensor-raycast estimate. This is a workload estimate, not an FPS or CPU measurement.
 
+## Object tracking budget
+
+- The target registry contains at most 256 valid vehicle OBB snapshots.
+- Sensor-zone detection and tracker ageing run at 4 Hz (0.25 s cadence) against the cached registry and latest zone frame.
+- The track store is capped at 128 objects. Association uses a source-ID index; the tracker does not perform scene raycasts.
+- Timestamped velocity estimation runs only when a new registry observation arrives. Cached visibility and repeated frames do not count as new measurements.
+- Tracks use a 0.75 s visibility-cache limit and a 1.5 s maximum observation age, with an additional missed-scan and registry-removal check.
+- A coasting track's predicted display position is limited to a 0.5 s horizon; it is not fed back as a new measurement.
+
 ## Scheduling
 
 - Sensor scan frequencies are controlled by the selected profile and can be customized.
