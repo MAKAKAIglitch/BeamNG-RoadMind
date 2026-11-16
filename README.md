@@ -4,7 +4,7 @@
 
 RoadMind models the sensor layout of a modern assisted/autonomous vehicle and visualizes its coverage directly in the game world. The long-term goal is a custom driving stack that plans routes, avoids obstacles and controls the vehicle without relying on a permanent neural-network runtime.
 
-> **Development status: perception foundation in progress.** The current build contains virtual LiDAR, radar and ultrasonic raycast proxies, camera coverage frustums, vehicle-state localization/odometry, and an initial OBB-based vehicle-geometry calibration prototype. Calibration across vehicle classes, optimized target detection, persistent tracking, time-consistent point rendering and a unified world model are still in development. The existing road-AI button is experimental and is not a completed custom planner/controller. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
+> **Development status: perception foundation in progress.** The current build contains virtual LiDAR, radar and ultrasonic raycast proxies, camera coverage frustums, vehicle-state localization/odometry, OBB-based vehicle calibration, and a scheduled simulator-assisted vehicle registry with sensor-zone checks and bounded occlusion tests. Stable object tracking, timestamped world-model fusion, temporally smoothed point-cloud rendering and vehicle-class validation are still in development. The road-AI button is experimental and is not a completed custom planner/controller. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
 
 ## Sensor suite
 
@@ -46,7 +46,7 @@ Therefore:
 - IMU acceleration comes from BeamNG vehicle electrics; yaw rate is estimated from heading changes.
 - GNSS-like localization reports BeamNG world coordinates. It is not geodetic latitude/longitude.
 - Odometry reads the vehicle wheel-speed and odometer electrics where present.
-- Initial vehicle visibility markers use simulator-assisted vehicle centers inside geometric sensor cones; full bounding-box coverage, occlusion and stable tracking are not implemented yet.
+- Vehicle candidates are found from a shared Game Engine vehicle OBB registry (0.5 s refresh) and tested against calibrated LiDAR/radar/ultrasonic coverage volumes (0.25 s detection cadence). A maximum of four occlusion raycasts are used per detection cycle. These observations are explicitly simulator-assisted registry results, not raw physical-style sensor measurements; stable tracking is not implemented yet.
 
 These boundaries are kept explicit so a simulated geometric measurement is not mistaken for a full physical sensor model.
 
