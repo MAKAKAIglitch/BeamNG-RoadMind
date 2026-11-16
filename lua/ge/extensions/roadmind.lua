@@ -1350,11 +1350,24 @@ local function settingsResult()
         end
         return count
       end)() or 0,
+      worldModelSchemaVersion = WORLD_MODEL_SCHEMA_VERSION,
       worldModelGeneration = state.worldModel and state.worldModel.generation or 0,
       worldModelTargetCount = state.worldModel and #(state.worldModel.targets or {}) or 0,
       worldModelObstacleCount = state.worldModel and #(state.worldModel.obstacles or {}) or 0,
       worldModelObservationCount = state.worldModel and (state.worldModel.observationCount or 0) or 0,
+      worldModelVehicleObservationCount = state.worldModel
+        and #(state.worldModel.observations.vehicleRegistry or {}) or 0,
       worldModelStaleSourceCount = state.worldModel and (state.worldModel.quality.staleSourceCount or 0) or 0,
+      worldModelInvalidObservationCount = state.worldModel
+        and (state.worldModel.quality.invalidObservationCount or 0) or 0,
+      worldModelDroppedObservationCount = state.worldModel
+        and (state.worldModel.quality.droppedObservationCount or 0) or 0,
+      worldModelConflictingObservationCount = state.worldModel
+        and (state.worldModel.quality.conflictingObservationCount or 0) or 0,
+      worldModelTruncatedSourceCount = state.worldModel
+        and (state.worldModel.quality.truncatedSourceCount or 0) or 0,
+      worldModelRegistryFresh = state.worldModel and state.worldModel.sourceStatus.vehicleRegistry
+        and state.worldModel.sourceStatus.vehicleRegistry.fresh or false,
       vehicleCalibration = state.vehicleGeometry and {
         calibrated = true,
         source = state.vehicleGeometry.source,
