@@ -1838,7 +1838,8 @@ buildLidarRenderPoints = function(lidar)
     local worldPoint = asVec3(rawPoint)
     if rawPoint.hit == true and rayIndex and worldPoint and rayIndex >= 1 then
       local track, localPosition = findTrackForLidarPoint(rawPoint)
-      local associationKey = track and ("track:" .. track.trackId) or "static"
+      local associationKey = track and ("track:" .. track.trackId)
+        or (rawPoint.hitObjectId ~= nil and ("object:" .. tostring(rawPoint.hitObjectId)) or "static")
       local previous = oldPoints[rayIndex]
       local isSameReturn = false
 
