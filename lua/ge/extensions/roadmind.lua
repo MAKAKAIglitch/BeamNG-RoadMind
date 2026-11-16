@@ -2147,6 +2147,7 @@ buildWorldModel = function()
     and math.max(0, now - state.vehicleRegistryTimestamp) or nil
   local registryEnabled = vehicleDetectionEnabled(settings)
   local registryFresh = registryEnabled and state.vehicleRegistrySnapshotValid
+    and state.vehicleRegistryTimestamp <= now + 0.05
     and registryAge ~= nil and registryAge <= WORLD_MODEL_REGISTRY_MAX_AGE
   model.sourceStatus.vehicleRegistry = {
     enabled = registryEnabled,
@@ -2228,7 +2229,8 @@ buildWorldModel = function()
     local source = sources[sourceIndex]
     local timestamp = tonumber(timestamps[source.key])
     local age = timestamp and math.max(0, now - timestamp) or nil
-    local fresh = source.enabled and age ~= nil and age <= WORLD_MODEL_OBSERVATION_MAX_AGE
+    local fresh = source.enabled and age ~= nil
+      and timestamp <= now + 0.05 and age <= WORLD_MODEL_OBSERVATION_MAX_AGE
 
     model.sourceStatus[source.key] = {
       enabled = source.enabled,
@@ -2258,9 +2260,9 @@ buildWorldModel = function()
         local measurementTimestamp = tonumber(hit.measurementTimestamp) or timestamp
         local dataAge = measurementTimestamp and math.max(0, now - measurementTimestamp) or math.huge
 
-        if not position then
+        if not position or not measurementTimestamp or measurementTimestamp > now + 0.05 then
           model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
-        elseif not measurementTimestamp or dataAge > WORLD_MODEL_OBSERVATION_MAX_AGE then
+        elseif dataAge > WORLD_MODEL_OBSERVATION_MAX_AGE then
           model.quality.staleObservationCount = model.quality.staleObservationCount + 1
         else
           local track = findTrackForLidarPoint(hit)
@@ -2427,13 +2429,11 @@ buildWorldModel = function()
     local track = tracks[i]
     local position = finiteWorldVector(track.position)
     local timestamp = tonumber(track.timestamp or track.lastObservedAt)
-    if not position or not timestamp then
+    if not position or not timestamp or timestamp > now + 0.05 then
       model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
     else
       local dataAge = math.max(0, now - timestamp)
-      if timestamp > now + 0.05 then
-        model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
-      elseif track.status == "stale" or dataAge > TRACK_OBSERVATION_MAX_AGE then
+      if track.status == "stale" or dataAge > TRACK_OBSERVATION_MAX_AGE then
         model.quality.staleTargetCount = model.quality.staleTargetCount + 1
       end
       if (track.confidence or 0) < 0.4 then
