@@ -52,9 +52,19 @@ The Game Engine Lua extension:
 
 Scene raycasts run only when a sensor scan is due, not in the render loop.
 
-## Current vehicle-detection limitation
+## Phase 4 — shared vehicle registry and detection zones
 
-A preliminary simulator-assisted vehicle visibility check exists, but it currently uses vehicle-center positions and simple sensor cones. It does not yet test full target bounding boxes, share a scheduled vehicle registry, or perform raycast occlusion tests. It is not the Phase 4 optimized detection-zone service and must not be treated as a physical LiDAR/radar/camera measurement.
+The GE coordinator maintains one shared registry of nearby vehicle OBB snapshots:
+
+- The vehicle list is collected on a 0.5 s schedule, not once per sensor or LiDAR ray.
+- The player vehicle, invalid entries and entries reported as deleted/destroyed are excluded. Entries without usable world OBB data are not registered; each fresh snapshot replaces the previous one.
+- Each registered vehicle stores its ID, OBB center, three axes, half-extents, position and simulator velocity.
+- Detection runs on a separate 0.25 s schedule using the latest sensor frame.
+- Calibrated LiDAR, radar and ultrasonic mounts define their own horizontal/vertical coverage volumes, minimum range and maximum range.
+- A cheap range check precedes OBB projection tests against each sensor volume. One vehicle is emitted once with all sensor zones that contain its OBB.
+- At most four candidate-to-target occlusion raycasts run per detection cycle (up to 16/s). Candidates are classified as visible, occluded or unverified. Only visible targets are drawn and used by the experimental route safety guard.
+
+This service is **simulator-assisted**: the game provides the list of vehicles and their OBBs. It is not a claim that a physical LiDAR/radar/camera independently recognized the target. It does not yet provide persistent RoadMind track IDs, temporal association or a unified world model; those are later roadmap phases.
 
 ## Input and settings
 
