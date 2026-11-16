@@ -23,12 +23,14 @@ RoadMind models the sensor layout of a modern assisted/autonomous vehicle and vi
 Open **ESC → Mods → RoadMind** (BeamNG.drive 0.39+). The bilingual settings page follows the game's language and includes:
 
 - Economy, Balanced and High performance profiles.
-- LiDAR enable, resolution, frequency and range.
+- LiDAR enable, profile-controlled resolution, frequency and range.
 - Radar and ultrasonic enable, ray density and frequency.
 - Independent switches for 3D sensor overlays.
 - OBB-based vehicle geometry status, manual recalibration and an optional bounds/axes/sensor-mount overlay.
 - A tracked-object list showing RoadMind IDs, track state, estimated speed, relative speed, data age, confidence and sensor-zone sources.
-- A render-only LiDAR point layer that follows tracked moving-object geometry between scans while keeping raw ray hits separate.
+- Green/yellow oriented vehicle-box outlines for visible and not-yet-verified vehicle candidates.
+- A session-only accumulated LiDAR map with a 500–10,000 point limit, vehicle-surface returns included, a clear button and pause-safe display.
+- Optional critically damped inertia for LiDAR endpoints and detected-vehicle outlines.
 - A live estimate of scheduled scene-raycast queries per second.
 
 Settings are saved to the BeamNG user settings folder and applied while scanning is active. Scanning is stopped by default. Press **Start scanning** in the page, or use the existing **RoadMind: Toggle Sensor Suite** Controls binding as a quick toggle.
