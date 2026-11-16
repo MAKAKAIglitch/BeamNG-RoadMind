@@ -1813,6 +1813,15 @@ local function findTrackForLidarPoint(point)
   return match, matchLocal
 end
 
+local function isRegisteredVehicleHit(point)
+  local sourceVehicleId = point and point.hitObjectId
+  if sourceVehicleId ~= nil then
+    local key = tostring(sourceVehicleId)
+    return state.vehicleRegistryById[key] == true or state.tracksBySourceId[key] ~= nil
+  end
+  return findTrackForLidarPoint(point) ~= nil
+end
+
 local function pushLidarFadePoint(point)
   if type(point) ~= "table" then return end
   state.lidarFadingPoints[#state.lidarFadingPoints + 1] = {
@@ -1973,7 +1982,7 @@ local function rememberLidarPoints(lidar)
     local point = lidar.rays[i]
     if point.hit == true and type(point.x) == "number"
         and type(point.y) == "number" and type(point.z) == "number"
-        and not findTrackForLidarPoint(point) then
+        and not isRegisteredVehicleHit(point) then
       local key = pointCellKey(point)
       if not state.lidarPointCells[key] then
         local slot
