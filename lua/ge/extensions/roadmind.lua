@@ -2057,6 +2057,13 @@ local function worldObstacleCellKey(position)
   }, ":")
 end
 
+local function isFiniteNumber(value)
+  return type(value) == "number"
+    and value == value
+    and value ~= math.huge
+    and value ~= -math.huge
+end
+
 local function finiteWorldVector(value)
   local x = safeField(value, "x")
   local y = safeField(value, "y")
@@ -2145,12 +2152,13 @@ buildWorldModel = function()
     }
   }
 
-  local registryAge = state.vehicleRegistryTimestamp
+  local registryAge = isFiniteNumber(state.vehicleRegistryTimestamp)
     and math.max(0, now - state.vehicleRegistryTimestamp) or nil
   local registryEnabled = state.visualizationEnabled and vehicleDetectionEnabled(settings)
   local registryFresh = registryEnabled and state.vehicleRegistrySnapshotValid
+    and registryAge ~= nil
     and state.vehicleRegistryTimestamp <= now + 0.05
-    and registryAge ~= nil and registryAge <= WORLD_MODEL_REGISTRY_MAX_AGE
+    and registryAge <= WORLD_MODEL_REGISTRY_MAX_AGE
   model.sourceStatus.vehicleRegistry = {
     enabled = registryEnabled,
     timestamp = state.vehicleRegistryTimestamp,
@@ -2230,7 +2238,7 @@ buildWorldModel = function()
   for sourceIndex = 1, #sources do
     local source = sources[sourceIndex]
     local timestamp = tonumber(timestamps[source.key])
-    local age = timestamp and math.max(0, now - timestamp) or nil
+    local age = isFiniteNumber(timestamp) and math.max(0, now - timestamp) or nil
     local fresh = source.enabled and age ~= nil
       and timestamp <= now + 0.05 and age <= WORLD_MODEL_OBSERVATION_MAX_AGE
 
@@ -2260,9 +2268,11 @@ buildWorldModel = function()
         local hit = hits[hitIndex]
         local position = finiteWorldVector(hit)
         local measurementTimestamp = tonumber(hit.measurementTimestamp) or timestamp
-        local dataAge = measurementTimestamp and math.max(0, now - measurementTimestamp) or math.huge
+        local dataAge = isFiniteNumber(measurementTimestamp)
+          and math.max(0, now - measurementTimestamp) or math.huge
 
-        if not position or not measurementTimestamp or measurementTimestamp > now + 0.05 then
+        if not position or not isFiniteNumber(measurementTimestamp)
+            or measurementTimestamp > now + 0.05 then
           model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
         elseif dataAge > WORLD_MODEL_OBSERVATION_MAX_AGE then
           model.quality.staleObservationCount = model.quality.staleObservationCount + 1
@@ -2352,14 +2362,15 @@ buildWorldModel = function()
       local timestamp = tonumber(candidate.observationTimestamp or candidate.registryTimestamp)
       local visibilityTimestamp = tonumber(candidate.visibilityTimestamp)
       local position = finiteWorldVector(candidate.position)
-      local dataAge = timestamp and math.max(0, now - timestamp) or math.huge
-      local visibilityAge = visibilityTimestamp and math.max(0, now - visibilityTimestamp) or math.huge
+      local dataAge = isFiniteNumber(timestamp) and math.max(0, now - timestamp) or math.huge
+      local visibilityAge = isFiniteNumber(visibilityTimestamp)
+        and math.max(0, now - visibilityTimestamp) or math.huge
       local dimensions = candidate.dimensions
       local orientation = candidate.orientation
       local validDimensions = type(dimensions) == "table"
-        and type(dimensions.length) == "number" and dimensions.length > 0
-        and type(dimensions.width) == "number" and dimensions.width > 0
-        and type(dimensions.height) == "number" and dimensions.height > 0
+        and isFiniteNumber(dimensions.length) and dimensions.length > 0 and dimensions.length <= 30
+        and isFiniteNumber(dimensions.width) and dimensions.width > 0 and dimensions.width <= 30
+        and isFiniteNumber(dimensions.height) and dimensions.height > 0 and dimensions.height <= 10
       local validOrientation = type(orientation) == "table"
         and finiteWorldVector(orientation.forward) ~= nil
         and finiteWorldVector(orientation.right) ~= nil
@@ -2431,7 +2442,7 @@ buildWorldModel = function()
     local track = tracks[i]
     local position = finiteWorldVector(track.position)
     local timestamp = tonumber(track.timestamp or track.lastObservedAt)
-    if not position or not timestamp or timestamp > now + 0.05 then
+    if not position or not isFiniteNumber(timestamp) or timestamp > now + 0.05 then
       model.quality.invalidObservationCount = model.quality.invalidObservationCount + 1
     else
       local dataAge = math.max(0, now - timestamp)
