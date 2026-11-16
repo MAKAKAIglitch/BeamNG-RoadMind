@@ -2120,7 +2120,7 @@ buildWorldModel = function()
     {
       key = "lidar",
       label = "Forward LiDAR",
-      enabled = settings.lidarEnabled == true,
+      enabled = state.visualizationEnabled and settings.lidarEnabled == true,
       data = latest.lidar,
       hits = latest.lidar and latest.lidar.rays or {},
       confidence = 0.68
@@ -2128,7 +2128,7 @@ buildWorldModel = function()
     {
       key = "radar",
       label = "Automotive radar proxy",
-      enabled = settings.radarEnabled == true,
+      enabled = state.visualizationEnabled and settings.radarEnabled == true,
       data = latest.radar,
       hits = latest.radar and latest.radar.returns or {},
       confidence = 0.60
@@ -2136,7 +2136,7 @@ buildWorldModel = function()
     {
       key = "ultrasonic",
       label = "Ultrasonic raycast proxy",
-      enabled = settings.ultrasonicEnabled == true,
+      enabled = state.visualizationEnabled and settings.ultrasonicEnabled == true,
       data = latest.ultrasonic,
       hits = latest.ultrasonic and latest.ultrasonic.returns or {},
       confidence = 0.63
@@ -2145,7 +2145,7 @@ buildWorldModel = function()
 
   local registryAge = state.vehicleRegistryTimestamp
     and math.max(0, now - state.vehicleRegistryTimestamp) or nil
-  local registryEnabled = vehicleDetectionEnabled(settings)
+  local registryEnabled = state.visualizationEnabled and vehicleDetectionEnabled(settings)
   local registryFresh = registryEnabled and state.vehicleRegistrySnapshotValid
     and state.vehicleRegistryTimestamp <= now + 0.05
     and registryAge ~= nil and registryAge <= WORLD_MODEL_REGISTRY_MAX_AGE
