@@ -96,7 +96,9 @@ local state = {
   lastPoseTime = 0,
   elapsed = 0,
   pendingReset = false,
-  frame = nil
+  frame = nil,
+  vehicleGeometry = nil,
+  sensorLayout = nil
 }
 
 local function round2(value)
@@ -222,10 +224,158 @@ local function makeMount(frame, forwardOffset, lateralOffset, upOffset, yawDegre
   }
 end
 
+local function buildVehicleSensorLayout(geometry)
+  if type(geometry) ~= "table" or geometry.valid ~= true then return nil end
+
+  local fMin, fMax = geometry.forwardMin, geometry.forwardMax
+  local lMin, lMax = geometry.lateralMin, geometry.lateralMax
+  local bottom, top = geometry.bottom, geometry.top
+  local length = geometry.length
+  local height = geometry.height
+  local centerLateral = (lMin + lMax) * 0.5
+
+  local function clamp(value, minimum, maximum)
+    return math.max(minimum, math.min(maximum, value))
+  end
+
+  local roofFront = fMin + length * 0.72
+  local roofHeight = top + math.max(0.08, math.min(0.18, height * 0.04))
+  local midHeight = bottom + height * 0.52
+  local bumperHeight = bottom + math.max(0.16, math.min(0.32, height * 0.23))
+  local mirrorHeight = bottom + height * 0.76
+  local front = fMax + 0.07
+  local rear = fMin - 0.07
+  local left = lMin - 0.055
+  local right = lMax + 0.055
+  local frontInnerLeft = lMin * 0.28 + centerLateral * 0.72
+  local frontOuterLeft = lMin * 0.76 + centerLateral * 0.24
+  local frontInnerRight = lMax * 0.28 + centerLateral * 0.72
+  local frontOuterRight = lMax * 0.76 + centerLateral * 0.24
+
+  local layout = {
+    lidar = {
+      maxRange = CONFIG.lidar.maxRange,
+      minRange = CONFIG.lidar.minRange,
+      horizontalFov = CONFIG.lidar.horizontalFov,
+      verticalFov = CONFIG.lidar.verticalFov,
+      horizontalSamples = CONFIG.lidar.horizontalSamples,
+      verticalSamples = CONFIG.lidar.verticalSamples,
+      interval = CONFIG.lidar.interval,
+      forwardOffset = clamp(roofFront, fMin + length * 0.35, fMax - length * 0.08),
+      lateralOffset = centerLateral,
+      upOffset = roofHeight
+    },
+    radars = {
+      {name = "Front long-range", forward = front, lateral = centerLateral, up = midHeight, yaw = 0, fov = 28, range = 160, rays = 5},
+      {name = "Front left corner", forward = fMax - 0.04, lateral = left, up = midHeight, yaw = -52, fov = 58, range = 65, rays = 3},
+      {name = "Front right corner", forward = fMax - 0.04, lateral = right, up = midHeight, yaw = 52, fov = 58, range = 65, rays = 3},
+      {name = "Rear left corner", forward = fMin + 0.04, lateral = left, up = midHeight, yaw = -128, fov = 58, range = 50, rays = 3},
+      {name = "Rear right corner", forward = fMin + 0.04, lateral = right, up = midHeight, yaw = 128, fov = 58, range = 50, rays = 3}
+    },
+    ultrasonics = {
+      {name = "Front left outer", forward = front, lateral = frontOuterLeft, up = bumperHeight, yaw = -4},
+      {name = "Front left inner", forward = front, lateral = frontInnerLeft, up = bumperHeight, yaw = 0},
+      {name = "Front right inner", forward = front, lateral = frontInnerRight, up = bumperHeight, yaw = 0},
+      {name = "Front right outer", forward = front, lateral = frontOuterRight, up = bumperHeight, yaw = 4},
+      {name = "Rear left outer", forward = rear, lateral = frontOuterLeft, up = bumperHeight, yaw = -176},
+      {name = "Rear left inner", forward = rear, lateral = frontInnerLeft, up = bumperHeight, yaw = 180},
+      {name = "Rear right inner", forward = rear, lateral = frontInnerRight, up = bumperHeight, yaw = 180},
+      {name = "Rear right outer", forward = rear, lateral = frontOuterRight, up = bumperHeight, yaw = 176},
+      {name = "Front left side", forward = fMin + length * 0.72, lateral = left, up = bumperHeight, yaw = -90},
+      {name = "Front right side", forward = fMin + length * 0.72, lateral = right, up = bumperHeight, yaw = 90},
+      {name = "Rear left side", forward = fMin + length * 0.28, lateral = left, up = bumperHeight, yaw = -90},
+      {name = "Rear right side", forward = fMin + length * 0.28, lateral = right, up = bumperHeight, yaw = 90}
+    },
+    cameras = {
+      {name = "Front narrow", forward = roofFront, lateral = centerLateral, up = roofHeight, yaw = 0, hfov = 38, vfov = 24, range = 85},
+      {name = "Front wide", forward = roofFront - length * 0.08, lateral = centerLateral, up = roofHeight, yaw = 0, hfov = 120, vfov = 62, range = 32},
+      {name = "Left side", forward = fMin + length * 0.72, lateral = left, up = mirrorHeight, yaw = -90, hfov = 100, vfov = 58, range = 24},
+      {name = "Right side", forward = fMin + length * 0.72, lateral = right, up = mirrorHeight, yaw = 90, hfov = 100, vfov = 58, range = 24},
+      {name = "Rear wide", forward = rear, lateral = centerLateral, up = roofHeight, yaw = 180, hfov = 120, vfov = 62, range = 30},
+      {name = "Rear left", forward = fMin + length * 0.12, lateral = left, up = mirrorHeight, yaw = -140, hfov = 90, vfov = 55, range = 22},
+      {name = "Rear right", forward = fMin + length * 0.12, lateral = right, up = mirrorHeight, yaw = 140, hfov = 90, vfov = 55, range = 22}
+    }
+  }
+
+  return layout
+end
+
+local function currentSensorLayout()
+  return state.sensorLayout or {
+    lidar = CONFIG.lidar,
+    radars = RADARS,
+    ultrasonics = ULTRASONICS,
+    cameras = CAMERAS
+  }
+end
+
+local function buildGeometryDebug(frame)
+  local geometry = state.vehicleGeometry
+  if not geometry or geometry.valid ~= true then return nil end
+
+  local fMin, fMax = geometry.forwardMin, geometry.forwardMax
+  local lMin, lMax = geometry.lateralMin, geometry.lateralMax
+  local bottom, top = geometry.bottom, geometry.top
+  local function worldPoint(forward, lateral, up)
+    local p = frame.position + frame.forward * forward + frame.right * lateral + frame.up * up
+    return vectorToPreciseTable(p)
+  end
+
+  local corners = {
+    worldPoint(fMin, lMin, bottom), worldPoint(fMax, lMin, bottom),
+    worldPoint(fMax, lMax, bottom), worldPoint(fMin, lMax, bottom),
+    worldPoint(fMin, lMin, top), worldPoint(fMax, lMin, top),
+    worldPoint(fMax, lMax, top), worldPoint(fMin, lMax, top)
+  }
+  return {
+    valid = true,
+    corners = corners,
+    axes = {
+      origin = vectorToPreciseTable(frame.position),
+      forward = vectorToPreciseTable(frame.position + frame.forward * 1.8),
+      right = vectorToPreciseTable(frame.position + frame.right * 1.2),
+      up = vectorToPreciseTable(frame.position + frame.up * 1.2)
+    }
+  }
+end
+
+local function buildSensorMountDebug(frame)
+  local layout = currentSensorLayout()
+  local mounts = {}
+
+  local function add(name, kind, config)
+    local mount = makeMount(frame, config.forward, config.lateral, config.up, config.yaw)
+    if mount then
+      mounts[#mounts + 1] = {
+        name = name,
+        kind = kind,
+        position = vectorToTable(mount.position),
+        direction = vectorToPreciseTable(mount.direction)
+      }
+    end
+  end
+
+  add("Forward LiDAR", "lidar", layout.lidar)
+  for i = 1, #layout.radars do
+    local config = layout.radars[i]
+    add(config.name, "radar", config)
+  end
+  for i = 1, #layout.ultrasonics do
+    local config = layout.ultrasonics[i]
+    add(config.name, "ultrasonic", config)
+  end
+  for i = 1, #layout.cameras do
+    local config = layout.cameras[i]
+    add(config.name, "camera", config)
+  end
+
+  return mounts
+end
+
 
 
 local function scanLidar(frame)
-  local cfg = CONFIG.lidar
+  local cfg = currentSensorLayout().lidar
   local mount = makeMount(frame, cfg.forwardOffset, cfg.lateralOffset, cfg.upOffset, 0)
   if not mount then
     return {origin = nil, rays = {}, rayCount = 0}
@@ -275,8 +425,9 @@ end
 
 local function scanRadars(frame)
   local mounts, beams = {}, {}
-  for i = 1, #RADARS do
-    local cfg = RADARS[i]
+  local radars = currentSensorLayout().radars
+  for i = 1, #radars do
+    local cfg = radars[i]
     local mount = makeMount(frame, cfg.forward, cfg.lateral, cfg.up, cfg.yaw)
     if mount then
       mounts[#mounts + 1] = {
@@ -322,9 +473,10 @@ end
 
 local function scanUltrasonics(frame)
   local mounts, beams = {}, {}
-  for i = 1, #ULTRASONICS do
-    local cfg = ULTRASONICS[i]
-    local mount = makeMount(frame, cfg.forward, cfg.lateral, 0.42, cfg.yaw)
+  local ultrasonics = currentSensorLayout().ultrasonics
+  for i = 1, #ultrasonics do
+    local cfg = ultrasonics[i]
+    local mount = makeMount(frame, cfg.forward, cfg.lateral, cfg.up, cfg.yaw)
     if mount then
       mounts[#mounts + 1] = {
         name = cfg.name,
@@ -363,8 +515,9 @@ local function buildCameras(frame)
     return cameras
   end
 
-  for i = 1, #CAMERAS do
-    local cfg = CAMERAS[i]
+  local camerasConfig = currentSensorLayout().cameras
+  for i = 1, #camerasConfig do
+    local cfg = camerasConfig[i]
     local mount = makeMount(
       frame,
       cfg.forward,
@@ -460,6 +613,8 @@ local function buildEmptyFrame()
     ultrasonic = {mounts = {}, beams = {}},
     cameras = {},
     localization = nil,
+    mounts = {},
+    geometryDebug = nil,
     vehicleVelocity = nil
   }
 end
@@ -492,6 +647,7 @@ local function publish()
     payload.cameras = frame.cameras or {}
     payload.localization = frame.localization
     payload.mounts = frame.mounts or {}
+    payload.geometryDebug = frame.geometryDebug
   end
 
   local okPayload, compactEncoded = pcall(jsonEncode, payload)
@@ -523,7 +679,7 @@ local function applySensorSettings(source)
 
   local booleanKeys = {
     "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
-    "cameraFrustumsEnabled", "localizationEnabled"
+    "cameraFrustumsEnabled", "localizationEnabled", "calibrationDebugEnabled"
   }
   for i = 1, #booleanKeys do
     local key = booleanKeys[i]
@@ -535,6 +691,9 @@ local function applySensorSettings(source)
   end
   if type(source.showLocalization) == "boolean" then
     sensorSettings.localizationEnabled = source.showLocalization
+  end
+  if type(source.showCalibration) == "boolean" then
+    sensorSettings.calibrationDebugEnabled = source.showCalibration
   end
 
   if source.lidarQuality == "low" or source.lidarQuality == "balanced"
@@ -630,9 +789,65 @@ function M.setEnabled(enabled, sourceVehicleId)
   return state.enabled
 end
 
+function M.setVehicleGeometry(encodedGeometry)
+  if type(encodedGeometry) ~= "string" or type(jsonDecode) ~= "function" then return false end
+  local ok, geometry = pcall(jsonDecode, encodedGeometry)
+  if not ok or type(geometry) ~= "table" then return false end
+
+  local keys = {
+    "forwardMin", "forwardMax", "lateralMin", "lateralMax",
+    "bottom", "top", "length", "width", "height"
+  }
+  for i = 1, #keys do
+    local value = geometry[keys[i]]
+    if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+      state.vehicleGeometry = nil
+      state.sensorLayout = nil
+      state.pendingReset = true
+      return false
+    end
+  end
+
+  if geometry.valid ~= true
+      or geometry.length < 1.2 or geometry.length > 30
+      or geometry.width < 0.5 or geometry.width > 10
+      or geometry.height < 0.45 or geometry.height > 9
+      or geometry.forwardMin >= geometry.forwardMax
+      or geometry.lateralMin >= geometry.lateralMax
+      or geometry.bottom >= geometry.top then
+    state.vehicleGeometry = nil
+    state.sensorLayout = nil
+    state.pendingReset = true
+    return false
+  end
+
+  state.vehicleGeometry = {
+    valid = true,
+    source = geometry.source == "getSpawnWorldOOBB" and geometry.source or "validated OBB",
+    vehicleKey = type(geometry.vehicleKey) == "string" and geometry.vehicleKey or nil,
+    forwardMin = geometry.forwardMin,
+    forwardMax = geometry.forwardMax,
+    lateralMin = geometry.lateralMin,
+    lateralMax = geometry.lateralMax,
+    bottom = geometry.bottom,
+    top = geometry.top,
+    length = geometry.length,
+    width = geometry.width,
+    height = geometry.height
+  }
+  state.sensorLayout = buildVehicleSensorLayout(state.vehicleGeometry)
+  state.pendingReset = true
+  state.lidarTimer, state.radarTimer, state.ultrasonicTimer, state.poseTimer = 0, 0, 0, 0
+  return state.sensorLayout ~= nil
+end
+
 function M.getStatus()
   return {
     enabled = state.enabled,
+    vehicleGeometryCalibrated = state.vehicleGeometry ~= nil,
+    vehicleLength = state.vehicleGeometry and state.vehicleGeometry.length or nil,
+    vehicleWidth = state.vehicleGeometry and state.vehicleGeometry.width or nil,
+    vehicleHeight = state.vehicleGeometry and state.vehicleGeometry.height or nil,
     sequence = state.sequence,
     lidarRays = state.lastLidarCount,
     radarRays = state.lastRadarCount,
@@ -668,7 +883,8 @@ function M.updateGFX(dt)
   if sensorSettings.lidarEnabled then state.lidarTimer = state.lidarTimer + dt end
   if sensorSettings.radarEnabled then state.radarTimer = state.radarTimer + dt end
   if sensorSettings.ultrasonicEnabled then state.ultrasonicTimer = state.ultrasonicTimer + dt end
-  if sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled then
+  if sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled
+      or sensorSettings.calibrationDebugEnabled then
     state.poseTimer = state.poseTimer + dt
   end
 
@@ -719,18 +935,18 @@ function M.updateGFX(dt)
     changed = true
   end
 
-  if (sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled)
-      and state.poseTimer >= CONFIG.poseInterval then
+  if (sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled
+      or sensorSettings.calibrationDebugEnabled) and state.poseTimer >= CONFIG.poseInterval then
     local poseDt = state.poseTimer
     state.poseTimer = state.poseTimer % CONFIG.poseInterval
     state.frame = state.frame or buildEmptyFrame()
     state.frame.cameras = buildCameras(frame)
     state.frame.localization = sensorSettings.localizationEnabled
       and updateLocalization(frame, poseDt) or nil
-    state.frame.mounts = state.frame.localization and {
-      imu = state.frame.localization.imu.position,
-      gnss = state.frame.localization.gnss.position
-    } or {}
+    state.frame.geometryDebug = sensorSettings.calibrationDebugEnabled
+      and buildGeometryDebug(frame) or nil
+    state.frame.mounts = sensorSettings.calibrationDebugEnabled
+      and buildSensorMountDebug(frame) or {}
     updatedSensors.pose = true
     changed = true
   end
