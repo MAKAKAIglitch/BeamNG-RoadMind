@@ -50,6 +50,7 @@ local MAX_LIDAR_RENDER_POINTS = 99
 local MAX_LIDAR_FADE_POINTS = 198
 local LIDAR_RENDER_SMOOTHING_SECONDS = 0.10
 local LIDAR_POINT_FADE_SECONDS = 0.40
+local LIDAR_RENDER_POINT_MAX_AGE = 2.25
 local LIDAR_STATIC_MATCH_DISTANCE = 0.60
 local LIDAR_TRACK_LOCAL_MATCH_DISTANCE = 0.85
 local VEHICLE_REGISTRY_INTERVAL = 0.5
@@ -453,14 +454,18 @@ local function stopNativeRouteAI(vehicle)
   )
 end
 
-local function clearPersistentLidarPoints()
-  state.lidarPointCloud = {}
-  state.lidarPointCells = {}
-  state.lidarPointWriteIndex = 1
+local function clearLidarRenderState()
   state.lidarRenderPoints = {}
   state.lidarFadingPoints = {}
   state.lidarRenderScanTimestamp = 0
   state.lidarRenderScanSequence = 0
+end
+
+local function clearPersistentLidarPoints()
+  state.lidarPointCloud = {}
+  state.lidarPointCells = {}
+  state.lidarPointWriteIndex = 1
+  clearLidarRenderState()
 end
 
 local function resetTrackingState(resetClock)
@@ -732,6 +737,7 @@ end
 local function resetFrame()
   state.latestData = nil
   state.frameAge = math.huge
+  clearLidarRenderState()
 end
 
 local function detachPreviousVehicle()
@@ -1385,6 +1391,7 @@ function M.setVisualizationEnabled(enabled)
     local previousId = state.activeVehicleId
     state.visualizationEnabled = true
     resetTrackingState(true)
+    clearLidarRenderState()
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
     state.vehicleRegistrySnapshotValid = false
@@ -1414,6 +1421,7 @@ function M.setVisualizationEnabled(enabled)
     state.vehicleDetectionTimer = 0
     state.vehicleCandidates = {}
     resetTrackingState(false)
+    clearLidarRenderState()
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
     state.routePilotEnabled = false
@@ -1772,7 +1780,7 @@ local function pushLidarFadePoint(point)
   end
 end
 
-local function buildLidarRenderPoints(lidar)
+buildLidarRenderPoints = function(lidar)
   if type(lidar) ~= "table" or type(lidar.rays) ~= "table" then return end
   local nextPoints = {}
   local oldPoints = state.lidarRenderPoints
@@ -1814,13 +1822,15 @@ local function buildLidarRenderPoints(lidar)
       end
 
       pointCount = pointCount + 1
+      local worldMeasurement = nil
+      if not track then worldMeasurement = vectorToPlainTable(worldPoint) end
       if pointCount <= MAX_LIDAR_RENDER_POINTS then
         nextPoints[rayIndex] = {
           rayIndex = rayIndex,
           associationKey = associationKey,
           trackId = track and track.trackId or nil,
           localPosition = localPosition,
-          worldMeasurement = track and nil or vectorToPlainTable(worldPoint),
+          worldMeasurement = worldMeasurement,
           renderPosition = renderPosition,
           opacity = opacity,
           measurementTimestamp = tonumber(rawPoint.measurementTimestamp)
@@ -1869,7 +1879,9 @@ local function updateLidarRenderPoints(dt)
   local smoothing = 1 - math.exp(-dt / LIDAR_RENDER_SMOOTHING_SECONDS)
 
   for rayIndex, point in pairs(state.lidarRenderPoints) do
-    local targetPosition = getTrackedLidarWorldPosition(point)
+    local pointAge = state.simulationTime - (point.measurementTimestamp or state.simulationTime)
+    local targetPosition = pointAge <= LIDAR_RENDER_POINT_MAX_AGE
+      and getTrackedLidarWorldPosition(point) or nil
     local currentPosition = asVec3(point.renderPosition)
     if not targetPosition or not currentPosition then
       pushLidarFadePoint(point)
@@ -2369,6 +2381,8 @@ local function detectNearbyVehicles(data)
   return candidates
 end
 
+local buildLidarRenderPoints
+
 local function updateVehicleDetection(dt)
   local elapsed = math.max(0, tonumber(dt) or 0)
   local settings = state.settings or DEFAULT_SETTINGS
@@ -2416,8 +2430,6 @@ local function updateVehicleDetection(dt)
   if state.latestData then
     state.latestData.vehicles = candidates
     state.latestData.tracks = tracks
-    -- Re-associate the same raw scan only; this never creates new measurements.
-    if state.latestData.lidar then buildLidarRenderPoints(state.latestData.lidar) end
   end
 end
 
