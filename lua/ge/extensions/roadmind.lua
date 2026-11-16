@@ -612,7 +612,7 @@ local function updateObjectTracks(candidates)
   local result = {}
   for trackId, track in pairs(state.tracks) do
     if not seenTracks[trackId] then
-      if state.vehicleRegistrySnapshotValid
+      if state.vehicleRegistrySnapshotValid and not state.vehicleRegistryTruncated
           and (track.lastRegistryGeneration or -1) < state.vehicleRegistryGeneration then
         track.lastRegistryGeneration = state.vehicleRegistryGeneration
         if state.vehicleRegistryById[tostring(track.sourceVehicleId)] then
@@ -2030,7 +2030,10 @@ local function detectNearbyVehicles(data)
 
       -- A second sensor may see a target hidden from the nearest sensor.
       for sourceIndex = 1, #candidate.sensorSources do
-        if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE or sourcesChecked >= 2 then break end
+        if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE or sourcesChecked >= 2 then
+          if sourceIndex <= #candidate.sensorSources then anyUnverified = true end
+          break
+        end
         local source = candidate.sensorSources[sourceIndex]
         local zone = zonesByName[source.name]
         if zone then
