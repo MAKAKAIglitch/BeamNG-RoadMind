@@ -1668,8 +1668,21 @@ local function detectNearbyVehicles(data)
 
       candidates[#candidates + 1] = {
         id = target.id,
+        sourceVehicleId = target.id,
         position = {x = target.center.x, y = target.center.y, z = target.center.z},
-        velocity = {x = target.velocity.x, y = target.velocity.y, z = target.velocity.z},
+        simulatorVelocity = {x = target.velocity.x, y = target.velocity.y, z = target.velocity.z},
+        orientation = {
+          forward = {x = target.forward.x, y = target.forward.y, z = target.forward.z},
+          right = {x = target.right.x, y = target.right.y, z = target.right.z},
+          up = {x = target.up.x, y = target.up.y, z = target.up.z}
+        },
+        dimensions = {
+          length = target.dimensions.length,
+          width = target.dimensions.width,
+          height = target.dimensions.height
+        },
+        registryTimestamp = target.registryTimestamp,
+        observationTimestamp = target.registryTimestamp,
         distance = round2(nearestDistance),
         nearDistance = round2(nearDistance),
         farDistance = round2(farDistance),
@@ -1688,35 +1701,59 @@ local function detectNearbyVehicles(data)
 
   table.sort(candidates, function(a, b) return a.distance < b.distance end)
 
-  local checked = 0
+  local zonesByName = {}
+  for i = 1, #zones do zonesByName[zones[i].name] = zones[i] end
+
+  -- Reuse a recent visibility result only while the same OBB has moved very little.
   for i = 1, #candidates do
-    if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE then break end
     local candidate = candidates[i]
+    local target = state.vehicleRegistry[candidate.registryIndex]
+    local cacheKey = tostring(candidate.sourceVehicleId)
+    local cached = state.occlusionCache[cacheKey]
+    candidate.visibility = "unverified"
+
+    if target and cached and state.simulationTime - cached.timestamp <= OCCLUSION_CACHE_MAX_AGE
+        and cached.position and (target.center - cached.position):length() <= 1.25 then
+      candidate.visibility = cached.visibility
+      candidate.visibilityTimestamp = cached.timestamp
+      candidate.visibleFrom = cached.sensorName
+      candidate.visibilityAge = math.max(0, state.simulationTime - cached.timestamp)
+    end
+  end
+
+  local checked = 0
+  local count = #candidates
+  local cursor = count > 0 and ((state.occlusionCursor - 1) % count) + 1 or 1
+  local nextCursor = cursor
+
+  -- Rotate the starting candidate so traffic outside the nearest four is not starved.
+  for offset = 0, count - 1 do
+    if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE then break end
+    local index = ((cursor + offset - 1) % count) + 1
+    local candidate = candidates[index]
     local target = state.vehicleRegistry[candidate.registryIndex]
     if target then
       local allOccluded = true
+      local anyRaycastResult = false
       local anyUnverified = false
-      candidate.visibility = "unverified"
+      local sourcesChecked = 0
+      local lastVisibility = "unverified"
+      local lastSensorName = nil
 
-      -- A target may be visible from a different sensor when its nearest zone is occluded.
+      -- A second sensor may see a target hidden from the nearest sensor.
       for sourceIndex = 1, #candidate.sensorSources do
-        if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE then
-          anyUnverified = true
-          break
-        end
-
+        if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE or sourcesChecked >= 2 then break end
         local source = candidate.sensorSources[sourceIndex]
-        local zone = nil
-        for zoneIndex = 1, #zones do
-          if zones[zoneIndex].name == source.name then
-            zone = zones[zoneIndex]
-            break
-          end
-        end
-
+        local zone = zonesByName[source.name]
         if zone then
           local visibility, didRaycast = checkTargetOcclusion(zone, target)
-          if didRaycast then checked = checked + 1 end
+          if didRaycast then
+            checked = checked + 1
+            sourcesChecked = sourcesChecked + 1
+            anyRaycastResult = true
+          end
+          lastVisibility = visibility
+          lastSensorName = zone.name
           if visibility == "visible" then
             candidate.visibility = "visible"
             candidate.visibleFrom = zone.name
@@ -1724,7 +1761,7 @@ local function detectNearbyVehicles(data)
             anyUnverified = false
             break
           elseif visibility == "occluded" then
-            allOccluded = allOccluded and true
+            anyRaycastResult = true
           else
             anyUnverified = true
             allOccluded = false
@@ -1736,8 +1773,30 @@ local function detectNearbyVehicles(data)
       end
 
       if candidate.visibility ~= "visible" then
-        candidate.visibility = allOccluded and not anyUnverified and "occluded" or "unverified"
+        candidate.visibility = allOccluded and anyRaycastResult and not anyUnverified
+          and "occluded" or "unverified"
       end
+
+      if anyRaycastResult then
+        local key = tostring(candidate.sourceVehicleId)
+        state.occlusionCache[key] = {
+          visibility = candidate.visibility,
+          timestamp = state.simulationTime,
+          position = vec3(target.center),
+          sensorName = candidate.visibleFrom or lastSensorName
+        }
+        candidate.visibilityTimestamp = state.simulationTime
+        candidate.visibilityAge = 0
+      end
+      nextCursor = (index % count) + 1
+    end
+  end
+
+  state.occlusionCursor = nextCursor
+  for key, cached in pairs(state.occlusionCache) do
+    if not state.vehicleRegistryById[key]
+        or state.simulationTime - cached.timestamp > TRACK_MAX_AGE then
+      state.occlusionCache[key] = nil
     end
   end
 
