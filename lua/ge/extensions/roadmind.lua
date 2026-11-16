@@ -2530,7 +2530,7 @@ buildWorldModel = function()
   return model
 end
 
-
+local function snapshotVehicleBounds(vehicle, vehicleId)
   local position = asVec3(safeCall(vehicle, "getPosition"))
   local velocity = asVec3(safeCall(vehicle, "getVelocity"))
   local box = safeCall(vehicle, "getSpawnWorldOOBB")
