@@ -54,6 +54,7 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 - Adaptive quality only scales down from the user's selected profile; it does not exceed that profile's ray count or scan frequency.
 - Speed adaptation multiplies sensor intervals by 1.5 below 5 m/s, keeps the base interval from 5 to 25 m/s, and multiplies by 0.75 at or above 25 m/s.
 - Traffic OBB registry and tracking updates use a separate speed-based cadence: 0.30 s below 5 m/s, 0.15 s from 5–20 m/s and 0.10 s at or above 20 m/s. These updates use BeamNG vehicle-object position/OBB data rather than raycasts.
+- Detection-zone transforms refresh independently at 0.15/0.10/0.075 s (about 6.7–13.3 Hz) for low/medium/high vehicle speed. This recomputes sensor-zone geometry only; it adds no scene raycasts.
 - The Vehicle Lua scheduler executes only one due sensor/pose/detection-zone job per graphics frame in round-robin order. It spreads simultaneously due jobs across successive frames instead of issuing all scans in the same update.
 - Target FPS is best-effort. If quality reaches its minimum and measured FPS remains below target, the game or the rest of the scene is the limiting factor.
 

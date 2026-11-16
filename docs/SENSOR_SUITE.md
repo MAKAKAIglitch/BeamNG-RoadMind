@@ -21,7 +21,7 @@ This document describes the current Drive-compatible sensor layout and the exact
 
 RoadMind keeps one Game Engine vehicle registry made from oriented bounding boxes (OBBs). The registry refreshes independently of sensor raycasts, using a speed-adaptive 0.30/0.15/0.10 s cadence (about 3.3–10 Hz). It excludes the player vehicle, invalid entries and entries reported as deleted/destroyed; a vehicle without valid OBB data is not registered.
 
-At the same speed-adaptive cadence, the latest calibrated sensor mounts define independent detection volumes:
+The latest calibrated sensor mounts define independent detection volumes. Their world-space transforms refresh separately from raycasting at 0.15/0.10/0.075 s (about 6.7–13.3 Hz) as speed rises:
 
 - LiDAR uses its 120° horizontal and 16° vertical coverage plus configured range.
 - Each radar uses its own horizontal/vertical coverage and range.

@@ -985,6 +985,9 @@ function M.updateGFX(dt)
   local radarInterval = CONFIG.radarInterval * speedMultiplier
   local ultrasonicInterval = CONFIG.ultrasonicInterval * speedMultiplier
   local poseInterval = CONFIG.poseInterval * speedMultiplier
+  -- Detection-zone transforms are cheap geometry, not sensor raycasts.
+  -- Refresh them independently so the GE traffic registry sees recent mounts.
+  local detectionZoneInterval = 0.10 * speedMultiplier
 
   if sensorSettings.lidarEnabled then state.lidarTimer = state.lidarTimer + dt end
   if sensorSettings.radarEnabled then state.radarTimer = state.radarTimer + dt end
@@ -1024,7 +1027,7 @@ function M.updateGFX(dt)
     and state.ultrasonicTimer >= ultrasonicInterval
   local poseDue = (sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled
       or sensorSettings.calibrationDebugEnabled) and state.poseTimer >= poseInterval
-  local zonesDue = state.detectionZoneTimer >= poseInterval
+  local zonesDue = state.detectionZoneTimer >= detectionZoneInterval
     and (sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled)
 
   -- Round-robin over five independent jobs. A graphics frame handles at most
@@ -1064,7 +1067,7 @@ function M.updateGFX(dt)
       updatedSensors.pose = true
       selectedJob = job
     elseif job == 5 and zonesDue then
-      state.detectionZoneTimer = state.detectionZoneTimer % poseInterval
+      state.detectionZoneTimer = state.detectionZoneTimer % detectionZoneInterval
       state.frame = state.frame or buildEmptyFrame()
       state.frame.detectionZones = buildDetectionZones(frame)
       updatedSensors.detectionZones = true
