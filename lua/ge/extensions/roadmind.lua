@@ -1527,69 +1527,37 @@ end
 
 local function buildSensorZones(data, settings)
   local zones = {}
+  local source = type(data.detectionZones) == "table" and data.detectionZones.zones or nil
+  if type(source) ~= "table" then return zones end
 
-  if settings.lidarEnabled and type(data.lidar) == "table" then
-    local lidar = data.lidar
-    zones[#zones + 1] = {
-      name = "Forward LiDAR",
-      sensor = "lidar",
-      origin = asVec3(lidar.origin),
-      forward = normalizedVec3(lidar.forward),
-      right = normalizedVec3(lidar.right),
-      up = normalizedVec3(lidar.up),
-      range = tonumber(lidar.range),
-      minRange = 0.35,
-      horizontalFov = tonumber(lidar.horizontalFov) or 120,
-      verticalFov = tonumber(lidar.verticalFov) or 16
-    }
-  end
-
-  if settings.radarEnabled and type(data.radar) == "table" then
-    for i = 1, #(data.radar.mounts or {}) do
-      local mount = data.radar.mounts[i]
-      zones[#zones + 1] = {
-        name = mount.name or ("Radar " .. i),
-        sensor = "radar",
-        origin = asVec3(mount.position),
-        forward = normalizedVec3(mount.direction),
-        right = normalizedVec3(mount.right),
-        up = normalizedVec3(mount.up),
-        range = tonumber(mount.range),
-        minRange = tonumber(mount.minRange) or 0.75,
-        horizontalFov = tonumber(mount.fov) or 45,
-        verticalFov = tonumber(mount.verticalFov) or 45
+  for i = 1, #source do
+    local raw = source[i]
+    local enabled = (raw.sensor == "lidar" and settings.lidarEnabled)
+      or (raw.sensor == "radar" and settings.radarEnabled)
+      or (raw.sensor == "ultrasonic" and settings.ultrasonicEnabled)
+    if enabled then
+      local zone = {
+        name = raw.name or (raw.sensor .. " " .. i),
+        sensor = raw.sensor,
+        origin = asVec3(raw.origin),
+        forward = normalizedVec3(raw.forward),
+        right = normalizedVec3(raw.right),
+        up = normalizedVec3(raw.up),
+        range = tonumber(raw.range),
+        minRange = tonumber(raw.minRange) or 0,
+        horizontalFov = tonumber(raw.horizontalFov),
+        verticalFov = tonumber(raw.verticalFov)
       }
+      if zone.origin and zone.forward and zone.right and zone.up
+          and zone.range and zone.range > zone.minRange
+          and zone.horizontalFov and zone.horizontalFov > 0
+          and zone.verticalFov and zone.verticalFov > 0 then
+        zones[#zones + 1] = zone
+      end
     end
   end
 
-  if settings.ultrasonicEnabled and type(data.ultrasonic) == "table" then
-    for i = 1, #(data.ultrasonic.mounts or {}) do
-      local mount = data.ultrasonic.mounts[i]
-      zones[#zones + 1] = {
-        name = mount.name or ("Ultrasonic " .. i),
-        sensor = "ultrasonic",
-        origin = asVec3(mount.position),
-        forward = normalizedVec3(mount.direction),
-        right = normalizedVec3(mount.right),
-        up = normalizedVec3(mount.up),
-        range = tonumber(mount.range) or 5,
-        minRange = tonumber(mount.minRange) or 0.08,
-        horizontalFov = tonumber(mount.fov) or 16,
-        verticalFov = tonumber(mount.verticalFov) or 20
-      }
-    end
-  end
-
-  local valid = {}
-  for i = 1, #zones do
-    local zone = zones[i]
-    if zone.origin and zone.forward and zone.right and zone.up
-        and zone.range and zone.range > zone.minRange
-        and zone.horizontalFov > 0 and zone.verticalFov > 0 then
-      valid[#valid + 1] = zone
-    end
-  end
-  return valid
+  return zones
 end
 
 local function targetInsideSensorZone(target, zone)
@@ -1953,17 +1921,32 @@ local function mergeSensorFrame(frame)
     lidar = {rays = {}, pointCount = 0},
     radar = {mounts = {}, returns = {}},
     ultrasonic = {mounts = {}, returns = {}},
+    detectionZones = {timestamp = 0, zones = {}},
+    sensorTimestamps = {},
     cameras = {}
   }
+  latest.sensorTimestamps = latest.sensorTimestamps or {}
   latest.enabled = frame.enabled == true
   latest.sequence = frame.sequence
 
   if updates.lidar == true then
     latest.lidar = processLidar(frame.lidar)
+    latest.sensorTimestamps.lidar = state.simulationTime
     rememberLidarPoints(latest.lidar)
   end
-  if updates.radar == true then latest.radar = processRadar(frame.radar) end
-  if updates.ultrasonic == true then latest.ultrasonic = processUltrasonic(frame.ultrasonic) end
+  if updates.radar == true then
+    latest.radar = processRadar(frame.radar)
+    latest.sensorTimestamps.radar = state.simulationTime
+  end
+  if updates.ultrasonic == true then
+    latest.ultrasonic = processUltrasonic(frame.ultrasonic)
+    latest.sensorTimestamps.ultrasonic = state.simulationTime
+  end
+  if updates.detectionZones == true then
+    latest.detectionZones = type(frame.detectionZones) == "table"
+      and frame.detectionZones or {timestamp = 0, zones = {}}
+    latest.sensorTimestamps.detectionZones = state.simulationTime
+  end
   if updates.pose == true then
     latest.cameras = type(frame.cameras) == "table" and frame.cameras or {}
     latest.localization = type(frame.localization) == "table" and frame.localization or nil
@@ -2004,6 +1987,7 @@ function M.onUpdate(dt)
     return
   end
 
+  state.simulationTime = state.simulationTime + dt
   state.frameAge = state.frameAge + dt
   checkTimer = checkTimer + dt
 
