@@ -88,6 +88,7 @@ local state = {
   radarTimer = 0,
   ultrasonicTimer = 0,
   poseTimer = 0,
+  detectionZoneTimer = 0,
   sequence = 0,
   lastLidarCount = 0,
   lastRadarCount = 0,
@@ -336,6 +337,56 @@ local function buildGeometryDebug(frame)
       right = vectorToPreciseTable(frame.position + frame.right * 1.2),
       up = vectorToPreciseTable(frame.position + frame.up * 1.2)
     }
+  }
+end
+
+local function buildDetectionZones(frame)
+  local layout = currentSensorLayout()
+  local zones = {}
+
+  local function add(name, sensor, config, horizontalFov, verticalFov, range, minRange)
+    local mount = makeMount(frame, config.forward, config.lateral, config.up or 0, config.yaw)
+    if not mount then return end
+    zones[#zones + 1] = {
+      name = name,
+      sensor = sensor,
+      origin = vectorToTable(mount.position),
+      forward = vectorToPreciseTable(mount.direction),
+      right = vectorToPreciseTable(mount.right),
+      up = vectorToPreciseTable(mount.up),
+      range = range,
+      minRange = minRange,
+      horizontalFov = horizontalFov,
+      verticalFov = verticalFov
+    }
+  end
+
+  if sensorSettings.lidarEnabled then
+    local cfg = layout.lidar
+    add("Forward LiDAR", "lidar", {
+      forward = cfg.forwardOffset, lateral = cfg.lateralOffset,
+      up = cfg.upOffset, yaw = 0
+    }, math.deg(cfg.horizontalFov), math.deg(cfg.verticalFov), cfg.maxRange, cfg.minRange)
+  end
+
+  if sensorSettings.radarEnabled then
+    for i = 1, #layout.radars do
+      local cfg = layout.radars[i]
+      add(cfg.name, "radar", cfg, cfg.fov, 45, cfg.range, 0.75)
+    end
+  end
+
+  if sensorSettings.ultrasonicEnabled then
+    for i = 1, #layout.ultrasonics do
+      local cfg = layout.ultrasonics[i]
+      add(cfg.name, "ultrasonic", cfg, 16, 20, CONFIG.ultrasonicRange, 0.08)
+    end
+  end
+
+  return {
+    timestamp = state.elapsed,
+    updateHz = sensorSettings.poseHz,
+    zones = zones
   }
 end
 
@@ -635,6 +686,7 @@ local function buildEmptyFrame()
     localization = nil,
     mounts = {},
     geometryDebug = nil,
+    detectionZones = {},
     vehicleVelocity = nil
   }
 end
@@ -663,6 +715,7 @@ local function publish()
   if updates.lidar then payload.lidar = frame.lidar end
   if updates.radar then payload.radar = frame.radar end
   if updates.ultrasonic then payload.ultrasonic = frame.ultrasonic end
+  if updates.detectionZones then payload.detectionZones = frame.detectionZones or {} end
   if updates.pose then
     payload.cameras = frame.cameras or {}
     payload.localization = frame.localization
@@ -803,6 +856,7 @@ function M.setEnabled(enabled, sourceVehicleId)
   state.radarTimer = 0
   state.ultrasonicTimer = 0
   state.poseTimer = 0
+  state.detectionZoneTimer = 0
   state.lastForward = nil
   state.lastLidarCount = 0
   state.lastRadarCount = 0
@@ -917,6 +971,9 @@ function M.updateGFX(dt)
       or sensorSettings.calibrationDebugEnabled then
     state.poseTimer = state.poseTimer + dt
   end
+  if sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled then
+    state.detectionZoneTimer = state.detectionZoneTimer + dt
+  end
 
   local frame = getVehicleFrame()
   if not frame then
@@ -935,6 +992,8 @@ function M.updateGFX(dt)
     state.frame.localization = nil
     state.frame.mounts = {}
     state.frame.geometryDebug = nil
+    state.frame.detectionZones = {}
+    updatedSensors.detectionZones = true
     updatedSensors.lidar = true
     updatedSensors.radar = true
     updatedSensors.ultrasonic = true
@@ -980,6 +1039,15 @@ function M.updateGFX(dt)
     state.frame.mounts = sensorSettings.calibrationDebugEnabled
       and buildSensorMountDebug(frame) or {}
     updatedSensors.pose = true
+    changed = true
+  end
+
+  if state.detectionZoneTimer >= CONFIG.poseInterval
+      and (sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled) then
+    state.detectionZoneTimer = state.detectionZoneTimer % CONFIG.poseInterval
+    state.frame = state.frame or buildEmptyFrame()
+    state.frame.detectionZones = buildDetectionZones(frame)
+    updatedSensors.detectionZones = true
     changed = true
   end
 
