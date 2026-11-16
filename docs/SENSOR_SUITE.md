@@ -88,7 +88,7 @@ Five radar units approximate a modern front-and-corner layout:
 - Front-left and front-right corner units.
 - Rear-left and rear-right corner units.
 
-Each radar samples a small horizontal ray fan. Returns contain range and world hit position. Stable target IDs and radial velocity are not extracted yet.
+Each radar samples a small horizontal ray fan. Returns contain range and world hit position. The raw radar return does not create an independent radar track or measure Doppler. When the scene raycast exposes a vehicle object ID, the world model can associate that hit with the separate simulator-assisted RoadMind vehicle track. Relative speed is estimated from timestamped target positions and simulator player velocity, not from radar signal processing.
 
 This is a kinematic raycast proxy. It does not simulate RF propagation, frequency-modulated chirps, antenna arrays, RCS, multipath or Doppler processing.
 
