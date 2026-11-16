@@ -53,10 +53,11 @@ local LIDAR_POINT_FADE_SECONDS = 0.40
 local LIDAR_RENDER_POINT_MAX_AGE = 2.25
 local LIDAR_STATIC_MATCH_DISTANCE = 0.35
 local LIDAR_TRACK_LOCAL_MATCH_DISTANCE = 0.85
-local WORLD_MODEL_SCHEMA_VERSION = 1
+local WORLD_MODEL_SCHEMA_VERSION = 2
 local WORLD_MODEL_OBSERVATION_MAX_AGE = 1.5
+local WORLD_MODEL_REGISTRY_MAX_AGE = 1.0
 local WORLD_MODEL_OBSTACLE_CELL_SIZE = 0.75
-local WORLD_MODEL_MAX_OBSERVATIONS = 256
+local WORLD_MODEL_MAX_OBSERVATIONS = 512
 local WORLD_MODEL_MAX_TRACKS = 128
 local VEHICLE_REGISTRY_INTERVAL = 0.5
 local VEHICLE_DETECTION_INTERVAL = 0.25
@@ -89,6 +90,7 @@ local state = {
   vehicleRegistry = {},
   vehicleRegistryById = {},
   vehicleRegistrySnapshotValid = false,
+  vehicleRegistryTimestamp = nil,
   vehicleIteratorContext = {},
   vehicleRegistryTimer = 0,
   vehicleRegistryGeneration = 0,
@@ -806,6 +808,7 @@ local function detachPreviousVehicle()
   state.vehicleRegistry = {}
   state.vehicleRegistryById = {}
   state.vehicleRegistrySnapshotValid = false
+  state.vehicleRegistryTimestamp = nil
   state.vehicleRegistryTimer = 0
   state.vehicleRegistryGeneration = 0
   state.vehicleRegistryTruncated = false
@@ -1443,6 +1446,7 @@ function M.setVisualizationEnabled(enabled)
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
     state.vehicleRegistrySnapshotValid = false
+    state.vehicleRegistryTimestamp = nil
     state.vehicleRegistryTimer = 0
     state.vehicleDetectionTimer = 0
     state.vehicleCandidates = {}
@@ -1464,6 +1468,7 @@ function M.setVisualizationEnabled(enabled)
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
     state.vehicleRegistrySnapshotValid = false
+    state.vehicleRegistryTimestamp = nil
     state.vehicleRegistryTimer = 0
     state.vehicleRegistryTruncated = false
     state.vehicleDetectionTimer = 0
@@ -1671,6 +1676,9 @@ local function processLidar(lidar)
     local hit = raycastBeam(beams[i], lidar.origin, lidar.range)
     if hit then
       hit.hit = true
+      hit.name = lidar.name or "Forward LiDAR"
+      hit.origin = lidar.origin
+      hit.direction = beams[i].direction
       hit.rayIndex = i
       returns[#returns + 1] = hit
     end
@@ -1700,6 +1708,7 @@ local function processRadar(radar)
     if hit then
       hit.name = beam.name
       hit.origin = beam.origin
+      hit.direction = beam.direction
       hit.rayIndex = i
       returns[#returns + 1] = hit
     end
@@ -1720,6 +1729,7 @@ local function processUltrasonic(ultrasonic)
       if not current or hit.distance < current.distance then
         hit.name = beam.name
         hit.origin = beam.origin
+        hit.direction = beam.direction
         hit.beamIndex = i
         nearestBySensor[beam.name] = hit
       end
@@ -2499,6 +2509,7 @@ local function refreshVehicleRegistry()
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
     state.vehicleRegistrySnapshotValid = false
+    state.vehicleRegistryTimestamp = nil
     state.vehicleRegistryTruncated = false
     state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
     return false
@@ -2512,6 +2523,7 @@ local function refreshVehicleRegistry()
   state.vehicleRegistry = registry
   state.vehicleRegistryById = registryById
   state.vehicleRegistrySnapshotValid = true
+  state.vehicleRegistryTimestamp = state.simulationTime
   state.vehicleRegistryTruncated = truncated
   state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
   return true
@@ -2817,6 +2829,7 @@ local function updateVehicleDetection(dt)
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
     state.vehicleRegistrySnapshotValid = false
+    state.vehicleRegistryTimestamp = nil
     state.vehicleCandidates = {}
     state.vehicleRegistryTimer = 0
     state.vehicleRegistryTruncated = false
