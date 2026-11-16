@@ -49,17 +49,17 @@ The current priority is the perception foundation. Route following, parking and 
 
 **Goal:** place sensors relative to each vehicle's actual dimensions instead of relying on universal fixed offsets.
 
-- [ ] Read the vehicle's bounding geometry once when a vehicle is attached or its configuration changes.
-- [ ] Determine vehicle-local center, forward/rear extents, left/right extents, height and coordinate basis.
-- [ ] Define a vehicle geometry profile containing dimensions, local bounds and calibration state.
-- [ ] Calculate LiDAR, radar, ultrasonic and camera mount positions from the vehicle geometry and configurable offsets/clearances.
-- [ ] Keep sensor mount positions in vehicle-local coordinates.
-- [ ] Cache the geometry profile and calculated local sensor poses; do not recalculate vehicle dimensions on every scan.
-- [ ] Update only the world-space sensor transforms from the vehicle's current transform when a sensor frame is due.
-- [ ] Invalidate and rebuild the cache on vehicle switch, respawn/reset or detected configuration/geometry change.
-- [ ] Provide safe fallback offsets when geometry data is unavailable or invalid.
+- [x] Read the vehicle's oriented bounding geometry once when attached; provide manual recalibration and reset/configuration callback entry points.
+- [x] Determine vehicle-local center, forward/rear extents, left/right extents, height and coordinate basis from the OBB and live vehicle basis.
+- [x] Define a versioned vehicle geometry profile containing dimensions, local bounds and calibration state.
+- [x] Derive LiDAR, radar, ultrasonic and camera mount positions from the vehicle geometry plus centralized clearances.
+- [x] Keep sensor layout positions in vehicle-local coordinates.
+- [x] Cache the geometry profile and calculated sensor layout; do not recalculate vehicle dimensions on every scan.
+- [x] Update world-space sensor transforms from the vehicle's current pose when a scan/pose frame is due.
+- [ ] Validate that reset/configuration callback dispatch invalidates the cache on every supported BeamNG version; vehicle switches and manual recalibration already rebuild it.
+- [x] Provide conservative fallback offsets when geometry data is unavailable or invalid.
 - [ ] Allow per-vehicle manual mount overrides without changing the shared defaults.
-- [ ] Add debug visualization for the vehicle bounds, local axes and sensor mounts.
+- [x] Add optional debug visualization for vehicle bounds, local axes and all sensor mounts.
 - [ ] Validate placement on small cars, sedans, vans, pickups, SUVs and large vehicles.
 
 **Acceptance criteria:** sensor mounts remain outside the relevant body surfaces with sensible coverage; vehicle dimensions are not queried during every scan; switching vehicles produces a fresh calibration without stale mounts.
