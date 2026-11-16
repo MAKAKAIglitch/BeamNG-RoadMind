@@ -4,7 +4,7 @@
 
 RoadMind models the sensor layout of a modern assisted/autonomous vehicle and visualizes its coverage directly in the game world. The long-term goal is a custom driving stack that plans routes, avoids obstacles and controls the vehicle without relying on a permanent neural-network runtime.
 
-> **Development status: perception foundation in progress.** The current build contains virtual LiDAR, radar and ultrasonic raycast proxies, camera coverage frustums, vehicle-state localization/odometry, OBB-based sensor calibration, scheduled simulator-assisted vehicle detection, and an initial timestamped object-tracking layer with RoadMind IDs and estimated motion. Stable tracking and occlusion behavior across live traffic, unified world-model fusion, temporally smoothed point-cloud rendering and vehicle-class validation still need in-game testing. The road-AI button is experimental and is not a completed custom planner/controller. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
+> **Development status: perception foundation in progress.** The current build contains virtual LiDAR, radar and ultrasonic raycast proxies, camera coverage frustums, vehicle-state localization/odometry, OBB-based sensor calibration, scheduled simulator-assisted vehicle detection, and an initial timestamped object-tracking layer with RoadMind IDs and estimated motion. Stable tracking and occlusion behavior across live traffic, unified world-model fusion and visual validation of the time-consistent LiDAR point layer still need in-game testing. The road-AI button is experimental and is not a completed custom planner/controller. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
 
 ## Sensor suite
 
@@ -28,6 +28,7 @@ Open **ESC → Mods → RoadMind** (BeamNG.drive 0.39+). The bilingual settings 
 - Independent switches for 3D sensor overlays.
 - OBB-based vehicle geometry status, manual recalibration and an optional bounds/axes/sensor-mount overlay.
 - A tracked-object list showing RoadMind IDs, track state, estimated speed, relative speed, data age, confidence and sensor-zone sources.
+- A render-only LiDAR point layer that follows tracked moving-object geometry between scans while keeping raw ray hits separate.
 - A live estimate of scheduled scene-raycast queries per second.
 
 Settings are saved to the BeamNG user settings folder and applied while scanning is active. Scanning is stopped by default. Press **Start scanning** in the page, or use the existing **RoadMind: Toggle Sensor Suite** Controls binding as a quick toggle.
@@ -61,6 +62,7 @@ These boundaries are kept explicit so a simulated geometric measurement is not m
 - Camera/localization data updates at the selected pose rate.
 - Scanning stays off until explicitly started.
 - Raycasts run only when a sensor scan is due, not in the render loop. Debug drawing redraws cached results.
+- LiDAR render smoothing performs no new scene raycasts and never changes the raw measurement array used by sensor safety logic.
 - Vehicle OBB dimensions are read during vehicle attach/manual recalibration, not once per ray or each scan. The calibration overlay is optional.
 
 The figures are calculated from ray counts and scan frequencies. They are not measured FPS or CPU percentages. Actual cost depends on the map, vehicle, traffic, hardware and game version.
