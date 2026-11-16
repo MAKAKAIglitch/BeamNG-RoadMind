@@ -27,6 +27,28 @@
     </section>
 
     <section class="roadmind-section">
+      <BngCardHeading>{{ t("vehicleGeometry") }}</BngCardHeading>
+      <div class="roadmind-runtime">
+        <div>
+          <span class="roadmind-status" :class="{ active: status.vehicleCalibration && status.vehicleCalibration.calibrated }">
+            {{ status.vehicleCalibration && status.vehicleCalibration.calibrated ? t("calibrated") : t("fallbackCalibration") }}
+          </span>
+          <span v-if="status.vehicleCalibration && status.vehicleCalibration.calibrated" class="roadmind-budget">
+            {{ status.vehicleCalibration.length.toFixed(2) }} ×
+            {{ status.vehicleCalibration.width.toFixed(2) }} ×
+            {{ status.vehicleCalibration.height.toFixed(2) }} m
+          </span>
+          <span v-else class="roadmind-budget">
+            {{ status.vehicleCalibration && status.vehicleCalibration.error || t("calibrationWaiting") }}
+          </span>
+        </div>
+        <BngButton :accent="ACCENTS.outlined" :disabled="busy || !status.activeVehicle"
+          @click="recalibrateVehicle">{{ t("recalibrate") }}</BngButton>
+      </div>
+      <p class="roadmind-note">{{ t("calibrationNote") }}</p>
+    </section>
+
+    <section class="roadmind-section">
       <BngCardHeading>{{ t("routePilot") }}</BngCardHeading>
       <p class="roadmind-note">{{ t("routeDescription") }}</p>
       <div class="roadmind-runtime">
@@ -187,6 +209,11 @@
           @update:modelValue="value => setSetting('showCameras', value)" />
       </BngRow>
       <BngRow>
+        <template #label>{{ t("calibrationOverlay") }}</template>
+        <BngSwitch :modelValue="settings.showCalibration" :disabled="busy"
+          @update:modelValue="value => setSetting('showCalibration', value)" />
+      </BngRow>
+      <BngRow>
         <template #label>{{ t("localizationMarkers") }}</template>
         <BngSwitch :modelValue="settings.showLocalization" :disabled="busy"
           @update:modelValue="value => setSetting('showLocalization', value)" />
@@ -243,6 +270,13 @@ const EN = {
   clearCloud: "Clear scanned point cloud",
   detectedVehicles: "Detected vehicles",
   vehiclesDetected: "Vehicles in sensor view",
+  vehicleGeometry: "Vehicle geometry and sensor calibration",
+  calibrated: "Geometry calibrated",
+  fallbackCalibration: "Using fallback sensor positions",
+  calibrationWaiting: "Calibration has not been run yet",
+  recalibrate: "Recalibrate sensors",
+  calibrationNote: "RoadMind reads the vehicle oriented bounding box once per attach/reset and calculates all sensor mounts in vehicle-local coordinates. Turn on the calibration overlay to inspect the bounds, axes and sensor positions. Vehicle-class coverage still requires in-game validation.",
+  calibrationOverlay: "Vehicle bounds, axes and all sensor mounts",
   routeWaypoints: "Road waypoints in active path",
   routePilot: "Road route pilot (experimental)",
   routeDescription: "Builds a forward route on the current road NavGraph and sends its waypoints to BeamNG vehicle AI (up to 29 km/h). LiDAR, radar, ultrasonic returns and nearby-vehicle detections guard the path: it stops when blocked or when sensor data is stale, then replans ahead when clear. It does not yet steer around a blocked lane or accept a chosen destination; camera frustums are view-only.",
@@ -310,6 +344,13 @@ const RU = {
   clearCloud: "Очистить облако точек",
   detectedVehicles: "Обнаруженные автомобили",
   vehiclesDetected: "Машин в поле зрения датчиков",
+  vehicleGeometry: "Геометрия автомобиля и калибровка датчиков",
+  calibrated: "Геометрия определена",
+  fallbackCalibration: "Используются резервные позиции датчиков",
+  calibrationWaiting: "Калибровка ещё не выполнялась",
+  recalibrate: "Перекалибровать датчики",
+  calibrationNote: "RoadMind один раз при подключении или сбросе считывает ориентированный габарит автомобиля и рассчитывает крепления датчиков в локальных координатах. Включи отладочную визуализацию, чтобы увидеть габариты, оси и датчики. Размещение на разных классах машин ещё требует проверки в игре.",
+  calibrationOverlay: "Габариты, оси и все крепления датчиков",
   routeWaypoints: "Точек дорожного маршрута",
   routePilot: "Автопилот по дорожной сети (эксперимент)",
   routeDescription: "Строит путь вперёд по дорожному графу текущей карты и передаёт точки штатному AI BeamNG (до 29 км/ч). LiDAR, радары, ультразвук и обнаружение машин контролируют путь: при препятствии или устаревших данных машина останавливается, после освобождения пути строится следующий участок. Объезд препятствий и выбор конечной точки пока не реализованы; камеры показывают только поля обзора.",
@@ -429,6 +470,7 @@ const settings = ref({
   showCameras: false,
   showLocalization: false,
   showDetectedVehicles: true,
+  showCalibration: false,
 })
 const status = ref({
   visualizationEnabled: false,
@@ -438,6 +480,7 @@ const status = ref({
   routeSafetyStopped: false,
   persistentLidarPointCount: 0,
   detectedVehicleCount: 0,
+  vehicleCalibration: { calibrated: false, error: "Calibration has not been run" },
 })
 const error = ref("")
 const busy = ref(false)
@@ -580,6 +623,18 @@ async function toggleRoutePilot() {
   } catch (e) {
     error.value = t("error")
     console.error("RoadMind: could not toggle route pilot", e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function recalibrateVehicle() {
+  busy.value = true
+  try {
+    acceptResult(await callRoadMind('recalibrateVehicle'))
+  } catch (e) {
+    error.value = t("error")
+    console.error("RoadMind: could not recalibrate vehicle geometry", e)
   } finally {
     busy.value = false
   }
