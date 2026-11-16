@@ -77,6 +77,7 @@ local state = {
   vehicleRegistry = {},
   vehicleRegistryById = {},
   vehicleRegistrySnapshotValid = false,
+  vehicleIteratorContext = {},
   vehicleRegistryTimer = 0,
   vehicleRegistryGeneration = 0,
   vehicleRegistryTruncated = false,
@@ -1742,44 +1743,19 @@ local function snapshotVehicleBounds(vehicle, vehicleId)
 end
 
 local function refreshVehicleRegistry()
-  local vehicles = nil
-  if type(getAllVehicles) == "function" then
-    local ok, result = pcall(getAllVehicles)
-    if ok and type(result) == "table" then vehicles = result end
-  end
-
-  if not vehicles and be and type(be.getObjectCount) == "function"
-      and type(be.getObject) == "function" then
-    vehicles = {}
-    local okCount, count = pcall(be.getObjectCount, be)
-    if okCount and type(count) == "number" then
-      for index = 0, math.min(count - 1, MAX_REGISTRY_VEHICLES * 2) do
-        local okObject, vehicle = pcall(be.getObject, be, index)
-        if okObject and vehicle then vehicles[#vehicles + 1] = vehicle end
-      end
-    end
-  end
-
-  if type(vehicles) ~= "table" then
-    state.vehicleRegistry = {}
-    state.vehicleRegistryById = {}
-    state.vehicleRegistrySnapshotValid = false
-    state.vehicleRegistryTruncated = false
-    state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
-    return false
-  end
-
   local registry = {}
   local examined = 0
   local truncated = false
-  for _, vehicle in pairs(vehicles) do
+  local iteratorAvailable = false
+
+  local function addVehicle(vehicleId, vehicle)
     examined = examined + 1
     if examined > MAX_REGISTRY_VEHICLES * 4 then
       truncated = true
-      break
+      return false
     end
 
-    local vehicleId = getVehicleId(vehicle)
+    vehicleId = vehicleId or getVehicleId(vehicle)
     if vehicleId and tostring(vehicleId) ~= tostring(state.activeVehicleId)
         and safeCall(vehicle, "isDeleted") ~= true
         and safeCall(vehicle, "isDestroyed") ~= true then
@@ -1788,10 +1764,62 @@ local function refreshVehicleRegistry()
         registry[#registry + 1] = entry
         if #registry >= MAX_REGISTRY_VEHICLES then
           truncated = true
-          break
+          return false
         end
       end
     end
+    return true
+  end
+
+  -- BeamNG's iterator reuses the engine vehicle cache and avoids creating a
+  -- temporary list/table for every registry refresh.
+  if type(vehiclesIterator) == "function" then
+    local okIterator, iterator, context = pcall(vehiclesIterator, state.vehicleIteratorContext)
+    if okIterator and type(iterator) == "function" then
+      state.vehicleIteratorContext = context or state.vehicleIteratorContext
+      iteratorAvailable = true
+      for vehicleId, vehicle in iterator, state.vehicleIteratorContext do
+        if not addVehicle(vehicleId, vehicle) then break end
+      end
+    end
+  end
+
+  -- Compatibility paths for older/custom game environments.
+  if not iteratorAvailable then
+    local vehicles = nil
+    if type(getAllVehicles) == "function" then
+      local ok, result = pcall(getAllVehicles)
+      if ok and type(result) == "table" then vehicles = result end
+    end
+
+    if type(vehicles) == "table" then
+      for i = 1, #vehicles do
+        if not addVehicle(nil, vehicles[i]) then break end
+      end
+      iteratorAvailable = true
+    elseif be and type(be.getObjectCount) == "function"
+        and type(be.getObject) == "function" then
+      local okCount, count = pcall(be.getObjectCount, be)
+      if okCount and type(count) == "number" then
+        iteratorAvailable = true
+        for index = 0, math.min(count - 1, MAX_REGISTRY_VEHICLES * 2) do
+          local okObject, vehicle = pcall(be.getObject, be, index)
+          if okObject and vehicle and not addVehicle(nil, vehicle) then
+            truncated = true
+            break
+          end
+        end
+      end
+    end
+  end
+
+  if not iteratorAvailable then
+    state.vehicleRegistry = {}
+    state.vehicleRegistryById = {}
+    state.vehicleRegistrySnapshotValid = false
+    state.vehicleRegistryTruncated = false
+    state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
+    return false
   end
 
   local registryById = {}
