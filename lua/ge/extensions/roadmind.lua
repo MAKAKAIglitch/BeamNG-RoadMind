@@ -86,6 +86,7 @@ local state = {
   occlusionCursor = 1,
   simulationTime = 0,
   tracks = {},
+  tracksBySourceId = {},
   nextTrackId = 1,
   trackCount = 0,
   occlusionRaycastsLastCycle = 0,
@@ -449,6 +450,7 @@ end
 
 local function resetTrackingState(resetClock)
   state.tracks = {}
+  state.tracksBySourceId = {}
   state.trackCount = 0
   state.occlusionCache = {}
   state.occlusionCursor = 1
@@ -499,6 +501,7 @@ local function makeTrackObservation(candidate)
 
   return {
     sourceVehicleId = candidate.sourceVehicleId or candidate.id,
+    sensorOrigin = asVec3(candidate.sensorOrigin),
     position = position,
     dimensions = candidate.dimensions,
     orientation = candidate.orientation,
@@ -540,13 +543,7 @@ local function updateObjectTracks(candidates)
     local observation = makeTrackObservation(candidates[i])
     if observation then
       local sourceKey = tostring(observation.sourceVehicleId)
-      local track = nil
-      for _, existing in pairs(state.tracks) do
-        if tostring(existing.sourceVehicleId) == sourceKey then
-          track = existing
-          break
-        end
-      end
+      local track = state.tracksBySourceId[sourceKey]
 
       if not track and state.trackCount < TRACK_MAX_COUNT then
         track = {
@@ -554,13 +551,14 @@ local function updateObjectTracks(candidates)
           sourceVehicleId = observation.sourceVehicleId,
           confidence = 0.55,
           missedScans = 0,
-          lastObservedAt = observation.observationTimestamp,
+          lastObservedAt = nil,
           lastUpdatedAt = now,
           velocitySource = "not-yet-available",
           sourceKind = observation.sourceKind,
           measurementKind = observation.measurementKind
         }
         state.tracks[track.trackId] = track
+        state.tracksBySourceId[sourceKey] = track
         state.trackCount = state.trackCount + 1
       end
 
@@ -586,6 +584,7 @@ local function updateObjectTracks(candidates)
 
         track.lastUpdatedAt = now
         track.sourceSensors = observation.sourceSensors
+        track.sensorOrigin = vectorToPlainTable(observation.sensorOrigin)
         track.simulatorVelocity = vectorToPlainTable(observation.simulatorVelocity)
         track.sourceKind = observation.sourceKind
         track.measurementKind = observation.measurementKind
@@ -653,6 +652,7 @@ local function updateObjectTracks(candidates)
 
     if expired then
       state.tracks[trackId] = nil
+      state.tracksBySourceId[tostring(track.sourceVehicleId)] = nil
       state.trackCount = math.max(0, state.trackCount - 1)
     else
       result[#result + 1] = track
