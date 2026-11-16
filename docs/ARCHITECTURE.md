@@ -127,7 +127,7 @@ The route manager accepts 1–12 ordered XYZ points in BeamNG world coordinates 
 
 The GE API function extensions.roadmind.getRouteState() returns a cloned snapshot containing the current road segment, local corridor, localization quality, ordered input points, route polyline, progress, next target, endpoint snap distance and safety state. Callers cannot mutate the coordinator's internal tables through the returned snapshot; this is the intended input contract for the next planning phase.
 
-The active route is previewed in world space and passed as a waypoint list to the built-in Vehicle Lua ai.driveUsingPath. The base Drive-mode route pilot remains experimental: it uses the game's AI for lane following, and RoadMind's sensors currently provide a conservative stop guard rather than a custom obstacle-avoidance planner. Camera frustums do not provide image measurements. Complex intersections, road splits, map compatibility, coordinate entry and progress still need live validation on several maps.
+The active route is previewed in world space and passed as a waypoint list to the built-in Vehicle Lua ai.driveUsingPath. The base Drive-mode route pilot remains experimental: it uses the game's AI for lane following, and RoadMind runs a best-effort stop guard at up to 10 Hz using only enabled, fresh sensor returns plus recently confirmed vehicle OBBs. Vehicle obstacles are checked by their projected footprint, not only their center. This is not a collision guarantee or a replacement for the future swept-footprint trajectory planner. Camera frustums do not provide image measurements. Complex intersections, road splits, map compatibility, coordinate entry and progress still need live validation on several maps.
 
 ## Input and settings
 

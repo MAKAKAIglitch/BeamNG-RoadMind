@@ -56,6 +56,10 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 - Sensor data is cached between updates.
 - Game Engine scene raycasts run only on incoming sensor-scan updates; the render loop redraws cached data and performs no raycasts.
 
+## Route safety workload
+
+When the experimental route pilot is active, the forward stop guard evaluates at most 10 times per second, including immediate opportunities after incoming sensor frames. It checks only enabled, fresh sensor streams and recent vehicle-registry visibility. Confirmed nearby vehicle obstacles are tested using their projected OBB footprint. This guard adds no scene raycasts; it is a bounded geometry check, not a collision guarantee or a replacement for the future swept-footprint planner. Its CPU cost has not yet been measured in-game.
+
 ## Rendering budget
 
 The High preset scans 51 LiDAR directions (17 × 3); the configurable slider allows up to 99 directions (33 × 3). Radar and ultrasonic limits remain 17 and 36 directions respectively.

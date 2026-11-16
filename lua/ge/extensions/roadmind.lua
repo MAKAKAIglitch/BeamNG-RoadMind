@@ -84,6 +84,7 @@ local ROUTE_DESTINATION_REACHED_M = 12
 local MAX_ROUTE_ENDPOINT_OFFSET_M = 60
 local ROUTE_MAX_DEVIATION_M = 30
 local ROUTE_MAX_LOST_UPDATES = 4
+local ROUTE_SAFETY_INTERVAL = 0.10
 
 local state = {
   activeVehicleId = nil,
@@ -139,6 +140,7 @@ local state = {
   routeDistanceToPath = nil,
   routeLostUpdates = 0,
   routeDestinationSnapDistance = nil,
+  routeSafetyLastCheckAt = -math.huge,
   roadUpdateTimer = 0,
   roadState = nil
 }
@@ -1013,6 +1015,7 @@ local function detachPreviousVehicle()
   state.routePilotVehicleId = nil
   state.routePilotError = nil
   state.routeRetryCooldown = 0
+  state.routeSafetyLastCheckAt = -math.huge
   state.routePath = {}
   state.routePathEnd = nil
   state.vehicleGeometry = nil
@@ -1728,6 +1731,7 @@ function M.setVisualizationEnabled(enabled)
     state.routePilotVehicleId = nil
     state.routePilotError = nil
     state.routeRetryCooldown = 0
+    state.routeSafetyLastCheckAt = -math.huge
     state.routePath = {}
     state.routePathEnd = nil
     state.visualizationEnabled = false
@@ -1753,6 +1757,7 @@ function M.setRoutePilotEnabled(enabled)
     state.routePilotVehicleId = nil
     state.routePilotError = nil
     state.routeRetryCooldown = 0
+    state.routeSafetyLastCheckAt = -math.huge
     state.routePath = {}
     state.routePathEnd = nil
     return settingsResult()
@@ -1787,6 +1792,7 @@ function M.setRoutePilotEnabled(enabled)
   state.routePilotVehicleId = state.activeVehicleId
   state.routePilotError = "Waiting for fresh sensor data"
   state.routeRetryCooldown = 0
+  state.routeSafetyLastCheckAt = -math.huge
   state.routePath = {}
   state.routePathEnd = nil
   state.routeProgressIndex = 1
@@ -3528,6 +3534,51 @@ local function nearestForwardObstacle(data)
     and type(registryTimestamp) == "number"
     and registryTimestamp <= now + 0.05
     and (now - registryTimestamp) <= WORLD_MODEL_REGISTRY_MAX_AGE
+  local function inspectVehicleOBB(target)
+    local center = vectorFromTable(target.position)
+    local dimensions = target.dimensions
+    local orientation = target.orientation
+    if not center or type(dimensions) ~= "table" or type(orientation) ~= "table"
+        or type(dimensions.length) ~= "number" or type(dimensions.width) ~= "number"
+        or type(dimensions.height) ~= "number" then
+      inspect(target.position, originFallback)
+      return
+    end
+
+    local targetForward = normalizedVec3(orientation.forward)
+    local targetRight = normalizedVec3(orientation.right)
+    local targetUp = normalizedVec3(orientation.up)
+    if not targetForward or not targetRight or not targetUp then
+      inspect(target.position, originFallback)
+      return
+    end
+
+    local halfLength = math.max(0, dimensions.length * 0.5)
+    local halfWidth = math.max(0, dimensions.width * 0.5)
+    local halfHeight = math.max(0, dimensions.height * 0.5)
+    local function projectedHalfExtent(axis)
+      return halfLength * math.abs(targetForward:dot(axis))
+        + halfWidth * math.abs(targetRight:dot(axis))
+        + halfHeight * math.abs(targetUp:dot(axis))
+    end
+
+    local delta = center - originFallback
+    local longitudinal = delta:dot(forward)
+    local lateral = math.abs(delta:dot(right))
+    local vertical = delta:dot(up)
+    local forwardRadius = projectedHalfExtent(forward)
+    local lateralRadius = projectedHalfExtent(right)
+    local verticalRadius = projectedHalfExtent(up)
+    local nearDistance = longitudinal - forwardRadius
+    local farDistance = longitudinal + forwardRadius
+    local lateralGap = math.max(0, lateral - lateralRadius)
+
+    if farDistance > 0.5 and lateralGap <= 2.4
+        and vertical + verticalRadius > -0.85 then
+      minimum = math.min(minimum, math.max(0.5, nearDistance))
+    end
+  end
+
   if registryFresh then
     for i = 1, #(data.vehicles or {}) do
       local target = data.vehicles[i]
@@ -3537,7 +3588,7 @@ local function nearestForwardObstacle(data)
         and (now - visibilityTimestamp) <= OCCLUSION_CACHE_MAX_AGE
       if target.visibility == "visible" and target.sourceKind == "simulator-assisted"
           and visibilityFresh then
-        inspect(target.position, originFallback)
+        inspectVehicleOBB(target)
       end
     end
   end
@@ -3589,6 +3640,10 @@ local function updateRoutePilotSafety(dt)
   if not state.routePilotEnabled then return end
 
   dt = math.max(0, tonumber(dt) or 0)
+  if state.simulationTime - (state.routeSafetyLastCheckAt or -math.huge) < ROUTE_SAFETY_INTERVAL then
+    return
+  end
+  state.routeSafetyLastCheckAt = state.simulationTime
   state.routeRetryCooldown = math.max(0, (state.routeRetryCooldown or 0) - dt)
 
   if not state.activeVehicle or state.routePilotVehicleId ~= state.activeVehicleId then

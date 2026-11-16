@@ -6,6 +6,7 @@
 - Add ordered world-coordinate route points, connected NavGraph path construction and route progress reporting.
 - Add route-deviation detection and a stop/replan response; use only current enabled sensor streams in the experimental obstacle guard.
 - Reject route candidates whose first waypoint would send the vehicle backwards to a node behind it.
+- Check nearby vehicles by their projected OBB footprint in the route stop guard, and throttle guard evaluation to a maximum 10 Hz.
 - Fix the missing vehicle OBB snapshot function declaration.
 - Add a BeamNG 0.39+ Pause → Mods → RoadMind settings page.
 - Add Russian/English interface text based on the game's selected language.

@@ -27,7 +27,7 @@ Hiding a 3D overlay does not stop its sensor scans. Turn off the sensor group it
 
 The route section uses the current map's NavGraph. Enter 1–12 ordered world-coordinate points in metres, one per line as `X, Y, Z`. The route builder snaps each point to a nearby road segment and shows the final-node snap distance. The pilot sends NavGraph waypoint IDs to BeamNG's built-in Vehicle Lua AI, with a 29 km/h speed cap.
 
-When the pilot starts, RoadMind switches to the Balanced sensor profile. Fresh enabled sensor streams and recently confirmed vehicle-registry observations feed a forward stop guard. This is not a custom trajectory planner: RoadMind does not yet steer around obstacles, calculate lane boundaries or provide its own throttle/brake/steering controller. Test only in a controlled, clear area; route following and map compatibility remain experimental.
+When the pilot starts, RoadMind switches to the Balanced sensor profile. Enabled sensor streams are checked for freshness before their returns enter the stop guard; recently confirmed nearby vehicles are checked by their projected OBB footprint. The guard is best-effort, not a collision guarantee. This is not a custom trajectory planner: RoadMind does not yet steer around obstacles, calculate lane boundaries or provide its own throttle/brake/steering controller. Test only in a controlled, clear area; route following and map compatibility remain experimental.
 
 ## Defaults
 
