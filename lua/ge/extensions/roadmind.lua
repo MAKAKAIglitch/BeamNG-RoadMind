@@ -47,7 +47,7 @@ local SENSOR_SETTING_KEYS = {
   radarEnabled = true, radarDensity = true, radarHz = true,
   ultrasonicEnabled = true, ultrasonicDensity = true, ultrasonicHz = true,
   poseHz = true, showCameras = true, showLocalization = true, showCalibration = true,
-  adaptiveFpsEnabled = true, targetFps = true, speedAdaptiveRateEnabled = true
+  adaptiveFpsEnabled = true, speedAdaptiveRateEnabled = true
 }
 
 local MAX_PERSISTENT_LIDAR_POINTS = 10000
@@ -1049,7 +1049,9 @@ local function getEffectiveSensorSettings()
     effective.poseHz = tier <= 1 and 2 or 4
   end
   return effective
-endlocal function vehicleSettingsCommand()
+end
+
+local function vehicleSettingsCommand()
   local encoded = "{}"
   if type(jsonEncode) == "function" then
     local ok, value = pcall(jsonEncode, getEffectiveSensorSettings())
@@ -1652,9 +1654,19 @@ local function getGameLanguage()
   return "en-US"
 end
 
+local function getSensorSpeedRateScale(settings)
+  if settings.speedAdaptiveRateEnabled == false or not state.activeVehicle then return 1 end
+  local velocity = asVec3(safeCall(state.activeVehicle, "getVelocity"))
+  local speed = velocity and velocity:length() or 0
+  if speed < 5 then return 1 / 1.5 end
+  if speed >= 25 then return 1 / 0.75 end
+  return 1
+end
+
 local function settingsResult()
   local settings = state.settings or DEFAULT_SETTINGS
   local effectiveSettings = getEffectiveSensorSettings()
+  local speedRateScale = getSensorSpeedRateScale(settings)
   local trackedObjects = {}
   local tracks = state.latestData and state.latestData.tracks or {}
   for i = 1, math.min(#tracks, 8) do
@@ -1684,7 +1696,7 @@ local function settingsResult()
       visualizationEnabled = state.visualizationEnabled,
       activeVehicle = state.activeVehicleId ~= nil,
       estimatedRaycastsPerSecond = state.visualizationEnabled
-        and (rayCountFor(effectiveSettings) + state.occlusionRaycastsPerSecond) or 0,
+        and (rayCountFor(effectiveSettings) * speedRateScale + state.occlusionRaycastsPerSecond) or 0,
       currentFps = state.performanceFps and round2(state.performanceFps) or nil,
       targetFps = settings.targetFps or 60,
       adaptiveFpsEnabled = settings.adaptiveFpsEnabled == true,
