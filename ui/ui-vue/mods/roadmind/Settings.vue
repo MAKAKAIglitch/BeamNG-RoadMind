@@ -49,6 +49,7 @@
           <span class="roadmind-track-sensors">{{ (track.sensors || []).join(" · ") }}</span>
         </div>
       </div>
+    </section>
 
     <section class="roadmind-section">
       <BngCardHeading>{{ t("vehicleGeometry") }}</BngCardHeading>
