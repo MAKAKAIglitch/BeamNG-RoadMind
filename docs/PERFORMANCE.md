@@ -66,9 +66,13 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 - Sensor data is cached between updates.
 - Game Engine scene raycasts run only on incoming sensor-scan updates; the render loop redraws cached data and performs no raycasts.
 
-## Route safety workload
+## Route planning and safety workload
 
-When the experimental route pilot is active, the forward stop guard evaluates at most 10 times per second, including immediate opportunities after incoming sensor frames. It checks only enabled, fresh sensor streams and recent vehicle-registry visibility. Confirmed nearby vehicle obstacles are tested using their projected OBB footprint. This guard adds no scene raycasts; it is a bounded geometry check, not a collision guarantee or a replacement for the future swept-footprint planner. Its CPU cost has not yet been measured in-game.
+When the experimental route pilot is active, the forward stop guard evaluates at most 10 times per second, including immediate opportunities after incoming sensor frames. It checks only enabled, fresh sensor streams and recent vehicle-registry visibility. Confirmed nearby vehicle obstacles are tested using their projected OBB footprint.
+
+The local trajectory planner runs at up to 5 Hz. It evaluates at most five candidates and thirteen samples per candidate, with up to 128 nearby obstacle clusters and 96 tracked vehicle targets considered per plan. It uses the cached vehicle geometry profile, not new per-ray OBB queries. The planner performs no scene raycasts. Its current road boundary is a 3.5 m half-width NavGraph heuristic, not a verified lane polygon. When sensor/road data is stale or no candidate is safe, it requests a stop from the built-in Vehicle AI. The selected trajectory is visualized but not yet tracked by steering control; that belongs to Phase 10.
+
+The combined stop guard and planner are bounded geometry checks, not a collision guarantee. CPU cost and behavior have not yet been measured in-game.
 
 ## Rendering budget
 
