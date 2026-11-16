@@ -3127,8 +3127,19 @@ function M.onVehicleDestroyed(vehicleId)
   state.lidarTrackGrid = {}
 end
 
+local function cloneWorldModelValue(value)
+  if type(value) ~= "table" then return value end
+  local result = {}
+  for key, item in pairs(value) do
+    result[key] = cloneWorldModelValue(item)
+  end
+  return result
+end
+
 function M.getWorldModel()
-  if buildWorldModel then state.worldModel = buildWorldModel() end
+  if not state.worldModel and buildWorldModel then
+    state.worldModel = buildWorldModel()
+  end
   if not state.worldModel then
     return {
       schemaVersion = WORLD_MODEL_SCHEMA_VERSION,
@@ -3138,10 +3149,12 @@ function M.getWorldModel()
       targets = {},
       obstacles = {},
       observations = {lidar = {}, radar = {}, ultrasonic = {}},
-      observationCount = 0
+      observationCount = 0,
+      summary = {targetCount = 0, obstacleCount = 0, observationCount = 0}
     }
   end
-  return state.worldModel
+  -- Callers receive an independent snapshot and cannot mutate GE-owned fusion state.
+  return cloneWorldModelValue(state.worldModel)
 end
 
 return M
