@@ -1570,11 +1570,13 @@ local function checkTargetOcclusion(zone, target)
     return "visible"
   end
 
-  local clearance = math.max(0.35, target.radius * 0.7)
-  if type(hitDistance) == "number" and hitDistance < centerDistance - clearance then
+  local rayDirection = delta / centerDistance
+  local expectedTargetSurface = math.max(0,
+    centerDistance - projectedBoxRadius(target, rayDirection))
+  if type(hitDistance) == "number" and hitDistance < expectedTargetSurface - 0.4 then
     return "occluded"
   end
-  if type(hitDistance) == "number" and hitDistance <= centerDistance + target.radius then
+  if type(hitDistance) == "number" and hitDistance <= centerDistance + 0.4 then
     return "visible"
   end
   return "unverified"
@@ -1685,6 +1687,7 @@ local function updateVehicleDetection(dt)
     state.vehicleRegistry = {}
     state.vehicleCandidates = {}
     state.vehicleRegistryTimer = 0
+    state.vehicleRegistryTruncated = false
     state.vehicleDetectionTimer = 0
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
