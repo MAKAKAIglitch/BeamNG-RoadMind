@@ -80,6 +80,24 @@ The UI exposes up to eight closest track summaries, including RoadMind ID, state
 
 These are code-level tracking semantics. Stable identity and motion accuracy still require live-traffic validation in BeamNG.drive.
 
+## Phase 6 — time-consistent LiDAR render layer
+
+Raw LiDAR returns remain in `state.latestData.lidar.rays`. Each raw scan and each valid point carries the GE simulation timestamp; every hit also retains its ray index and, when exposed by the raycast, the hit object's ID.
+
+A separate render-only state is keyed by ray index:
+
+- Moving-object returns associate with a recent RoadMind track by source vehicle ID, or by a unique hit-inside-OBB check when the raycast has no vehicle object ID.
+- Associated points are stored in the tracked vehicle's local OBB frame. Their render positions are reconstructed from the latest timestamped track position, orientation and finite-difference velocity.
+- Track motion can be extrapolated for rendering only up to 0.5 s. This is not a new measurement and is never written to the raw LiDAR frame.
+- Static-scene returns remain in world coordinates. Static hits with a known object ID keep that identity; unknown static hits are continued only when the same ray's world point remains within a 0.35 m tolerance.
+- If a ray changes object/track association, jumps to a different surface, misses, or loses its track, the previous marker fades separately instead of being interpolated to the new hit.
+- Active markers are capped at 99, fading markers at 198, and render points expire after 2.25 s without a new scan. Fades last 0.4 s.
+- Render interpolation runs from the GE update loop using elapsed time and bounded per-frame movement. It performs no raycasts.
+
+Raw LiDAR returns, timestamped measurements, persistent static scan points, and render-only point state are separate. The route safety guard continues to inspect raw raycast returns and confirmed target observations, never smoothed render positions.
+
+This is a code-level visualization implementation. Smoothness, object association and surface-switch behavior still require in-game verification.
+
 ## Input and settings
 
 The sensor-suite binding is defined in `lua/ge/extensions/core/input/actions/roadmind_actions.json`. The in-game settings page is under `ui/ui-vue/mods/roadmind/`.
