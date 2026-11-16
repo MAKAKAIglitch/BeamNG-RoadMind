@@ -107,6 +107,8 @@ local function getVehicleId(vehicle)
   return nil
 end
 
+local queueVehicleCommand
+
 local function asVec3(value)
   local x, y, z = safeField(value, "x"), safeField(value, "y"), safeField(value, "z")
   if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then return nil end
@@ -244,7 +246,7 @@ local function calibrateVehicleGeometry(vehicle)
   return false
 end
 
-local function queueVehicleCommand(vehicle, command)
+queueVehicleCommand = function(vehicle, command)
   if not vehicle or type(vehicle.queueLuaCommand) ~= "function" then
     return false
   end
