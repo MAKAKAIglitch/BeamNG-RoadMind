@@ -49,6 +49,25 @@
           <span class="roadmind-track-sensors">{{ (track.sensors || []).join(" · ") }}</span>
         </div>
       </div>
+      <div class="roadmind-world-model">
+        <div class="roadmind-track-heading">
+          <strong>{{ t("worldModel") }} v{{ status.worldModelSchemaVersion || 2 }}</strong>
+          <span>{{ status.worldModelRegistryFresh ? t("sourceFresh") : t("sourceStale") }}</span>
+        </div>
+        <div class="roadmind-track-metrics">
+          <span>{{ t("worldTargets") }}: {{ status.worldModelTargetCount || 0 }}</span>
+          <span>{{ t("worldObstacles") }}: {{ status.worldModelObstacleCount || 0 }}</span>
+          <span>{{ t("worldObservations") }}: {{ status.worldModelObservationCount || 0 }}</span>
+          <span>{{ t("worldStaleSources") }}: {{ status.worldModelStaleSourceCount || 0 }}</span>
+        </div>
+        <span v-if="status.worldModelInvalidObservationCount || status.worldModelDroppedObservationCount || status.worldModelConflictingObservationCount"
+          class="roadmind-track-sensors">
+          {{ t("worldQuality") }}:
+          {{ status.worldModelInvalidObservationCount || 0 }} / 
+          {{ status.worldModelDroppedObservationCount || 0 }} /
+          {{ status.worldModelConflictingObservationCount || 0 }}
+        </span>
+      </div>
     </section>
 
     <section class="roadmind-section">
@@ -297,6 +316,14 @@ const EN = {
   vehiclesDetected: "Vehicles confirmed visible",
   vehicleCandidates: "Vehicle candidates in sensor zones",
   trackedObjects: "RoadMind object tracks",
+  worldModel: "Unified world model",
+  worldTargets: "Targets",
+  worldObstacles: "Obstacle clusters",
+  worldObservations: "Observations",
+  worldStaleSources: "Stale sources",
+  worldQuality: "Invalid / dropped / conflicting",
+  sourceFresh: "Registry fresh",
+  sourceStale: "Registry stale",
   trackConfirmed: "Confirmed",
   trackCoasting: "Coasting",
   trackStale: "Stale",
@@ -384,6 +411,14 @@ const RU = {
   vehiclesDetected: "Подтверждённо видимых машин",
   vehicleCandidates: "Кандидатов в зонах датчиков",
   trackedObjects: "Треки RoadMind",
+  worldModel: "Единая модель мира",
+  worldTargets: "Целей",
+  worldObstacles: "Кластеров препятствий",
+  worldObservations: "Наблюдений",
+  worldStaleSources: "Устаревших источников",
+  worldQuality: "Ошибки / отброшено / конфликты",
+  sourceFresh: "Реестр актуален",
+  sourceStale: "Реестр устарел",
   trackConfirmed: "Подтверждён",
   trackCoasting: "Потеря видимости",
   trackStale: "Устарел",
@@ -538,6 +573,15 @@ const status = ref({
   occlusionRaycastsPerSecond: 0,
   trackedVehicleCount: 0,
   trackedObjects: [],
+  worldModelSchemaVersion: 2,
+  worldModelTargetCount: 0,
+  worldModelObstacleCount: 0,
+  worldModelObservationCount: 0,
+  worldModelStaleSourceCount: 0,
+  worldModelInvalidObservationCount: 0,
+  worldModelDroppedObservationCount: 0,
+  worldModelConflictingObservationCount: 0,
+  worldModelRegistryFresh: false,
   vehicleCalibration: { calibrated: false, error: "Calibration has not been run" },
 })
 const error = ref("")
@@ -809,6 +853,15 @@ onMounted(() => {
   flex-direction: column;
   gap: 0.4em;
   margin-top: 0.35em;
+}
+.roadmind-world-model {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  margin-top: 0.5em;
+  padding: 0.45em 0.5em;
+  border: 1px solid var(--bng-cool-gray-700, rgba(255,255,255,0.12));
+  border-radius: 0.25em;
 }
 .roadmind-track {
   display: flex;
