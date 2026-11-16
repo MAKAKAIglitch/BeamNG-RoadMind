@@ -4,7 +4,7 @@
 
 RoadMind models the sensor layout of a modern assisted/autonomous vehicle and visualizes its coverage directly in the game world. The long-term goal is a custom driving stack that plans routes, avoids obstacles and controls the vehicle without relying on a permanent neural-network runtime.
 
-> **Development status: sensor-suite prototype.** The current build contains virtual LiDAR, raycast-based radar and ultrasonic proxies, camera coverage frustums, and vehicle-state localization/odometry data. Autonomous steering, throttle and braking are not implemented yet. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
+> **Development status: perception foundation in progress.** The current build contains virtual LiDAR, radar and ultrasonic raycast proxies, camera coverage frustums, vehicle-state localization/odometry, and an initial OBB-based vehicle-geometry calibration prototype. Calibration across vehicle classes, optimized target detection, persistent tracking, time-consistent point rendering and a unified world model are still in development. The existing road-AI button is experimental and is not a completed custom planner/controller. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
 
 ## Sensor suite
 
@@ -26,6 +26,7 @@ Open **ESC → Mods → RoadMind** (BeamNG.drive 0.39+). The bilingual settings 
 - LiDAR enable, resolution, frequency and range.
 - Radar and ultrasonic enable, ray density and frequency.
 - Independent switches for 3D sensor overlays.
+- OBB-based vehicle geometry status, manual recalibration and an optional bounds/axes/sensor-mount overlay.
 - A live estimate of scheduled scene-raycast queries per second.
 
 Settings are saved to the BeamNG user settings folder and applied while scanning is active. Scanning is stopped by default. Press **Start scanning** in the page, or use the existing **RoadMind: Toggle Sensor Suite** Controls binding as a quick toggle.
@@ -45,6 +46,7 @@ Therefore:
 - IMU acceleration comes from BeamNG vehicle electrics; yaw rate is estimated from heading changes.
 - GNSS-like localization reports BeamNG world coordinates. It is not geodetic latitude/longitude.
 - Odometry reads the vehicle wheel-speed and odometer electrics where present.
+- Initial vehicle visibility markers use simulator-assisted vehicle centers inside geometric sensor cones; full bounding-box coverage, occlusion and stable tracking are not implemented yet.
 
 These boundaries are kept explicit so a simulated geometric measurement is not mistaken for a full physical sensor model.
 
@@ -58,6 +60,7 @@ These boundaries are kept explicit so a simulated geometric measurement is not m
 - Camera/localization data updates at the selected pose rate.
 - Scanning stays off until explicitly started.
 - Raycasts run only when a sensor scan is due, not in the render loop. Debug drawing redraws cached results.
+- Vehicle OBB dimensions are read during vehicle attach/manual recalibration, not once per ray or each scan. The calibration overlay is optional.
 
 The figures are calculated from ray counts and scan frequencies. They are not measured FPS or CPU percentages. Actual cost depends on the map, vehicle, traffic, hardware and game version.
 
