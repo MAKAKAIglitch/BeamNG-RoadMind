@@ -15,7 +15,8 @@ local DEFAULT_SETTINGS = {
   poseHz = 2,
   lidarPersistenceEnabled = false,
   showLidar = true, showRadar = false, showUltrasonic = false,
-  showCameras = false, showLocalization = false, showDetectedVehicles = true
+  showCameras = false, showLocalization = false, showDetectedVehicles = true,
+  showCalibration = false
 }
 
 local PRESETS = {
@@ -40,7 +41,7 @@ local SENSOR_SETTING_KEYS = {
   lidarEnabled = true, lidarQuality = true, lidarPointCount = true, lidarHz = true, lidarRange = true,
   radarEnabled = true, radarDensity = true, radarHz = true,
   ultrasonicEnabled = true, ultrasonicDensity = true, ultrasonicHz = true,
-  poseHz = true, showCameras = true, showLocalization = true
+  poseHz = true, showCameras = true, showLocalization = true, showCalibration = true
 }
 
 local MAX_PERSISTENT_LIDAR_POINTS = 600
@@ -59,6 +60,8 @@ local state = {
   settings = nil,
   latestData = nil,
   frameAge = math.huge,
+  vehicleGeometry = nil,
+  vehicleCalibrationError = nil,
   lidarPointCloud = {},
   lidarPointCells = {},
   lidarPointWriteIndex = 1,
@@ -102,6 +105,143 @@ local function getVehicleId(vehicle)
   if id == nil then id = safeCall(vehicle, "getId") end
   if type(id) == "number" or type(id) == "string" then return id end
   return nil
+end
+
+local function asVec3(value)
+  local x, y, z = safeField(value, "x"), safeField(value, "y"), safeField(value, "z")
+  if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then return nil end
+  return vec3(x, y, z)
+end
+
+local function normalizedVec3(value)
+  local vector = asVec3(value)
+  if not vector then return nil end
+  local length = vector:length()
+  if length < 0.00001 then return nil end
+  return vector / length
+end
+
+local function computeVehicleGeometry(vehicle)
+  local box = safeCall(vehicle, "getSpawnWorldOOBB")
+  if not box then return nil, "getSpawnWorldOOBB is unavailable" end
+
+  local center = asVec3(safeCall(box, "getCenter"))
+  local half = asVec3(safeCall(box, "getHalfExtents"))
+  local axes = {
+    normalizedVec3(safeCall(box, "getAxis", 0)),
+    normalizedVec3(safeCall(box, "getAxis", 1)),
+    normalizedVec3(safeCall(box, "getAxis", 2))
+  }
+  if not center or not half or not axes[1] or not axes[2] or not axes[3] then
+    return nil, "The vehicle OBB did not return a valid center, axes and half-extents"
+  end
+
+  local position = asVec3(safeCall(vehicle, "getPosition"))
+  local forward = normalizedVec3(safeCall(vehicle, "getDirectionVector"))
+  local up = normalizedVec3(safeCall(vehicle, "getDirectionVectorUp"))
+  if not position or not forward or not up then
+    return nil, "The vehicle position or orientation is unavailable"
+  end
+  local right = normalizedVec3(forward:cross(up))
+  if not right then return nil, "The vehicle coordinate basis is degenerate" end
+
+  local basis = {forward, right, up}
+  local halfValues = {half.x, half.y, half.z}
+  local permutations = {
+    {1, 2, 3}, {1, 3, 2}, {2, 1, 3},
+    {2, 3, 1}, {3, 1, 2}, {3, 2, 1}
+  }
+  local best, bestScore = nil, -math.huge
+  for i = 1, #permutations do
+    local p = permutations[i]
+    local score =
+      math.abs(axes[p[1]]:dot(basis[1])) +
+      math.abs(axes[p[2]]:dot(basis[2])) +
+      math.abs(axes[p[3]]:dot(basis[3]))
+    if score > bestScore then best, bestScore = p, score end
+  end
+  if not best then return nil, "Could not align the OBB axes with the vehicle coordinate basis" end
+
+  local alignForward = math.abs(axes[best[1]]:dot(forward))
+  local alignRight = math.abs(axes[best[2]]:dot(right))
+  local alignUp = math.abs(axes[best[3]]:dot(up))
+  if alignForward < 0.75 or alignRight < 0.75 or alignUp < 0.75 then
+    return nil, "The OBB axes do not align reliably with the live vehicle orientation"
+  end
+
+  local centerOffset = center - position
+  local centerForward = centerOffset:dot(forward)
+  local centerLateral = centerOffset:dot(right)
+  local centerUp = centerOffset:dot(up)
+  local halfForward = halfValues[best[1]]
+  local halfLateral = halfValues[best[2]]
+  local halfUp = halfValues[best[3]]
+
+  local profile = {
+    schema = 1,
+    valid = true,
+    source = "getSpawnWorldOOBB",
+    vehicleKey = safeCall(vehicle, "getJBeamFilename"),
+    forwardMin = centerForward - halfForward,
+    forwardMax = centerForward + halfForward,
+    lateralMin = centerLateral - halfLateral,
+    lateralMax = centerLateral + halfLateral,
+    bottom = centerUp - halfUp,
+    top = centerUp + halfUp,
+    axisAlignment = {
+      forward = alignForward,
+      lateral = alignRight,
+      up = alignUp
+    }
+  }
+
+  profile.length = profile.forwardMax - profile.forwardMin
+  profile.width = profile.lateralMax - profile.lateralMin
+  profile.height = profile.top - profile.bottom
+
+  if profile.length < 1.2 or profile.length > 30
+      or profile.width < 0.5 or profile.width > 10
+      or profile.height < 0.45 or profile.height > 9
+      or profile.bottom >= profile.top then
+    return nil, "The OBB dimensions are outside the supported safety limits"
+  end
+
+  return profile
+end
+
+local function vehicleGeometryCommand(profile)
+  local encoded = "{}"
+  if type(jsonEncode) == "function" then
+    local ok, value = pcall(jsonEncode, profile or {schema = 1, valid = false})
+    if ok and type(value) == "string" then encoded = value end
+  end
+  return "extensions.load('roadmind_sensors'); roadmind_sensors.setVehicleGeometry("
+    .. string.format("%q", encoded) .. ")"
+end
+
+local function calibrateVehicleGeometry(vehicle)
+  if not vehicle then
+    state.vehicleGeometry = nil
+    state.vehicleCalibrationError = "No active vehicle"
+    return false
+  end
+
+  local profile, reason = computeVehicleGeometry(vehicle)
+  state.vehicleGeometry = profile
+  state.vehicleCalibrationError = profile and nil or reason
+
+  queueVehicleCommand(vehicle, vehicleGeometryCommand(profile))
+  if profile then
+    log("I", "roadmind", string.format(
+      "Vehicle geometry calibrated: %.2f m long, %.2f m wide, %.2f m high (%s)",
+      profile.length, profile.width, profile.height, tostring(profile.vehicleKey or "unknown vehicle")
+    ))
+    return true
+  end
+
+  log("W", "roadmind", "Vehicle geometry calibration unavailable; using conservative fallback mounts: "
+    .. tostring(reason))
+  return false
 end
 
 local function queueVehicleCommand(vehicle, command)
@@ -336,6 +476,8 @@ local function detachPreviousVehicle()
   state.routeRetryCooldown = 0
   state.routePath = {}
   state.routePathEnd = nil
+  state.vehicleGeometry = nil
+  state.vehicleCalibrationError = nil
   state.activeVehicle = nil
   state.activeVehicleId = nil
   clearPersistentLidarPoints()
@@ -346,6 +488,7 @@ local function attachVehicle(vehicle, id)
   state.activeVehicle = vehicle
   state.activeVehicleId = id
   resetFrame()
+  calibrateVehicleGeometry(vehicle)
   setVehicleSensorState(vehicle, state.visualizationEnabled, id)
 end
 
@@ -637,7 +780,7 @@ local function normalizeSettings(source)
     "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
     "lidarPersistenceEnabled",
     "showLidar", "showRadar", "showUltrasonic", "showCameras",
-    "showLocalization", "showDetectedVehicles"
+    "showLocalization", "showDetectedVehicles", "showCalibration"
   }
   for i = 1, #booleanKeys do
     local key = booleanKeys[i]
@@ -724,7 +867,18 @@ local function settingsResult()
       routePilotError = state.routePilotError,
       routeWaypointCount = #state.routePath,
       persistentLidarPointCount = #state.lidarPointCloud,
-      detectedVehicleCount = state.latestData and #(state.latestData.vehicles or {}) or 0
+      detectedVehicleCount = state.latestData and #(state.latestData.vehicles or {}) or 0,
+      vehicleCalibration = state.vehicleGeometry and {
+        calibrated = true,
+        source = state.vehicleGeometry.source,
+        vehicleKey = state.vehicleGeometry.vehicleKey,
+        length = state.vehicleGeometry.length,
+        width = state.vehicleGeometry.width,
+        height = state.vehicleGeometry.height
+      } or {
+        calibrated = false,
+        error = state.vehicleCalibrationError or "Using fallback sensor mounts"
+      }
     }
   }
 end
@@ -888,6 +1042,43 @@ end
 function M.clearLidarMap()
   clearPersistentLidarPoints()
   return settingsResult()
+end
+
+function M.recalibrateVehicle()
+  if not state.activeVehicle then syncPlayerVehicle() end
+  if not state.activeVehicle then
+    return {ok = false, error = "No active player vehicle"}
+  end
+
+  local calibrated = calibrateVehicleGeometry(state.activeVehicle)
+  if state.visualizationEnabled then setVehicleSensorSettings(state.activeVehicle) end
+  resetFrame()
+
+  local result = settingsResult()
+  result.calibrationSucceeded = calibrated
+  return result
+end
+
+local function invalidateVehicleGeometry(vehicleId)
+  if vehicleId == nil or tostring(vehicleId) == tostring(state.activeVehicleId) then
+    if state.activeVehicle then M.recalibrateVehicle() end
+  end
+end
+
+function M.onVehicleResetted(vehicleId)
+  invalidateVehicleGeometry(vehicleId)
+end
+
+function M.onVehicleReset(vehicleId)
+  invalidateVehicleGeometry(vehicleId)
+end
+
+function M.onVehicleConfigurationChanged(vehicleId)
+  invalidateVehicleGeometry(vehicleId)
+end
+
+function M.onVehicleConfigChanged(vehicleId)
+  invalidateVehicleGeometry(vehicleId)
 end
 
 function M.onExtensionLoaded()
