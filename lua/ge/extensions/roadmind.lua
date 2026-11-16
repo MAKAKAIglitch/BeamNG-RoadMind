@@ -106,6 +106,18 @@ local MAX_ROUTE_ENDPOINT_OFFSET_M = 60
 local ROUTE_MAX_DEVIATION_M = 30
 local ROUTE_MAX_LOST_UPDATES = 4
 local ROUTE_SAFETY_INTERVAL = 0.10
+local PLANNER_INTERVAL = 0.20
+local PLANNER_HORIZON_M = 25.0
+local PLANNER_SAMPLE_STEP_M = 2.5
+local PLANNER_MAX_SAMPLES = 13
+local PLANNER_MAX_CANDIDATES = 5
+local PLANNER_ROAD_HALF_WIDTH_M = 3.5
+local PLANNER_ROAD_EDGE_MARGIN_M = 0.35
+local PLANNER_OBSTACLE_MARGIN_M = 0.65
+local PLANNER_MAX_OBSTACLES = 128
+local PLANNER_MAX_TARGETS = 96
+local PLANNER_MAX_DATA_AGE = 1.0
+local PLANNER_CANDIDATE_OFFSETS = {-1.25, -0.625, 0, 0.625, 1.25}
 
 local state = {
   activeVehicleId = nil,
@@ -169,6 +181,10 @@ local state = {
   routeLostUpdates = 0,
   routeDestinationSnapDistance = nil,
   routeSafetyLastCheckAt = -math.huge,
+  localPlanner = {
+    status = "idle", reasonCode = "inactive", timestamp = nil,
+    candidates = {}, selectedIndex = nil
+  },
   roadUpdateTimer = 0,
   roadState = nil,
   performanceFps = nil,
@@ -1113,6 +1129,10 @@ local function detachPreviousVehicle()
   state.routeSafetyLastCheckAt = -math.huge
   state.routePath = {}
   state.routePathEnd = nil
+  state.localPlanner = {
+    status = "idle", reasonCode = "inactive", timestamp = nil,
+    candidates = {}, selectedIndex = nil
+  }
   state.vehicleGeometry = nil
   state.vehicleCalibrationError = nil
   resetTrackingState(true)
@@ -1387,6 +1407,33 @@ local function drawRoutePath(drawer)
   end
 end
 
+local function drawLocalPlanner(drawer)
+  local planner = state.localPlanner
+  if not state.routePilotEnabled or type(planner) ~= "table"
+      or type(planner.candidates) ~= "table" then return end
+  for i = 1, #planner.candidates do
+    local candidate = planner.candidates[i]
+    local selected = i == planner.selectedIndex and candidate.safe == true
+    local color
+    if selected then
+      color = ColorF(0.12, 1.0, 0.32, 0.95)
+    elseif candidate.safe then
+      color = ColorF(0.18, 0.62, 1.0, 0.45)
+    else
+      color = ColorF(1.0, 0.22, 0.14, 0.52)
+    end
+    local path = candidate.path or {}
+    for pointIndex = 1, #path - 1 do
+      drawLine(drawer, toPoint3F(path[pointIndex]), toPoint3F(path[pointIndex + 1]), color)
+    end
+    if selected then
+      for pointIndex = 2, #path, 3 do
+        drawSphere(drawer, toPoint3F(path[pointIndex]), 0.07, color)
+      end
+    end
+  end
+end
+
 local function drawCalibrationGeometry(drawer, geometry, mounts)
   if type(geometry) == "table" and geometry.valid == true
       and type(geometry.corners) == "table" and #geometry.corners == 8 then
@@ -1538,6 +1585,7 @@ local function drawFrame()
     drawCalibrationGeometry(drawer, frame.geometryDebug, frame.mounts)
   end
   drawRoutePath(drawer)
+  drawLocalPlanner(drawer)
 end
 
 local function copySettings(source)
@@ -1741,6 +1789,15 @@ local function settingsResult()
       routeDistanceToPath = state.routeDistanceToPath and round2(state.routeDistanceToPath) or nil,
       routeLostUpdates = state.routeLostUpdates or 0,
       routeDestinationSnapDistance = state.routeDestinationSnapDistance,
+      plannerStatus = state.localPlanner and state.localPlanner.status or "idle",
+      plannerReasonCode = state.localPlanner and state.localPlanner.reasonCode or "inactive",
+      plannerCandidateCount = state.localPlanner and state.localPlanner.candidateCount or 0,
+      plannerRejectedCandidateCount = state.localPlanner and state.localPlanner.rejectedCount or 0,
+      plannerSelectedScore = state.localPlanner and state.localPlanner.selectedScore or nil,
+      plannerMinimumClearance = state.localPlanner and state.localPlanner.minimumClearance or nil,
+      plannerMinimumRoadMargin = state.localPlanner and state.localPlanner.minimumRoadMargin or nil,
+      plannerSelectedOffset = state.localPlanner and state.localPlanner.selectedOffset or nil,
+      plannerHorizon = PLANNER_HORIZON_M,
       roadLocalizationQuality = state.roadState and state.roadState.quality or "unavailable",
       roadDistanceToSegment = state.roadState and state.roadState.distanceToSegment
         and round2(state.roadState.distanceToSegment) or nil,
@@ -1948,6 +2005,10 @@ function M.setVisualizationEnabled(enabled)
     state.routeSafetyLastCheckAt = -math.huge
     state.routePath = {}
     state.routePathEnd = nil
+    state.localPlanner = {
+      status = "idle", reasonCode = "inactive", timestamp = nil,
+      candidates = {}, selectedIndex = nil
+    }
     state.visualizationEnabled = false
     if state.activeVehicle then
       setVehicleSensorState(state.activeVehicle, false, state.activeVehicleId)
@@ -1974,6 +2035,10 @@ function M.setRoutePilotEnabled(enabled)
     state.routeSafetyLastCheckAt = -math.huge
     state.routePath = {}
     state.routePathEnd = nil
+    state.localPlanner = {
+      status = "idle", reasonCode = "inactive", timestamp = nil,
+      candidates = {}, selectedIndex = nil
+    }
     return settingsResult()
   end
 
@@ -2009,6 +2074,10 @@ function M.setRoutePilotEnabled(enabled)
   state.routeSafetyLastCheckAt = -math.huge
   state.routePath = {}
   state.routePathEnd = nil
+  state.localPlanner = {
+    status = "waiting", reasonCode = "sensor_stale", timestamp = nil,
+    candidates = {}, selectedIndex = nil
+  }
   state.routeProgressIndex = 1
   state.routeProgressPercent = 0
   state.routeProgressTimer = 0
@@ -2061,6 +2130,10 @@ function M.setRoutePoints(encodedPoints)
   state.routeInputPoints = points
   state.routePath = pathPoints
   state.routePathEnd = pathPoints[#pathPoints]
+  state.localPlanner = {
+    status = "waiting", reasonCode = "sensor_stale", timestamp = nil,
+    candidates = {}, selectedIndex = nil
+  }
   state.routeProgressIndex = 1
   state.routeProgressPercent = 0
   state.routeProgressTimer = 0
@@ -2086,6 +2159,10 @@ function M.clearRoutePoints()
   state.routeInputPoints = {}
   state.routePath = {}
   state.routePathEnd = nil
+  state.localPlanner = {
+    status = "idle", reasonCode = "inactive", timestamp = nil,
+    candidates = {}, selectedIndex = nil
+  }
   state.routeProgressIndex = 1
   state.routeProgressPercent = 0
   state.routeProgressTimer = 0
@@ -3424,6 +3501,441 @@ local function updateRoadUnderstanding()
   }
 end
 
+local function setLocalPlannerState(status, reasonCode, reason, candidates, selectedIndex, details)
+  state.localPlanner = {
+    status = status,
+    reasonCode = reasonCode,
+    reason = reason,
+    timestamp = state.simulationTime,
+    candidates = candidates or {},
+    selectedIndex = selectedIndex,
+    candidateCount = #(candidates or {}),
+    rejectedCount = 0,
+    minimumClearance = nil,
+    minimumRoadMargin = nil,
+    horizon = PLANNER_HORIZON_M,
+    roadBoundaryModel = "NavGraph centerline with conservative 3.5 m half-width heuristic",
+    worldModelGeneration = state.worldModel and state.worldModel.generation or 0
+  }
+  for i = 1, #(candidates or {}) do
+    if candidates[i].safe ~= true then
+      state.localPlanner.rejectedCount = state.localPlanner.rejectedCount + 1
+    end
+  end
+  if type(details) == "table" then
+    for key, value in pairs(details) do state.localPlanner[key] = value end
+  end
+  return state.localPlanner
+end
+
+local function ensurePlannerRoutePath()
+  if type(state.routePath) == "table" and #state.routePath >= 2 then return true end
+  local pathIds, pathPoints, reason
+  if #state.routeInputPoints > 0 then
+    pathIds, pathPoints, reason = buildRoadRouteThroughPoints(state.activeVehicle, state.routeInputPoints)
+  else
+    pathIds, pathPoints, reason = buildForwardRoadPath(state.activeVehicle)
+  end
+  if not pathIds or type(pathPoints) ~= "table" or #pathPoints < 2 then
+    return false, reason or "No usable NavGraph path is available"
+  end
+  state.routePath = pathPoints
+  state.routePathEnd = pathPoints[#pathPoints]
+  state.routeProgressIndex = 1
+  state.routeProgressPercent = 0
+  state.routeDistanceToPath = nil
+  state.routeLostUpdates = 0
+  return true
+end
+
+local function getPlannerVehicleFootprint()
+  local profile = state.vehicleGeometry
+  if type(profile) ~= "table" or profile.valid ~= true then return nil end
+  local position = asVec3(safeCall(state.activeVehicle, "getPosition"))
+  local forward = normalizedVec3(safeCall(state.activeVehicle, "getDirectionVector"))
+  local up = normalizedVec3(safeCall(state.activeVehicle, "getDirectionVectorUp"))
+  if not position or not forward or not up then return nil end
+  local flatForward = vec3(forward.x, forward.y, 0)
+  if flatForward:length() < 0.0001 then return nil end
+  flatForward = flatForward:normalized()
+  local right = normalizedVec3(flatForward:cross(up))
+  if not right then return nil end
+
+  local forwardMin, forwardMax = tonumber(profile.forwardMin), tonumber(profile.forwardMax)
+  local lateralMin, lateralMax = tonumber(profile.lateralMin), tonumber(profile.lateralMax)
+  local bottom, top = tonumber(profile.bottom), tonumber(profile.top)
+  if not forwardMin or not forwardMax or not lateralMin or not lateralMax
+      or not bottom or not top or forwardMax <= forwardMin
+      or lateralMax <= lateralMin or top <= bottom then return nil end
+  local length = forwardMax - forwardMin
+  local width = lateralMax - lateralMin
+  local height = top - bottom
+  if length < 1.2 or length > 30 or width < 0.5 or width > 10
+      or height < 0.45 or height > 9 then return nil end
+
+  local center = position
+    + forward * ((forwardMin + forwardMax) * 0.5)
+    + right * ((lateralMin + lateralMax) * 0.5)
+    + up * ((bottom + top) * 0.5)
+  return {
+    center = center, forward = flatForward, right = right, up = up,
+    halfLength = length * 0.5, halfWidth = width * 0.5, halfHeight = height * 0.5,
+    length = length, width = width, height = height
+  }
+end
+
+local function findClosestPlannerRouteProjection(path, position)
+  local bestIndex, bestPoint, bestDistance = nil, nil, math.huge
+  for i = 1, #path - 1 do
+    local a, b = asVec3(path[i]), asVec3(path[i + 1])
+    if a and b then
+      local segment = vec3(b.x - a.x, b.y - a.y, 0)
+      local lengthSquared = segment:dot(segment)
+      if lengthSquared > 0.25 then
+        local offset = vec3(position.x - a.x, position.y - a.y, 0)
+        local t = math.max(0, math.min(1, offset:dot(segment) / lengthSquared))
+        local point = a + (b - a) * t
+        local dx, dy = position.x - point.x, position.y - point.y
+        local distance = math.sqrt(dx * dx + dy * dy)
+        if distance < bestDistance then
+          bestIndex, bestPoint, bestDistance = i, point, distance
+        end
+      end
+    end
+  end
+  return bestIndex, bestPoint, bestDistance
+end
+
+local function samplePlannerRoute(path, startIndex, startPoint, distance)
+  local remaining = math.max(0, distance)
+  local segmentStart = startPoint
+  for i = startIndex, #path - 1 do
+    local finish = asVec3(path[i + 1])
+    if not finish then return nil, nil end
+    local delta = finish - segmentStart
+    local flatDelta = vec3(delta.x, delta.y, 0)
+    local length = flatDelta:length()
+    if length > 0.25 then
+      if remaining <= length then
+        return segmentStart + delta * (remaining / length), flatDelta / length
+      end
+      remaining = remaining - length
+    end
+    segmentStart = finish
+  end
+  return nil, nil
+end
+
+local function smoothPlannerRamp(distance)
+  local t = math.max(0, math.min(1, (distance - 1.0) / 8.0))
+  return t * t * (3 - 2 * t)
+end
+
+local function plannerDirections(points, initialForward)
+  local result = {}
+  for i = 1, #points do
+    if i == 1 then
+      result[i] = initialForward
+    else
+      local a, b = points[i - 1], points[i]
+      local delta = vec3(b.x - a.x, b.y - a.y, 0)
+      result[i] = delta:length() > 0.05 and delta:normalized() or initialForward
+    end
+  end
+  return result
+end
+
+local function evaluatePlannerCandidate(candidate, footprint, obstacles, targets, centerlineSamples)
+  local points = candidate.path
+  local directions = plannerDirections(points, footprint.forward)
+  local minimumRadius = math.max(2.8, footprint.length * 0.55)
+  local previousCurvature, curvatureChange, maximumCurvature = 0, 0, 0
+
+  for i = 2, #points - 1 do
+    local a, b, c = points[i - 1], points[i], points[i + 1]
+    local first = vec3(b.x - a.x, b.y - a.y, 0)
+    local second = vec3(c.x - b.x, c.y - b.y, 0)
+    local firstLength, secondLength = first:length(), second:length()
+    if firstLength > 0.1 and secondLength > 0.1 then
+      local cosine = math.max(-1, math.min(1, first:dot(second) / (firstLength * secondLength)))
+      local curvature = math.acos(cosine) / math.max(0.1, (firstLength + secondLength) * 0.5)
+      if curvature > 0.0001 and 1 / curvature < minimumRadius then
+        candidate.safe = false
+        candidate.reasonCode = candidate.reasonCode or "turning_radius"
+        candidate.reason = candidate.reason or "Trajectory exceeds the estimated vehicle turning limit"
+      end
+      curvatureChange = curvatureChange + math.abs(curvature - previousCurvature)
+      previousCurvature = curvature
+      maximumCurvature = math.max(maximumCurvature, curvature)
+    end
+  end
+
+  candidate.minimumTurnRadius = minimumRadius
+  candidate.maximumCurvature = maximumCurvature
+  candidate.steeringChangeCost = curvatureChange
+  candidate.minimumClearance = 12.0
+
+  for i = 1, #points do
+    local sample, direction = points[i], directions[i]
+    local right = vec3(-direction.y, direction.x, 0)
+    for j = 1, #obstacles do
+      local position = obstacles[j]._position
+      if position.z >= centerlineSamples[i].z + 0.15
+          and position.z <= centerlineSamples[i].z + footprint.height + 0.50 then
+        local delta = position - sample
+        local longitudinalGap = math.max(0,
+          math.abs(delta:dot(direction)) - footprint.halfLength - PLANNER_OBSTACLE_MARGIN_M)
+        local lateralGap = math.max(0,
+          math.abs(delta:dot(right)) - footprint.halfWidth - PLANNER_OBSTACLE_MARGIN_M)
+        local clearance = math.sqrt(longitudinalGap * longitudinalGap + lateralGap * lateralGap)
+        candidate.minimumClearance = math.min(candidate.minimumClearance, clearance)
+        if longitudinalGap <= 0 and lateralGap <= 0 then
+          candidate.safe = false
+          candidate.reasonCode = candidate.reasonCode or "obstacle"
+          candidate.reason = candidate.reason or "A scene-raycast obstacle overlaps the vehicle footprint"
+        end
+      end
+    end
+
+    for j = 1, #targets do
+      local target = targets[j]
+      local targetPosition, dimensions = target._position, target._dimensions
+      local orientation = target._orientation
+      local targetForward = orientation and normalizedVec3(orientation.forward) or direction
+      local targetRight = orientation and normalizedVec3(orientation.right) or nil
+      if not targetRight then targetRight = vec3(-targetForward.y, targetForward.x, 0) end
+      if math.abs(targetPosition.z - sample.z)
+          <= footprint.halfHeight + dimensions.height * 0.5 + 0.45 then
+        local delta = targetPosition - sample
+        local targetHalfLong = dimensions.length * 0.5 * math.abs(targetForward:dot(direction))
+          + dimensions.width * 0.5 * math.abs(targetRight:dot(direction))
+        local targetHalfLat = dimensions.length * 0.5 * math.abs(targetForward:dot(right))
+          + dimensions.width * 0.5 * math.abs(targetRight:dot(right))
+        local longitudinalGap = math.max(0,
+          math.abs(delta:dot(direction)) - footprint.halfLength - targetHalfLong - PLANNER_OBSTACLE_MARGIN_M)
+        local lateralGap = math.max(0,
+          math.abs(delta:dot(right)) - footprint.halfWidth - targetHalfLat - PLANNER_OBSTACLE_MARGIN_M)
+        local clearance = math.sqrt(longitudinalGap * longitudinalGap + lateralGap * lateralGap)
+        candidate.minimumClearance = math.min(candidate.minimumClearance, clearance)
+        if longitudinalGap <= 0 and lateralGap <= 0 then
+          candidate.safe = false
+          candidate.reasonCode = candidate.reasonCode or "vehicle"
+          candidate.reason = candidate.reason or "A tracked vehicle overlaps the planned footprint"
+        end
+      end
+    end
+  end
+
+  candidate.minimumClearance = math.min(12.0, candidate.minimumClearance)
+  if candidate.safe then
+    candidate.score = candidate.pathProgress * 0.1
+      + candidate.minimumClearance * 1.35
+      + candidate.minimumRoadMargin * 0.75
+      - math.abs(candidate.targetOffset) * 1.5
+      - maximumCurvature * 8.0
+      - curvatureChange * 3.0
+  end
+end
+
+local function updateLocalTrajectoryPlanner()
+  local previous = state.localPlanner or {}
+  if previous.timestamp and state.simulationTime - previous.timestamp < PLANNER_INTERVAL then
+    return previous
+  end
+  if not state.routePilotEnabled then
+    return setLocalPlannerState("idle", "inactive", "Route pilot is inactive", {}, nil)
+  end
+  local function waiting(code, reason)
+    return setLocalPlannerState("waiting", code, reason, {}, nil)
+  end
+
+  local now = state.simulationTime
+  if state.frameAge > MAX_FRAME_AGE or type(state.latestData) ~= "table"
+      or type(state.worldModel) ~= "table"
+      or now - (tonumber(state.worldModel.timestamp) or -math.huge) > PLANNER_MAX_DATA_AGE then
+    return waiting("sensor_stale", "Waiting for a fresh world-model snapshot")
+  end
+
+  local timestamps = state.latestData.sensorTimestamps or {}
+  local settings = state.settings or DEFAULT_SETTINGS
+  local function sourceFresh(key, enabled)
+    local timestamp = tonumber(timestamps[key])
+    return enabled == true and timestamp ~= nil
+      and timestamp <= now + 0.05 and now - timestamp <= PLANNER_MAX_DATA_AGE
+  end
+  local freshSource = sourceFresh("lidar", settings.lidarEnabled)
+    or sourceFresh("radar", settings.radarEnabled)
+    or sourceFresh("ultrasonic", settings.ultrasonicEnabled)
+  if not freshSource then
+    return waiting("sensor_stale", "No enabled obstacle sensor has a fresh measurement")
+  end
+
+  if type(state.roadState) ~= "table" or state.roadState.valid ~= true
+      or (state.roadState.quality ~= "high" and state.roadState.quality ~= "medium")
+      or now - (tonumber(state.roadState.timestamp) or -math.huge) > PLANNER_MAX_DATA_AGE then
+    return waiting("road_unavailable", "Road localization is not reliable enough for trajectory planning")
+  end
+
+  local footprint = getPlannerVehicleFootprint()
+  if not footprint then
+    return waiting("vehicle_geometry", "Calibrated full vehicle footprint is unavailable")
+  end
+  local routeReady, routeError = ensurePlannerRoutePath()
+  if not routeReady then
+    return waiting("route_unavailable", routeError or "No valid route corridor is available")
+  end
+
+  local startIndex, projection, distanceToPath =
+    findClosestPlannerRouteProjection(state.routePath, footprint.center)
+  if not startIndex or not projection then
+    return waiting("route_unavailable", "Could not project the vehicle onto the route")
+  end
+  local first, second = asVec3(state.routePath[startIndex]), asVec3(state.routePath[startIndex + 1])
+  local initialSegment = first and second
+    and vec3(second.x - first.x, second.y - first.y, 0) or nil
+  if not initialSegment or initialSegment:length() < 0.1 then
+    return waiting("route_unavailable", "The route has no usable forward direction")
+  end
+  local routeForward = initialSegment:normalized()
+  local routeRight = vec3(-routeForward.y, routeForward.x, 0)
+  local currentOffset = (footprint.center - projection):dot(routeRight)
+  local vehicleCenterHeight = footprint.center.z - projection.z
+
+  local centerlineSamples = {}
+  for sampleIndex = 0, PLANNER_MAX_SAMPLES - 1 do
+    local distance = sampleIndex * PLANNER_SAMPLE_STEP_M
+    if distance > PLANNER_HORIZON_M then break end
+    local centerline, tangent = samplePlannerRoute(state.routePath, startIndex, projection, distance)
+    if not centerline or not tangent then break end
+    centerlineSamples[#centerlineSamples + 1] = {
+      centerline = centerline, tangent = tangent, distance = distance, z = centerline.z
+    }
+  end
+  if #centerlineSamples < 4 then
+    return waiting("route_unavailable", "The NavGraph path is shorter than the planning horizon")
+  end
+
+  local nearbyObstacles = {}
+  for i = 1, #(state.worldModel.obstacles or {}) do
+    local obstacle = state.worldModel.obstacles[i]
+    local position = asVec3(obstacle.position)
+    local timestamp = tonumber(obstacle.timestamp)
+    local age = timestamp and now - timestamp or math.huge
+    if position and age >= 0 and age <= PLANNER_MAX_DATA_AGE
+        and (position - footprint.center):length() <= PLANNER_HORIZON_M + 12 then
+      nearbyObstacles[#nearbyObstacles + 1] = {_position = position}
+      if #nearbyObstacles >= PLANNER_MAX_OBSTACLES then break end
+    end
+  end
+
+  local nearbyTargets = {}
+  for i = 1, #(state.worldModel.targets or {}) do
+    local target = state.worldModel.targets[i]
+    local targetPosition = target.status == "coasting"
+      and asVec3(target.predictedPosition) or asVec3(target.position)
+    local timestamp = tonumber(target.timestamp)
+    local age = timestamp and now - timestamp or math.huge
+    local dimensions = target.dimensions
+    if targetPosition and age >= 0 and age <= PLANNER_MAX_DATA_AGE
+        and (target.status == "confirmed" or target.status == "coasting")
+        and (tonumber(target.confidence) or 0) >= 0.25
+        and (targetPosition - footprint.center):length() <= PLANNER_HORIZON_M + 12 then
+      local length = type(dimensions) == "table" and tonumber(dimensions.length) or 4.5
+      local width = type(dimensions) == "table" and tonumber(dimensions.width) or 2.0
+      local height = type(dimensions) == "table" and tonumber(dimensions.height) or 1.6
+      nearbyTargets[#nearbyTargets + 1] = {
+        _position = targetPosition,
+        _dimensions = {
+          length = math.max(1.0, math.min(30, length)),
+          width = math.max(0.5, math.min(10, width)),
+          height = math.max(0.45, math.min(9, height))
+        },
+        _orientation = target.orientation
+      }
+      if #nearbyTargets >= PLANNER_MAX_TARGETS then break end
+    end
+  end
+
+  local candidates, selectedIndex, bestScore = {}, nil, -math.huge
+  local reasons = {obstacle = 0, vehicle = 0, road_edge = 0, turning_radius = 0}
+  for candidateIndex = 1, math.min(PLANNER_MAX_CANDIDATES, #PLANNER_CANDIDATE_OFFSETS) do
+    local targetOffset = PLANNER_CANDIDATE_OFFSETS[candidateIndex]
+    local candidate = {
+      index = candidateIndex, targetOffset = targetOffset, safe = true, path = {},
+      minimumClearance = 12.0, minimumRoadMargin = math.huge, pathProgress = 0
+    }
+    for sampleIndex = 1, #centerlineSamples do
+      local sample = centerlineSamples[sampleIndex]
+      local ramp = smoothPlannerRamp(sample.distance)
+      local lateralOffset = currentOffset * (1 - ramp) + targetOffset * ramp
+      local normal = vec3(-sample.tangent.y, sample.tangent.x, 0)
+      local point
+      if sampleIndex == 1 then
+        point = footprint.center
+      else
+        point = sample.centerline + normal * lateralOffset + vec3(0, 0, vehicleCenterHeight)
+      end
+      candidate.path[#candidate.path + 1] = vectorToPlainTable(point)
+      candidate.pathProgress = sample.distance
+      local projectedHalfWidth = footprint.halfLength * math.abs(footprint.forward:dot(normal))
+        + footprint.halfWidth * math.abs(footprint.right:dot(normal))
+      local roadMargin = PLANNER_ROAD_HALF_WIDTH_M - math.abs(lateralOffset) - projectedHalfWidth
+      candidate.minimumRoadMargin = math.min(candidate.minimumRoadMargin, roadMargin)
+      if roadMargin < PLANNER_ROAD_EDGE_MARGIN_M then
+        candidate.safe = false
+        candidate.reasonCode = candidate.reasonCode or "road_edge"
+        candidate.reason = candidate.reason or "The full vehicle width exceeds the conservative NavGraph corridor"
+      end
+    end
+
+    if candidate.minimumRoadMargin == math.huge then candidate.minimumRoadMargin = 0 end
+    evaluatePlannerCandidate(candidate, footprint, nearbyObstacles, nearbyTargets, centerlineSamples)
+    if candidate.safe then
+      if candidate.score > bestScore then bestScore, selectedIndex = candidate.score, candidateIndex end
+    else
+      local code = candidate.reasonCode or "obstacle"
+      reasons[code] = (reasons[code] or 0) + 1
+    end
+    candidates[#candidates + 1] = candidate
+  end
+
+  if selectedIndex then
+    local selected = candidates[selectedIndex]
+    return setLocalPlannerState("ready", "selected", "A safe bounded trajectory was selected",
+      candidates, selectedIndex, {
+        selectedScore = round2(selected.score),
+        minimumClearance = round2(selected.minimumClearance),
+        minimumRoadMargin = round2(selected.minimumRoadMargin),
+        selectedOffset = round2(selected.targetOffset),
+        routeProjectionDistance = round2(distanceToPath),
+        sampleCount = #selected.path
+      })
+  end
+
+  local reasonCode = "no_safe_candidate"
+  if reasons.road_edge == #candidates then
+    reasonCode = "road_edge"
+  elseif reasons.turning_radius == #candidates then
+    reasonCode = "turning_radius"
+  elseif reasons.vehicle > 0 and reasons.obstacle == 0 then
+    reasonCode = "vehicle"
+  elseif reasons.obstacle > 0 then
+    reasonCode = "obstacle"
+  end
+  local minimumClearance, minimumRoadMargin = 12.0, math.huge
+  for i = 1, #candidates do
+    minimumClearance = math.min(minimumClearance, candidates[i].minimumClearance or 12)
+    minimumRoadMargin = math.min(minimumRoadMargin, candidates[i].minimumRoadMargin or 0)
+  end
+  return setLocalPlannerState("blocked", reasonCode,
+    "No candidate passed the footprint, obstacle, road-corridor and turning checks",
+    candidates, nil, {
+      minimumClearance = round2(minimumClearance),
+      minimumRoadMargin = minimumRoadMargin == math.huge and nil or round2(minimumRoadMargin),
+      routeProjectionDistance = round2(distanceToPath),
+      sampleCount = #centerlineSamples
+    })
+end
 local function refreshVehicleRegistry()
   local registry = {}
   local examined = 0
@@ -4082,6 +4594,23 @@ local function updateRoutePilotSafety(dt)
     return
   end
 
+  local planner = updateLocalTrajectoryPlanner()
+  if planner.status ~= "ready" or not planner.selectedIndex then
+    if state.routePilotStarted then
+      stopNativeRouteAI(state.activeVehicle)
+      state.routePilotStarted = false
+      log("W", "roadmind", "Local planner stopped the route pilot: " .. tostring(planner.reasonCode))
+    end
+    state.routeSafetyStopped = true
+    state.routePilotError = "Local planner: " .. tostring(planner.reason or "No safe local trajectory")
+    state.routeRetryCooldown = math.max(state.routeRetryCooldown or 0, 0.5)
+    return
+  end
+  if type(state.routePilotError) == "string"
+      and state.routePilotError:find("^Local planner:") then
+    state.routePilotError = nil
+  end
+
   local clearance = nearestForwardObstacle(state.latestData)
   if clearance <= ROUTE_STOP_DISTANCE then
     if state.routePilotStarted then
@@ -4292,7 +4821,9 @@ local function updateAdaptivePerformance(dt)
       nextTier, measured, target
     ))
   end
-endfunction M.onUpdate(dt)
+end
+
+function M.onUpdate(dt)
   dt = tonumber(dt) or 0
   if dt < 0 then dt = 0 end
   if not state.visualizationEnabled then return end
@@ -4383,7 +4914,10 @@ function M.getRouteState()
         state.routePath[math.min(#state.routePath, (state.routeProgressIndex or 1) + 1)]
       ),
       error = state.routePilotError
-    }
+    },
+    planner = cloneWorldModelValue(state.localPlanner or {
+      status = "idle", reasonCode = "inactive", candidates = {}
+    })
   }
 end
 
