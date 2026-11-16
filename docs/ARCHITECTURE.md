@@ -64,7 +64,7 @@ The GE coordinator maintains one shared registry of nearby vehicle OBB snapshots
 - A cheap range check precedes OBB projection tests against each sensor volume. One vehicle is emitted once with all sensor zones that contain its OBB.
 - At most four candidate-to-target occlusion raycasts run per detection cycle (up to 16/s). Candidates are classified as visible, occluded or unverified. Only visible targets are drawn and used by the experimental route safety guard.
 
-This service is **simulator-assisted**: the game provides the list of vehicles and their OBBs. It is not a claim that a physical LiDAR/radar/camera independently recognized the target. It does not yet provide persistent RoadMind track IDs, temporal association or a unified world model; those are later roadmap phases.
+This service is **simulator-assisted**: the game provides the list of vehicles and their OBBs. It is not a claim that a physical LiDAR/radar/camera independently recognized the target. Confirmed candidates feed the session-scoped tracker and schema-v2 world model described in [WORLD_MODEL.md](WORLD_MODEL.md).
 
 ## Phase 5 — object tracking
 
@@ -98,6 +98,22 @@ Raw LiDAR returns, timestamped measurements, persistent static scan points, and 
 
 This is a code-level visualization implementation. Smoothness, object association and surface-switch behavior still require in-game verification.
 
+## Phase 7 — unified world model
+
+The GE coordinator exposes `extensions.roadmind.getWorldModel()`, which returns an independent deep-copied schema-v2 snapshot in BeamNG world coordinates and metres.
+
+The model contains:
+
+- A common observation envelope with position, source, sensor mount, timestamp, data age, confidence and provenance.
+- Separate raw observation streams for LiDAR, radar, ultrasonic and simulator-assisted vehicle OBB detections.
+- One target record per RoadMind track ID, with observed and predicted positions kept separate.
+- Spatially grouped non-vehicle scene-raycast obstacle clusters, retaining contributing observation IDs and sensor sources.
+- Per-source freshness/status and quality counters for invalid, stale, conflicting, low-confidence, truncated and dropped data.
+
+Raw scene-raycast hits remain source-specific. Vehicle OBB observations are explicitly labelled simulator-assisted. Estimated motion and predicted display positions are not described as physical radar Doppler or new measurements. See [WORLD_MODEL.md](WORLD_MODEL.md) for the complete versioned schema, fields, limits and consumer rules.
+
+The world-model builder runs on sensor/detection updates, has a bounded observation and target budget, and performs no additional scene raycasts.
+
 ## Input and settings
 
 The sensor-suite binding is defined in `lua/ge/extensions/core/input/actions/roadmind_actions.json`. The in-game settings page is under `ui/ui-vue/mods/roadmind/`.
@@ -114,8 +130,7 @@ BeamNG.tech provides a separate native suite with rendered camera, LiDAR, RADAR,
 
 1. **Vehicle registry and detection zones:** one scheduled vehicle snapshot, bounds-based target checks and bounded occlusion tests.
 2. **Object tracker:** persistent RoadMind IDs, timestamped association, confidence and motion estimates.
-3. **World model:** a unified interface for tracked vehicles and non-vehicle obstacles.
-4. **Route manager:** road graph, route points and local road corridor.
-5. **Local planner:** candidate trajectories, footprint collision checks and scoring.
-6. **Vehicle controller:** steering, throttle, braking and gear management.
-7. **Safety supervisor:** controlled stop on stale sensors, invalid routes or blocked paths.
+3. **Route manager:** road graph, route points and local road corridor.
+4. **Local planner:** candidate trajectories, footprint collision checks and scoring.
+5. **Vehicle controller:** steering, throttle, braking and gear management.
+6. **Safety supervisor:** controlled stop on stale sensors, invalid routes or blocked paths.
