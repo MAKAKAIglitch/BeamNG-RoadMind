@@ -50,9 +50,23 @@ The tracker uses a 0.75 s recent-visibility cache and retains a missed target fo
 
 All vehicle positions, dimensions, orientation and the simulator-provided velocity originate from BeamNG's vehicle OBB/object data. The estimated velocities are derived values, not radar Doppler measurements. This is a simulator-assisted tracking prototype, not camera recognition or physical sensor-only tracking.
 
+## Time-consistent LiDAR point display
+
+Raw scan hits are timestamped in the GE simulation clock and retain their ray index and hit object ID when the engine supplies one. The raw array remains the measurement source for downstream logic.
+
+The renderer keeps a separate point state:
+
+- A recent tracked vehicle hit is stored in that vehicle's local OBB coordinates and follows its timestamp-derived track motion between scans.
+- A target can be extrapolated for display by at most 0.5 s. This extrapolation is render-only, not a new sensor measurement.
+- Static scene points stay in world coordinates. Known hit object IDs help avoid mixing adjacent surfaces; unknown static hits are continued only when their world point stays within 0.35 m on the same ray.
+- A changed/missing return or lost object association causes the old marker to fade, not travel toward an unrelated new hit.
+- The renderer caps active points at 99 and fading points at 198, fades for 0.4 s and expires points after 2.25 s without a new scan.
+
+The optional persistent scan map stores static world-space hits only; tracked moving-object returns are kept in the render layer instead. This visual layer performs no raycasts and never feeds its interpolated coordinates back into the raw LiDAR measurements used by sensor safety/planning.
+
 ## LiDAR
 
-The forward LiDAR samples 17 horizontal azimuths and 3 vertical elevations (51 ray directions). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
+The forward LiDAR uses 9–33 horizontal samples and 1–3 vertical elevations (up to 99 ray directions; the High preset uses 51). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
 
 The scanner is intentionally forward-facing, not a 360° roof scanner.
 
