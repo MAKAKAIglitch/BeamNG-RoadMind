@@ -136,4 +136,12 @@ The model is bounded to 512 observations and 128 tracked targets. Per-sensor obs
 - Treat `simulator-assisted`, `scene-raycast-measurement`, `estimated` and `predicted` values according to their explicit provenance.
 - Never use render-only interpolated LiDAR point positions as sensor measurements. They are maintained in a separate visualization layer.
 
+## Local planner consumer contract
+
+Phase 9 consumes timestamped targets, obstacle clusters, per-source freshness and a cloned route-state snapshot. It rejects planning when all enabled obstacle sensor sources are stale, road localization is not high/medium quality, the active vehicle has no valid cached OBB calibration, or no connected route corridor is available.
+
+Vehicle targets are checked by projecting their OBB length/width onto each candidate tangent/lateral axis. Non-vehicle obstacles are point clusters and receive a conservative geometric margin; the planner does not infer semantic object shape from them. Only recent obstacle clusters and confirmed/coasting targets are considered. Render-smoothed LiDAR points are never used.
+
+The current Drive-mode road context is a NavGraph centerline, not a lane-boundary polygon. Phase 9 therefore applies a conservative 3.5 m half-width corridor heuristic and a vehicle-length-derived minimum turn radius. Both are explicit approximations and require in-game validation. The planner can stop the built-in route AI if no candidate is safe, but it does not control steering/throttle/brakes; that is Phase 10.
+
 The regular BeamNG.drive build has no RGB camera stream. Camera frustums therefore do not create camera observations in this schema.
