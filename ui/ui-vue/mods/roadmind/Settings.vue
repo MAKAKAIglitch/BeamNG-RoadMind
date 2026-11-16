@@ -189,23 +189,11 @@
           :config="optionConfig" :disabled="busy"
           @valueChanged="value => setSetting('lidarQuality', value)" />
       </BngRow>
-      <BngRow :vertical="true">
-        <template #label>{{ t("pointCount") }}: {{ settings.lidarPointCount }} {{ t("pointsPerRow") }}</template>
-        <BngSlider :min="9" :max="33" :step="4" :modelValue="settings.lidarPointCount"
-          :with-input="true" :disabled="busy"
-          @update:modelValue="queueLidarPointCount" />
-      </BngRow>
       <BngRow>
         <template #label>{{ t("scanRate") }}</template>
         <BngSelect :value="settings.lidarHz" :options="lidarRateOptions"
           :config="optionConfig" :disabled="busy"
           @valueChanged="value => setSetting('lidarHz', Number(value))" />
-      </BngRow>
-      <BngRow :vertical="true">
-        <template #label>{{ t("range") }}: {{ settings.lidarRange }} m</template>
-        <BngSlider :min="30" :max="160" :step="5" :modelValue="settings.lidarRange"
-          :with-input="true" :disabled="busy"
-          @update:modelValue="queueLidarRange" />
       </BngRow>
       <p class="roadmind-note">{{ t("lidarNote") }}</p>
       <BngRow>
@@ -213,8 +201,17 @@
         <BngSwitch :modelValue="settings.lidarPersistenceEnabled" :disabled="busy"
           @update:modelValue="value => setSetting('lidarPersistenceEnabled', value)" />
       </BngRow>
+      <BngRow :vertical="true">
+        <template #label>
+          {{ t("pointCloudLimit") }}: {{ settings.lidarPointCloudLimit }} {{ t("points") }}
+        </template>
+        <BngSlider :min="500" :max="10000" :step="500"
+          :modelValue="settings.lidarPointCloudLimit" :with-input="true" :disabled="busy"
+          @update:modelValue="queuePointCloudLimit" />
+      </BngRow>
       <p class="roadmind-note">
-        {{ t("persistenceNote") }} ({{ status.persistentLidarPointCount || 0 }} / 600)
+        {{ t("persistenceNote") }} ({{ status.persistentLidarPointCount || 0 }} /
+        {{ status.persistentLidarPointLimit || settings.lidarPointCloudLimit }})
       </p>
       <BngButton :accent="ACCENTS.outlined" :disabled="busy" @click="clearLidarMap">
         {{ t("clearCloud") }}
@@ -269,6 +266,11 @@
         <template #label>{{ t("lidarDisplay") }}</template>
         <BngSwitch :modelValue="settings.showLidar" :disabled="busy"
           @update:modelValue="value => setSetting('showLidar', value)" />
+      </BngRow>
+      <BngRow>
+        <template #label>{{ t("visualizationInertia") }}</template>
+        <BngSwitch :modelValue="settings.visualizationInertiaEnabled" :disabled="busy"
+          @update:modelValue="value => setSetting('visualizationInertiaEnabled', value)" />
       </BngRow>
       <BngRow>
         <template #label>{{ t("radarDisplay") }}</template>
@@ -345,11 +347,12 @@ const EN = {
   lidar: "Forward LiDAR",
   enabled: "Enabled",
   resolution: "Vertical layers",
-  pointCount: "Points per horizontal row",
-  pointsPerRow: "points",
   persistence: "Accumulate point cloud",
-  persistenceNote: "Keeps up to 600 world-space points for this game session. Drawing the cloud can reduce FPS.",
+  pointCloudLimit: "Accumulation limit",
+  points: "points",
+  persistenceNote: "Stores LiDAR returns in world coordinates for this game session, including vehicle surfaces. The map remains visible while paused; drawing more points can reduce FPS.",
   clearCloud: "Clear scanned point cloud",
+  visualizationInertia: "Smooth inertial movement",
   detectedVehicles: "Detected vehicles",
   vehiclesDetected: "Vehicles confirmed visible",
   vehicleCandidates: "Vehicle candidates in sensor zones",
@@ -373,7 +376,7 @@ const EN = {
   trackConfidence: "Confidence",
   registrySize: "Cached vehicle registry",
   registryLimited: "limit reached",
-  detectionNote: "Vehicle presence is simulator-assisted: RoadMind checks vehicle OBBs against calibrated sensor zones and verifies visibility with a bounded number of occlusion raycasts. It is not a raw LiDAR/radar/camera detection stream.",
+  detectionNote: "Vehicle presence is simulator-assisted. Green OBB outlines are confirmed visible; yellow outlines are candidates still waiting for the limited occlusion checks. This is not raw LiDAR/radar/camera recognition.",
   vehicleGeometry: "Vehicle geometry and sensor calibration",
   calibrated: "Geometry calibrated",
   fallbackCalibration: "Using fallback sensor positions",
@@ -415,7 +418,7 @@ const EN = {
 
   scanRate: "Scan rate",
   range: "Maximum range",
-  lidarNote: "The slider sets 9–33 horizontal samples; resolution adds 1, 2 or 3 vertical layers. More samples, range and scan frequency increase CPU workload.",
+  lidarNote: "Horizontal density and range follow the selected performance profile. The separate point-cloud limit controls how many world-space returns are retained.",
   radar: "Automotive radar",
   rayDensity: "Ray density",
   ultrasonic: "Ultrasonic sensors",
@@ -462,11 +465,12 @@ const RU = {
   lidar: "Передний LiDAR",
   enabled: "Включён",
   resolution: "Вертикальные слои",
-  pointCount: "Точек по горизонтали",
-  pointsPerRow: "шт.",
   persistence: "Накапливать облако точек",
-  persistenceNote: "Хранит до 600 точек в мировых координатах до конца текущей игровой сессии. Отрисовка облака может снизить FPS.",
+  pointCloudLimit: "Лимит накопления",
+  points: "точек",
+  persistenceNote: "Сохраняет точки LiDAR в мировых координатах до конца игровой сессии, включая поверхности машин. Облако остаётся на месте при паузе; большое число точек может снизить FPS.",
   clearCloud: "Очистить облако точек",
+  visualizationInertia: "Плавное движение с инерцией",
   detectedVehicles: "Обнаруженные автомобили",
   vehiclesDetected: "Подтверждённо видимых машин",
   vehicleCandidates: "Кандидатов в зонах датчиков",
@@ -490,7 +494,7 @@ const RU = {
   trackConfidence: "Достоверность",
   registrySize: "Машин в общем реестре",
   registryLimited: "достигнут лимит",
-  detectionNote: "Обнаружение машин использует данные симулятора: RoadMind проверяет OBB автомобилей в зонах датчиков и видимость ограниченным числом лучей. Это не поток физических измерений LiDAR, радара или камер.",
+  detectionNote: "Обнаружение машин использует данные симулятора. Зелёный контур — видимая машина, жёлтый — кандидат, ожидающий проверки видимости. Это не распознавание по камере или физическому LiDAR.",
   vehicleGeometry: "Геометрия автомобиля и калибровка датчиков",
   calibrated: "Геометрия определена",
   fallbackCalibration: "Используются резервные позиции датчиков",
@@ -540,7 +544,7 @@ const RU = {
 
   scanRate: "Частота сканирования",
   range: "Максимальная дальность",
-  lidarNote: "Ползунок задаёт 9–33 точки по горизонтали; разрешение добавляет 1, 2 или 3 вертикальных слоя. Большее число точек, дальность и частота повышают нагрузку на процессор.",
+  lidarNote: "Плотность и дальность LiDAR задаются выбранным профилем. Отдельный лимит определяет число точек, сохраняемых в облаке.",
   radar: "Автомобильные радары",
   rayDensity: "Плотность лучей",
   ultrasonic: "Ультразвуковые датчики",
@@ -630,9 +634,7 @@ const settings = ref({
   preset: "economy",
   lidarEnabled: true,
   lidarQuality: "low",
-  lidarPointCount: 9,
   lidarHz: 1,
-  lidarRange: 45,
   radarEnabled: false,
   radarDensity: "low",
   radarHz: 1,
@@ -641,6 +643,8 @@ const settings = ref({
   ultrasonicHz: 1,
   poseHz: 2,
   lidarPersistenceEnabled: false,
+  lidarPointCloudLimit: 5000,
+  visualizationInertiaEnabled: true,
   showLidar: true,
   showRadar: false,
   showUltrasonic: false,
@@ -663,6 +667,8 @@ const status = ref({
   roadLocalizationQuality: "unavailable",
   roadDistanceToSegment: undefined,
   persistentLidarPointCount: 0,
+  persistentLidarPointLimit: 5000,
+  unverifiedVehicleCount: 0,
   detectedVehicleCount: 0,
   visibleVehicleCount: 0,
   vehicleCandidateCount: 0,
@@ -725,32 +731,18 @@ function acceptResult(result) {
   return true
 }
 
-let lidarRangeTimer = null
-let pendingLidarRange = null
-let lidarPointCountTimer = null
-let pendingLidarPointCount = null
+let pointCloudLimitTimer = null
+let pendingPointCloudLimit = null
 
-function queueLidarRange(value) {
-  pendingLidarRange = Number(value)
-  settings.value.lidarRange = pendingLidarRange
-  if (lidarRangeTimer) clearTimeout(lidarRangeTimer)
-  lidarRangeTimer = setTimeout(() => {
-    const nextValue = pendingLidarRange
-    pendingLidarRange = null
-    lidarRangeTimer = null
-    setSetting("lidarRange", nextValue)
-  }, 180)
-}
-
-function queueLidarPointCount(value) {
-  pendingLidarPointCount = Number(value)
-  settings.value.lidarPointCount = pendingLidarPointCount
-  if (lidarPointCountTimer) clearTimeout(lidarPointCountTimer)
-  lidarPointCountTimer = setTimeout(() => {
-    const nextValue = pendingLidarPointCount
-    pendingLidarPointCount = null
-    lidarPointCountTimer = null
-    setSetting("lidarPointCount", nextValue)
+function queuePointCloudLimit(value) {
+  pendingPointCloudLimit = Number(value)
+  settings.value.lidarPointCloudLimit = pendingPointCloudLimit
+  if (pointCloudLimitTimer) clearTimeout(pointCloudLimitTimer)
+  pointCloudLimitTimer = setTimeout(() => {
+    const nextValue = pendingPointCloudLimit
+    pendingPointCloudLimit = null
+    pointCloudLimitTimer = null
+    setSetting("lidarPointCloudLimit", nextValue)
   }, 180)
 }
 
@@ -759,17 +751,13 @@ onBeforeUnmount(() => {
     clearInterval(statusRefreshTimer)
     statusRefreshTimer = null
   }
-  if (lidarRangeTimer) {
-    clearTimeout(lidarRangeTimer)
-    lidarRangeTimer = null
-    if (pendingLidarRange !== null) setSetting("lidarRange", pendingLidarRange)
-    pendingLidarRange = null
-  }
-  if (lidarPointCountTimer) {
-    clearTimeout(lidarPointCountTimer)
-    lidarPointCountTimer = null
-    if (pendingLidarPointCount !== null) setSetting("lidarPointCount", pendingLidarPointCount)
-    pendingLidarPointCount = null
+  if (pointCloudLimitTimer) {
+    clearTimeout(pointCloudLimitTimer)
+    pointCloudLimitTimer = null
+    if (pendingPointCloudLimit !== null) {
+      setSetting("lidarPointCloudLimit", pendingPointCloudLimit)
+    }
+    pendingPointCloudLimit = null
   }
 })
 
