@@ -114,6 +114,19 @@ Raw scene-raycast hits remain source-specific. Vehicle OBB observations are expl
 
 The world-model builder runs on sensor/detection updates, has a bounded observation and target budget, and performs no additional scene raycasts.
 
+## Phase 8 — road understanding and route input
+
+The GE coordinator samples the active vehicle against BeamNG's current NavGraph at a 0.5 s cadence:
+
+- map.findClosestRoad(position) identifies the closest road segment and its endpoint nodes.
+- The segment's node positions are projected against the vehicle pose to estimate distance, lateral offset and heading alignment.
+- A short local centerline corridor is extended through forward-connected graph links where the map exposes usable link data. This is NavGraph centerline geometry, not detected lane boundaries or verified free drivable space.
+- Localization quality is reported as high, medium, low, lost or unavailable using geometric distance and heading-alignment thresholds. These are engineering heuristics, not probabilistic localization covariance.
+
+The route manager accepts 1–12 ordered XYZ points in BeamNG world coordinates (metres). It resolves each point to nearby road nodes, joins successive points with map.getPath, validates node positions and graph links, and bounds the combined path to 256 nodes. The settings UI accepts one X, Y, Z point per line. Route progress is estimated against a bounded forward window of path nodes and exposed as a percentage.
+
+The active route is previewed in world space and passed as a waypoint list to the built-in Vehicle Lua ai.driveUsingPath. The base Drive-mode route pilot remains experimental: it uses the game's AI for lane following, and RoadMind's sensors currently provide a conservative stop guard rather than a custom obstacle-avoidance planner. Camera frustums do not provide image measurements. Routes, graph direction, road splits, coordinate entry and progress still need live validation on several maps.
+
 ## Input and settings
 
 The sensor-suite binding is defined in `lua/ge/extensions/core/input/actions/roadmind_actions.json`. The in-game settings page is under `ui/ui-vue/mods/roadmind/`.

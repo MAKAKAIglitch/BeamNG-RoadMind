@@ -77,6 +77,10 @@ local ROUTE_REPLAN_DISTANCE = 140.0
 local ROUTE_REPLAN_COOLDOWN = 5.0
 local ROUTE_STOP_DISTANCE = 12.0
 local ROUTE_RESUME_DISTANCE = 20.0
+local MAX_ROUTE_INPUT_POINTS = 12
+local MAX_ROUTE_PATH_NODES = 256
+local MAX_ROUTE_POINT_ROAD_DISTANCE = 100
+local ROUTE_DESTINATION_REACHED_M = 12
 
 local state = {
   activeVehicleId = nil,
@@ -123,7 +127,15 @@ local state = {
   routePilotError = nil,
   routeRetryCooldown = 0,
   routePath = {},
-  routePathEnd = nil
+  routePathEnd = nil,
+  routeInputPoints = {},
+  routeCompleted = false,
+  routeProgressIndex = 1,
+  routeProgressPercent = 0,
+  routeProgressTimer = 0,
+  routeDistanceToPath = nil,
+  roadUpdateTimer = 0,
+  roadState = nil
 }
 
 local checkTimer = 0
@@ -427,10 +439,166 @@ local function buildForwardRoadPath(vehicle)
   return bestIds, bestPoints
 end
 
+
+local function buildRoadRouteThroughPoints(vehicle, routePoints)
+  if not vehicle then return nil, nil, "No active vehicle" end
+  if type(map) ~= "table" or type(map.findClosestRoad) ~= "function"
+      or type(map.getMap) ~= "function" or type(map.getPath) ~= "function" then
+    return nil, nil, "NavGraph route API is unavailable on this map"
+  end
+
+  local startPosition = asVec3(safeCall(vehicle, "getPosition"))
+  local startHeading = normalizedVec3(safeCall(vehicle, "getDirectionVector"))
+  if not startPosition or not startHeading then return nil, nil, "Could not read vehicle position or heading" end
+  startHeading = vec3(startHeading.x, startHeading.y, 0)
+  if startHeading:length() < 0.0001 then return nil, nil, "Vehicle heading is invalid" end
+  startHeading = startHeading:normalized()
+
+  local okMap, mapData = pcall(map.getMap)
+  local nodes = okMap and type(mapData) == "table" and mapData.nodes or nil
+  if type(nodes) ~= "table" then return nil, nil, "The current map has no loaded NavGraph nodes" end
+
+  local function closestPair(position)
+    local ok, a, b, distance = pcall(map.findClosestRoad, position)
+    if not ok or a == nil or b == nil or nodes[a] == nil or nodes[b] == nil then
+      return nil, "Could not find a road segment for a route point"
+    end
+    if type(distance) == "number" and distance > MAX_ROUTE_POINT_ROAD_DISTANCE then
+      return nil, "A route point is too far from the road network"
+    end
+    return {a, b}
+  end
+
+  local function buildSegment(fromPosition, toPosition, preferredHeading)
+    local starts, startError = closestPair(fromPosition)
+    if not starts then return nil, nil, startError end
+    local targets, targetError = closestPair(toPosition)
+    if not targets then return nil, nil, targetError end
+
+    local bestIds, bestPoints, bestScore = nil, nil, math.huge
+    for si = 1, 2 do
+      for ti = 1, 2 do
+        local fromId, toId = starts[si], targets[ti]
+        if fromId ~= toId then
+          local okPath, path = pcall(map.getPath, fromId, toId)
+          if okPath and type(path) == "table" and #path >= 2 and #path <= 160 then
+            local valid, points, length = true, {}, 0
+            local previousId, previousPosition = nil, nil
+
+            for i = 1, #path do
+              local nodeId = path[i]
+              local node = nodes[nodeId]
+              local nodePosition = node and asVec3(safeField(node, "pos")) or nil
+              if (type(nodeId) ~= "string" and type(nodeId) ~= "number") or not nodePosition then
+                valid = false
+                break
+              end
+
+              if previousId ~= nil then
+                local previousNode = nodes[previousId]
+                local links = previousNode and safeField(previousNode, "links")
+                local edge = type(links) == "table" and links[nodeId] or nil
+                if not edge then
+                  local currentNode = nodes[nodeId]
+                  local reverseLinks = currentNode and safeField(currentNode, "links")
+                  edge = type(reverseLinks) == "table" and reverseLinks[previousId] or nil
+                end
+                if not edge then
+                  valid = false
+                  break
+                end
+                if type(edge) == "table" and safeField(edge, "oneWay") == true then
+                  local incomingId = safeField(edge, "inNode")
+                  if incomingId ~= nil and incomingId ~= previousId then
+                    valid = false
+                    break
+                  end
+                end
+
+                local dx = nodePosition.x - previousPosition.x
+                local dy = nodePosition.y - previousPosition.y
+                length = length + math.sqrt(dx * dx + dy * dy)
+              end
+
+              points[#points + 1] = {x = nodePosition.x, y = nodePosition.y, z = nodePosition.z}
+              previousId = nodeId
+              previousPosition = nodePosition
+            end
+
+            if valid and #points >= 2 then
+              local headingAlignment = 0
+              if preferredHeading then
+                local dx = points[2].x - points[1].x
+                local dy = points[2].y - points[1].y
+                local segmentLength = math.sqrt(dx * dx + dy * dy)
+                if segmentLength > 0.1 then
+                  headingAlignment = (dx * preferredHeading.x + dy * preferredHeading.y) / segmentLength
+                end
+                if headingAlignment < -0.25 then valid = false end
+              end
+
+              if valid then
+                local lastPoint = points[#points]
+                local dx, dy, dz = lastPoint.x - toPosition.x, lastPoint.y - toPosition.y, lastPoint.z - toPosition.z
+                local endpointError = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if endpointError <= MAX_ROUTE_POINT_ROAD_DISTANCE then
+                  local score = length + endpointError * 2 - headingAlignment * 25
+                  if score < bestScore then
+                    bestIds, bestPoints, bestScore = path, points, score
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+
+    if not bestIds then return nil, nil, "No connected NavGraph path exists between route points" end
+    return bestIds, bestPoints
+  end
+
+  local combinedIds, combinedPoints = {}, {}
+  local currentPosition, preferredHeading = startPosition, startHeading
+  for routeIndex = 1, #routePoints do
+    local target = routePoints[routeIndex]
+    local targetPosition = vec3(target.x, target.y, target.z)
+    local segmentIds, segmentPoints, reason = buildSegment(currentPosition, targetPosition, preferredHeading)
+    if not segmentIds then return nil, nil, reason end
+
+    for i = 1, #segmentIds do
+      local nodeId = segmentIds[i]
+      if #combinedIds == 0 or tostring(combinedIds[#combinedIds]) ~= tostring(nodeId) then
+        combinedIds[#combinedIds + 1] = nodeId
+        combinedPoints[#combinedPoints + 1] = segmentPoints[i]
+        if #combinedIds > MAX_ROUTE_PATH_NODES then
+          return nil, nil, "Route exceeds the NavGraph waypoint limit"
+        end
+      end
+    end
+
+    currentPosition = targetPosition
+    if #segmentPoints >= 2 then
+      local a, b = segmentPoints[#segmentPoints - 1], segmentPoints[#segmentPoints]
+      local dx, dy = b.x - a.x, b.y - a.y
+      local magnitude = math.sqrt(dx * dx + dy * dy)
+      if magnitude > 0.1 then preferredHeading = vec3(dx / magnitude, dy / magnitude, 0) end
+    end
+  end
+
+  if #combinedIds < 2 then return nil, nil, "The route does not contain enough connected road nodes" end
+  return combinedIds, combinedPoints
+end
+
 local function startNativeRouteAI(vehicle)
   if not vehicle then return false, "No active vehicle" end
 
-  local pathIds, pathPoints, pathError = buildForwardRoadPath(vehicle)
+  local pathIds, pathPoints, pathError
+  if #state.routeInputPoints > 0 then
+    pathIds, pathPoints, pathError = buildRoadRouteThroughPoints(vehicle, state.routeInputPoints)
+  else
+    pathIds, pathPoints, pathError = buildForwardRoadPath(vehicle)
+  end
   if not pathIds then return false, pathError end
 
   local serializedNodes = {}
@@ -453,6 +621,11 @@ local function startNativeRouteAI(vehicle)
 
   state.routePath = pathPoints
   state.routePathEnd = pathPoints[#pathPoints]
+  state.routeProgressIndex = 1
+  state.routeProgressPercent = 0
+  state.routeProgressTimer = 0
+  state.routeDistanceToPath = nil
+  state.routeCompleted = false
   return true
 end
 
@@ -1332,6 +1505,21 @@ local function settingsResult()
       routeSafetyStopped = state.routeSafetyStopped,
       routePilotError = state.routePilotError,
       routeWaypointCount = #state.routePath,
+      routeInputPointCount = #state.routeInputPoints,
+      routeCompleted = state.routeCompleted,
+      routeProgressIndex = state.routeProgressIndex,
+      routeProgressPercent = math.floor((state.routeProgressPercent or 0) * 10 + 0.5) / 10,
+      routeDistanceToPath = state.routeDistanceToPath and round2(state.routeDistanceToPath) or nil,
+      roadLocalizationQuality = state.roadState and state.roadState.quality or "unavailable",
+      roadDistanceToSegment = state.roadState and state.roadState.distanceToSegment
+        and round2(state.roadState.distanceToSegment) or nil,
+      roadLateralOffset = state.roadState and state.roadState.lateralOffset
+        and round2(state.roadState.lateralOffset) or nil,
+      roadHeadingAlignment = state.roadState and state.roadState.headingAlignment
+        and round2(state.roadState.headingAlignment) or nil,
+      roadSegment = state.roadState and state.roadState.segmentStartNode
+        and (state.roadState.segmentStartNode .. " -> " .. state.roadState.segmentEndNode) or nil,
+      roadCorridorPointCount = state.roadState and #(state.roadState.corridor or {}) or 0,
       persistentLidarPointCount = #state.lidarPointCloud,
       trackedVehicleCount = state.trackCount,
       trackedObjects = trackedObjects,
@@ -1559,9 +1747,81 @@ function M.setRoutePilotEnabled(enabled)
   state.routeRetryCooldown = 0
   state.routePath = {}
   state.routePathEnd = nil
+  state.routeProgressIndex = 1
+  state.routeProgressPercent = 0
+  state.routeProgressTimer = 0
+  state.routeDistanceToPath = nil
+  state.routeCompleted = false
   resetFrame()
 
   log("I", "roadmind", "Experimental road-network route pilot armed; waiting for fresh sensor data")
+  return settingsResult()
+end
+
+
+function M.setRoutePoints(encodedPoints)
+  if type(encodedPoints) ~= "string" or type(jsonDecode) ~= "function" then
+    return {ok = false, error = "Route points must be supplied as JSON"}
+  end
+  local okDecode, decoded = pcall(jsonDecode, encodedPoints)
+  if not okDecode or type(decoded) ~= "table" or #decoded < 1 or #decoded > MAX_ROUTE_INPUT_POINTS then
+    return {ok = false, error = "Route requires 1-12 ordered XYZ points"}
+  end
+
+  local points = {}
+  for i = 1, #decoded do
+    local item = decoded[i]
+    local x, y, z = safeField(item, "x"), safeField(item, "y"), safeField(item, "z")
+    if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number"
+        or x ~= x or y ~= y or z ~= z
+        or math.abs(x) > 100000 or math.abs(y) > 100000 or math.abs(z) > 100000
+        or x == math.huge or x == -math.huge
+        or y == math.huge or y == -math.huge
+        or z == math.huge or z == -math.huge then
+      return {ok = false, error = "Route points must contain finite world X, Y and Z coordinates"}
+    end
+    points[#points + 1] = {x = x, y = y, z = z}
+  end
+
+  if not state.activeVehicle then syncPlayerVehicle() end
+  if not state.activeVehicle then return {ok = false, error = "No active player vehicle"} end
+
+  local pathIds, pathPoints, reason = buildRoadRouteThroughPoints(state.activeVehicle, points)
+  if not pathIds then return {ok = false, error = reason or "Could not build the requested route"} end
+
+  if state.routePilotEnabled then
+    stopNativeRouteAI(state.activeVehicle)
+    state.routePilotStarted = false
+    state.routeSafetyStopped = true
+    state.routePilotError = "Waiting for fresh sensor data"
+  end
+
+  state.routeInputPoints = points
+  state.routePath = pathPoints
+  state.routePathEnd = pathPoints[#pathPoints]
+  state.routeProgressIndex = 1
+  state.routeProgressPercent = 0
+  state.routeProgressTimer = 0
+  state.routeDistanceToPath = nil
+  state.routeCompleted = false
+  log("I", "roadmind", string.format("Loaded %d ordered route point(s), %d NavGraph nodes", #points, #pathIds))
+  return settingsResult()
+end
+
+function M.clearRoutePoints()
+  if state.routePilotEnabled and state.activeVehicle then stopNativeRouteAI(state.activeVehicle) end
+  state.routePilotEnabled = false
+  state.routePilotStarted = false
+  state.routeSafetyStopped = false
+  state.routePilotError = nil
+  state.routeInputPoints = {}
+  state.routePath = {}
+  state.routePathEnd = nil
+  state.routeProgressIndex = 1
+  state.routeProgressPercent = 0
+  state.routeProgressTimer = 0
+  state.routeDistanceToPath = nil
+  state.routeCompleted = false
   return settingsResult()
 end
 
@@ -2583,6 +2843,139 @@ local function snapshotVehicleBounds(vehicle, vehicleId)
   }
 end
 
+
+local function updateRoadUnderstanding()
+  if not state.activeVehicle or type(map) ~= "table"
+      or type(map.findClosestRoad) ~= "function" or type(map.getMap) ~= "function" then
+    state.roadState = {valid = false, quality = "unavailable", timestamp = state.simulationTime, corridor = {}}
+    return
+  end
+
+  local position = asVec3(safeCall(state.activeVehicle, "getPosition"))
+  local heading = normalizedVec3(safeCall(state.activeVehicle, "getDirectionVector"))
+  if not position or not heading then
+    state.roadState = {valid = false, quality = "lost", timestamp = state.simulationTime, corridor = {}}
+    return
+  end
+
+  local flatHeading = vec3(heading.x, heading.y, 0)
+  if flatHeading:length() < 0.0001 then
+    state.roadState = {valid = false, quality = "lost", timestamp = state.simulationTime, corridor = {}}
+    return
+  end
+  flatHeading = flatHeading:normalized()
+
+  local okRoad, nodeAId, nodeBId = pcall(map.findClosestRoad, position)
+  if not okRoad or nodeAId == nil or nodeBId == nil then
+    state.roadState = {valid = false, quality = "lost", timestamp = state.simulationTime, corridor = {}}
+    return
+  end
+
+  local okMap, mapData = pcall(map.getMap)
+  local nodes = okMap and type(mapData) == "table" and mapData.nodes or nil
+  local nodeA = type(nodes) == "table" and nodes[nodeAId] or nil
+  local nodeB = type(nodes) == "table" and nodes[nodeBId] or nil
+  local pointA = nodeA and asVec3(safeField(nodeA, "pos")) or nil
+  local pointB = nodeB and asVec3(safeField(nodeB, "pos")) or nil
+  if not pointA or not pointB then
+    state.roadState = {valid = false, quality = "lost", timestamp = state.simulationTime, corridor = {}}
+    return
+  end
+
+  local segment = pointB - pointA
+  local segmentLengthSquared = segment:dot(segment)
+  local flatSegment = vec3(segment.x, segment.y, 0)
+  if segmentLengthSquared < 0.25 or flatSegment:length() < 0.5 then
+    state.roadState = {valid = false, quality = "lost", timestamp = state.simulationTime, corridor = {}}
+    return
+  end
+
+  local tangent = flatSegment:normalized()
+  local alignment = tangent:dot(flatHeading)
+  if alignment < 0 then
+    nodeAId, nodeBId = nodeBId, nodeAId
+    pointA, pointB = pointB, pointA
+    segment = pointB - pointA
+    tangent = -tangent
+    alignment = -alignment
+  end
+
+  local projection = math.max(0, math.min(1, (position - pointA):dot(segment) / segmentLengthSquared))
+  local nearest = pointA + segment * projection
+  local offset = position - nearest
+  local roadDistance = offset:length()
+  local lateralOffset = offset.x * (-tangent.y) + offset.y * tangent.x
+
+  local quality = "lost"
+  if roadDistance <= 4 and alignment >= 0.70 then
+    quality = "high"
+  elseif roadDistance <= 10 and alignment >= 0.35 then
+    quality = "medium"
+  elseif roadDistance <= 25 then
+    quality = "low"
+  end
+
+  local corridor = {
+    {x = pointA.x, y = pointA.y, z = pointA.z, nodeId = tostring(nodeAId)},
+    {x = pointB.x, y = pointB.y, z = pointB.z, nodeId = tostring(nodeBId)}
+  }
+  local visited = {[tostring(nodeAId)] = true, [tostring(nodeBId)] = true}
+  local currentId = nodeBId
+  local currentPosition = pointB
+  local corridorDirection = tangent
+
+  -- Extend a short centerline by following the most forward connected graph edge.
+  -- This is NavGraph geometry, not a lane-boundary or free-space estimate.
+  for _ = 1, 4 do
+    local currentNode = nodes[currentId]
+    local links = currentNode and safeField(currentNode, "links") or nil
+    if type(links) ~= "table" then break end
+
+    local bestId, bestPosition, bestAlignment = nil, nil, 0.20
+    for candidateId, edge in pairs(links) do
+      if not visited[tostring(candidateId)] then
+        local candidateNode = nodes[candidateId]
+        local candidatePosition = candidateNode and asVec3(safeField(candidateNode, "pos")) or nil
+        local oneWay = type(edge) == "table" and safeField(edge, "oneWay") == true
+        local incomingId = type(edge) == "table" and safeField(edge, "inNode") or nil
+        if candidatePosition and (not oneWay or incomingId == nil or incomingId == currentId) then
+          local step = vec3(candidatePosition.x - currentPosition.x, candidatePosition.y - currentPosition.y, 0)
+          if step:length() > 0.5 then
+            local candidateAlignment = step:normalized():dot(corridorDirection)
+            if candidateAlignment > bestAlignment then
+              bestId, bestPosition, bestAlignment = candidateId, candidatePosition, candidateAlignment
+            end
+          end
+        end
+      end
+    end
+
+    if bestId == nil then break end
+    corridor[#corridor + 1] = {
+      x = bestPosition.x, y = bestPosition.y, z = bestPosition.z, nodeId = tostring(bestId)
+    }
+    visited[tostring(bestId)] = true
+    local step = vec3(bestPosition.x - currentPosition.x, bestPosition.y - currentPosition.y, 0)
+    if step:length() > 0.5 then corridorDirection = step:normalized() end
+    currentId = bestId
+    currentPosition = bestPosition
+  end
+
+  state.roadState = {
+    valid = true,
+    quality = quality,
+    source = "BeamNG NavGraph nearest segment",
+    timestamp = state.simulationTime,
+    segmentStartNode = tostring(nodeAId),
+    segmentEndNode = tostring(nodeBId),
+    distanceToSegment = roadDistance,
+    lateralOffset = lateralOffset,
+    headingAlignment = alignment,
+    roadDirection = {x = tangent.x, y = tangent.y, z = 0},
+    corridor = corridor
+  }
+end
+
 local function refreshVehicleRegistry()
   local registry = {}
   local examined = 0
@@ -3079,6 +3472,29 @@ local function nearestForwardObstacle(data)
   return minimum
 end
 
+
+local function updateRouteProgress(dt)
+  if not state.routePilotStarted or not state.activeVehicle or #state.routePath < 2 then return end
+  state.routeProgressTimer = (state.routeProgressTimer or 0) + math.max(0, tonumber(dt) or 0)
+  if state.routeProgressTimer < 0.25 then return end
+  state.routeProgressTimer = state.routeProgressTimer % 0.25
+
+  local position = asVec3(safeCall(state.activeVehicle, "getPosition"))
+  if not position then return end
+  local firstIndex = math.max(1, state.routeProgressIndex or 1)
+  local lastIndex = math.min(#state.routePath, firstIndex + 12)
+  local bestIndex, bestDistance = firstIndex, math.huge
+  for i = firstIndex, lastIndex do
+    local point = state.routePath[i]
+    local dx, dy = point.x - position.x, point.y - position.y
+    local distance = math.sqrt(dx * dx + dy * dy)
+    if distance < bestDistance then bestDistance = distance; bestIndex = i end
+  end
+  state.routeProgressIndex = math.max(firstIndex, bestIndex)
+  state.routeDistanceToPath = bestDistance
+  state.routeProgressPercent = (state.routeProgressIndex - 1) / (#state.routePath - 1) * 100
+end
+
 local function updateRoutePilotSafety(dt)
   if not state.routePilotEnabled then return end
 
@@ -3095,6 +3511,8 @@ local function updateRoutePilotSafety(dt)
     state.routePathEnd = nil
     return
   end
+
+  updateRouteProgress(dt)
 
   if state.frameAge > MAX_FRAME_AGE or not state.latestData then
     if state.routePilotStarted then
@@ -3118,7 +3536,29 @@ local function updateRoutePilotSafety(dt)
     return
   end
 
-  -- Extend the route before its last NavGraph waypoint is reached.
+  if state.routePilotStarted and #state.routeInputPoints > 0 then
+    local destination = state.routeInputPoints[#state.routeInputPoints]
+    local position = asVec3(safeCall(state.activeVehicle, "getPosition"))
+    if position and destination then
+      local dx, dy, dz = destination.x - position.x, destination.y - position.y, destination.z - position.z
+      if math.sqrt(dx * dx + dy * dy + dz * dz) <= ROUTE_DESTINATION_REACHED_M then
+        stopNativeRouteAI(state.activeVehicle)
+        state.routePilotEnabled = false
+        state.routePilotStarted = false
+        state.routeSafetyStopped = false
+        state.routeCompleted = true
+        state.routePilotError = nil
+        log("I", "roadmind", "Route destination reached")
+        return
+      end
+    end
+  end
+
+  -- A supplied route already contains its destination; only the automatic
+  -- forward-driving mode appends another route segment.
+  if state.routePilotStarted and #state.routeInputPoints > 0 then return end
+
+  -- Extend the automatic route before its last NavGraph waypoint is reached.
   if state.routePilotStarted and state.routePathEnd then
     local position = safeCall(state.activeVehicle, "getPosition")
     if position then
@@ -3258,6 +3698,12 @@ function M.onUpdate(dt)
 
   -- Refresh the player identity before building targets so a vehicle switch
   -- cannot briefly register the new player car as an external target.
+  state.roadUpdateTimer = (state.roadUpdateTimer or 0) + dt
+  if state.roadUpdateTimer >= 0.5 then
+    state.roadUpdateTimer = state.roadUpdateTimer % 0.5
+    updateRoadUnderstanding()
+  end
+
   updateVehicleDetection(dt)
   updateLidarRenderPoints(dt)
 

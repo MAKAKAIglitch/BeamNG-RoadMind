@@ -99,6 +99,34 @@
     <section class="roadmind-section">
       <BngCardHeading>{{ t("routePilot") }}</BngCardHeading>
       <p class="roadmind-note">{{ t("routeDescription") }}</p>
+      <label class="roadmind-route-points-label" for="roadmind-route-points">{{ t("routePoints") }}</label>
+      <textarea
+        id="roadmind-route-points"
+        v-model="routePointsText"
+        class="roadmind-route-points"
+        rows="3"
+        :placeholder="t('routePointsPlaceholder')"
+        :disabled="busy"
+      ></textarea>
+      <div class="roadmind-presets">
+        <BngButton :accent="ACCENTS.main" :disabled="busy" @click="applyRoutePoints">
+          {{ t("applyRoutePoints") }}
+        </BngButton>
+        <BngButton :accent="ACCENTS.outlined" :disabled="busy" @click="clearRoutePoints">
+          {{ t("clearRoutePoints") }}
+        </BngButton>
+      </div>
+      <p class="roadmind-note">
+        {{ t("routeInputCount") }}: {{ status.routeInputPointCount || 0 }}
+        · {{ t("routeProgress") }}: {{ status.routeProgressPercent || 0 }}%
+      </p>
+      <p class="roadmind-note">
+        {{ t("roadLocalization") }}: {{ t("roadQuality_" + (status.roadLocalizationQuality || "unavailable")) }}
+        <span v-if="status.roadDistanceToSegment !== undefined">
+          · {{ status.roadDistanceToSegment.toFixed(1) }} m
+        </span>
+      </p>
+      <p v-if="status.routeCompleted" class="roadmind-status active">{{ t("routeCompleted") }}</p>
       <div class="roadmind-runtime">
         <div>
           <span class="roadmind-status" :class="{ active: status.routePilotEnabled && !status.routeSafetyStopped }">
@@ -349,7 +377,21 @@ const EN = {
   calibrationOverlay: "Vehicle bounds, axes and all sensor mounts",
   routeWaypoints: "Road waypoints in active path",
   routePilot: "Road route pilot (experimental)",
-  routeDescription: "Builds a forward route on the current road NavGraph and sends its waypoints to BeamNG vehicle AI (up to 29 km/h). LiDAR, radar, ultrasonic returns and nearby-vehicle detections guard the path: it stops when blocked or when sensor data is stale, then replans ahead when clear. It does not yet steer around a blocked lane or accept a chosen destination; camera frustums are view-only.",
+  routeDescription: "Uses the current map NavGraph. Enter ordered world coordinates as X,Y,Z (one point per line) to set a destination or a multi-point route. The vehicle AI follows the road graph at up to 29 km/h; sensor data provides a bounded stop guard, not autonomous obstacle avoidance. Camera frustums are view-only.",
+  routePoints: "Ordered route points (world coordinates, metres)",
+  routePointsPlaceholder: "X, Y, Z\nX, Y, Z\nX, Y, Z",
+  applyRoutePoints: "Set route points",
+  clearRoutePoints: "Clear route",
+  routeInputCount: "Input points",
+  routeProgress: "Route progress",
+  roadLocalization: "Road localization",
+  routePointsFormat: "Enter 1–12 lines with three numeric values: X, Y, Z.",
+  routeCompleted: "Destination reached",
+  roadQuality_high: "High",
+  roadQuality_medium: "Medium",
+  roadQuality_low: "Low",
+  roadQuality_lost: "Lost",
+  roadQuality_unavailable: "Unavailable",
   routeSpeed: "Speed limit",
   routeRunning: "Route pilot active",
   routePaused: "Paused by safety guard",
@@ -445,7 +487,21 @@ const RU = {
   calibrationOverlay: "Габариты, оси и все крепления датчиков",
   routeWaypoints: "Точек дорожного маршрута",
   routePilot: "Автопилот по дорожной сети (эксперимент)",
-  routeDescription: "Строит путь вперёд по дорожному графу текущей карты и передаёт точки штатному AI BeamNG (до 29 км/ч). LiDAR, радары, ультразвук и обнаружение машин контролируют путь: при препятствии или устаревших данных машина останавливается, после освобождения пути строится следующий участок. Объезд препятствий и выбор конечной точки пока не реализованы; камеры показывают только поля обзора.",
+  routeDescription: "Использует дорожный граф текущей карты. Введи точки маршрута в мировых координатах X,Y,Z (одна точка на строку), чтобы задать пункт назначения или несколько промежуточных точек. Штатный AI BeamNG едет по дорожному графу со скоростью до 29 км/ч; датчики дают ограниченную защиту остановкой, но пока не умеют самостоятельно объезжать препятствия. Камеры показывают только поля обзора.",
+  routePoints: "Точки маршрута по порядку (мировые координаты, метры)",
+  routePointsPlaceholder: "X, Y, Z\nX, Y, Z\nX, Y, Z",
+  applyRoutePoints: "Задать маршрут",
+  clearRoutePoints: "Очистить маршрут",
+  routeInputCount: "Точек задано",
+  routeProgress: "Прогресс",
+  roadLocalization: "Привязка к дороге",
+  routePointsFormat: "Введи от 1 до 12 строк по три числа: X, Y, Z.",
+  routeCompleted: "Пункт назначения достигнут",
+  roadQuality_high: "Высокая",
+  roadQuality_medium: "Средняя",
+  roadQuality_low: "Низкая",
+  roadQuality_lost: "Потеряна",
+  roadQuality_unavailable: "Недоступна",
   routeSpeed: "Ограничение скорости",
   routeRunning: "Автопилот включён",
   routePaused: "Остановка по датчикам",
@@ -570,6 +626,11 @@ const status = ref({
   estimatedRaycastsPerSecond: 0,
   routePilotEnabled: false,
   routeSafetyStopped: false,
+  routeInputPointCount: 0,
+  routeProgressPercent: 0,
+  routeCompleted: false,
+  roadLocalizationQuality: "unavailable",
+  roadDistanceToSegment: undefined,
   persistentLidarPointCount: 0,
   detectedVehicleCount: 0,
   visibleVehicleCount: 0,
@@ -593,6 +654,7 @@ const status = ref({
 })
 const error = ref("")
 const busy = ref(false)
+const routePointsText = ref("")
 const optionConfig = { value: option => option.value, label: option => option.label }
 const presets = [
   { id: "economy", label: "economy" },
@@ -732,6 +794,48 @@ async function toggleRoutePilot() {
   } catch (e) {
     error.value = t("error")
     console.error("RoadMind: could not toggle route pilot", e)
+  } finally {
+    busy.value = false
+  }
+}
+
+
+async function applyRoutePoints() {
+  const lines = routePointsText.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  if (lines.length < 1 || lines.length > 12) {
+    error.value = t("routePointsFormat")
+    return
+  }
+
+  const points = []
+  for (const line of lines) {
+    const values = line.split(/[,\s;]+/).filter(Boolean).map(Number)
+    if (values.length !== 3 || values.some(value => !Number.isFinite(value))) {
+      error.value = t("routePointsFormat")
+      return
+    }
+    points.push({ x: values[0], y: values[1], z: values[2] })
+  }
+
+  busy.value = true
+  try {
+    acceptResult(await callRoadMind("setRoutePoints", [JSON.stringify(points)]))
+  } catch (e) {
+    error.value = t("error")
+    console.error("RoadMind: could not set route points", e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function clearRoutePoints() {
+  busy.value = true
+  try {
+    acceptResult(await callRoadMind("clearRoutePoints"))
+    routePointsText.value = ""
+  } catch (e) {
+    error.value = t("error")
+    console.error("RoadMind: could not clear route points", e)
   } finally {
     busy.value = false
   }

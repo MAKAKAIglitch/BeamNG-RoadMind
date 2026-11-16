@@ -137,13 +137,16 @@ The current priority is the perception foundation. Route following, parking and 
 
 ## Phase 8 — Road understanding and route input
 
-- [ ] Read the map road graph and identify the road segment under the vehicle.
-- [ ] Build a local road corridor and estimate road/lane direction where supported.
-- [ ] Accept ordered route points and a destination.
-- [ ] Track route progress and select the next target point.
-- [ ] Handle intersections, road splits, route loss and invalid route points.
-- [ ] Add a route preview in the 3D world.
-- [ ] Expose route state and localization quality to the planner.
+- [x] Read the map road graph and identify the road segment under the vehicle.
+- [x] Build a short local road-centerline corridor and estimate segment direction/alignment where NavGraph data supports it. This is not a lane-boundary estimate.
+- [x] Accept 1–12 ordered world-coordinate route points (X/Y/Z) and a destination through the RoadMind API and settings UI.
+- [x] Build a connected NavGraph path through the supplied points, validate node data/links, and bound the total route to 256 nodes.
+- [x] Track progress along the active path and expose the next-progress index and distance to the path.
+- [ ] Handle complex intersections, road splits, route-loss recovery and invalid route points across different maps; input validation and basic route-failure reporting are implemented, but live behavior remains unverified.
+- [x] Preview the generated route in the 3D world while the route pilot is active.
+- [x] Expose road-localization quality, distance to the current segment, lateral offset, heading alignment and corridor size in status data.
+
+Code-level implementation is present. Route choice, one-way behavior, map-to-map compatibility and progress tracking still require in-game validation.
 
 **Acceptance criteria:** RoadMind can follow a defined route at the planning level and identify when the route or localization state is invalid.
 
