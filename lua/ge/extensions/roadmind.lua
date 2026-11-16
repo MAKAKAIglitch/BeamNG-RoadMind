@@ -949,7 +949,13 @@ local function settingsResult()
       vehicleRegistryGeneration = state.vehicleRegistryGeneration,
       vehicleRegistryTruncated = state.vehicleRegistryTruncated,
       vehicleCandidateCount = #state.vehicleCandidates,
-      visibleVehicleCount = state.latestData and #(state.latestData.vehicles or {}) or 0,
+      visibleVehicleCount = state.latestData and (function()
+        local count = 0
+        for i = 1, #(state.latestData.vehicles or {}) do
+          if state.latestData.vehicles[i].visibility == "visible" then count = count + 1 end
+        end
+        return count
+      end)() or 0,
       occlusionRaycastsPerSecond = state.occlusionRaycastsPerSecond,
       routePilotEnabled = state.routePilotEnabled,
       routeSafetyStopped = state.routeSafetyStopped,
@@ -1049,6 +1055,12 @@ function M.setVisualizationEnabled(enabled)
   if wanted then
     local previousId = state.activeVehicleId
     state.visualizationEnabled = true
+    state.vehicleRegistry = {}
+    state.vehicleRegistryTimer = 0
+    state.vehicleDetectionTimer = 0
+    state.vehicleCandidates = {}
+    state.occlusionRaycastsLastCycle = 0
+    state.occlusionRaycastsPerSecond = 0
     resetFrame()
     syncPlayerVehicle()
     if state.activeVehicle and state.activeVehicleId == previousId then
@@ -1062,6 +1074,13 @@ function M.setVisualizationEnabled(enabled)
     if state.routePilotEnabled and state.activeVehicle then
       stopNativeRouteAI(state.activeVehicle)
     end
+    state.vehicleRegistry = {}
+    state.vehicleRegistryTimer = 0
+    state.vehicleRegistryTruncated = false
+    state.vehicleDetectionTimer = 0
+    state.vehicleCandidates = {}
+    state.occlusionRaycastsLastCycle = 0
+    state.occlusionRaycastsPerSecond = 0
     state.routePilotEnabled = false
     state.routePilotStarted = false
     state.routeSafetyStopped = false
@@ -1555,31 +1574,31 @@ local function targetInsideSensorZone(target, zone)
 end
 
 local function checkTargetOcclusion(zone, target)
-  if type(castRay) ~= "function" then return "unavailable" end
+  if type(castRay) ~= "function" then return "unavailable", false end
   local delta = target.center - zone.origin
   local centerDistance = delta:length()
-  if centerDistance < 0.01 then return "unverified" end
+  if centerDistance < 0.01 then return "unverified", false end
 
   local ok, hit = pcall(castRay, zone.origin, target.center, true, true)
-  if not ok or not hit then return "unverified" end
+  if not ok or not hit then return "unverified", true end
 
   local hitDistance = safeField(hit, "dist")
   local hitObject = safeField(hit, "obj")
   local hitObjectId = getVehicleId(hitObject)
   if hitObjectId and tostring(hitObjectId) == tostring(target.id) then
-    return "visible"
+    return "visible", true
   end
 
   local rayDirection = delta / centerDistance
   local expectedTargetSurface = math.max(0,
     centerDistance - projectedBoxRadius(target, rayDirection))
   if type(hitDistance) == "number" and hitDistance < expectedTargetSurface - 0.4 then
-    return "occluded"
+    return "occluded", true
   end
   if type(hitDistance) == "number" and hitDistance <= centerDistance + 0.4 then
-    return "visible"
+    return "visible", true
   end
-  return "unverified"
+  return "unverified", true
 end
 
 local function detectNearbyVehicles(data)
@@ -1647,7 +1666,8 @@ local function detectNearbyVehicles(data)
         sourceKind = "simulator-assisted",
         measurementKind = "vehicle OBB registry",
         visibility = "unverified",
-        registryGeneration = state.vehicleRegistryGeneration
+        registryGeneration = state.vehicleRegistryGeneration,
+        registryIndex = i
       }
     end
   end
@@ -1655,21 +1675,54 @@ local function detectNearbyVehicles(data)
   table.sort(candidates, function(a, b) return a.distance < b.distance end)
 
   local checked = 0
-  local zonesByName = {}
-  for i = 1, #zones do zonesByName[zones[i].name] = zones[i] end
-
-  local checkCount = math.min(#candidates, MAX_OCCLUSION_CHECKS_PER_CYCLE)
-  for i = 1, checkCount do
+  for i = 1, #candidates do
+    if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE then break end
     local candidate = candidates[i]
-    local zone = zonesByName[candidate.bestSensorName]
-    if zone then
-      for registryIndex = 1, #state.vehicleRegistry do
-        local entry = state.vehicleRegistry[registryIndex]
-        if tostring(entry.id) == tostring(candidate.id) then
-          candidate.visibility = checkTargetOcclusion(zone, entry)
-          checked = checked + 1
+    local target = state.vehicleRegistry[candidate.registryIndex]
+    if target then
+      local allOccluded = true
+      local anyUnverified = false
+      candidate.visibility = "unverified"
+
+      -- A target may be visible from a different sensor when its nearest zone is occluded.
+      for sourceIndex = 1, #candidate.sensorSources do
+        if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE then
+          anyUnverified = true
           break
         end
+
+        local source = candidate.sensorSources[sourceIndex]
+        local zone = nil
+        for zoneIndex = 1, #zones do
+          if zones[zoneIndex].name == source.name then
+            zone = zones[zoneIndex]
+            break
+          end
+        end
+
+        if zone then
+          local visibility, didRaycast = checkTargetOcclusion(zone, target)
+          if didRaycast then checked = checked + 1 end
+          if visibility == "visible" then
+            candidate.visibility = "visible"
+            candidate.visibleFrom = zone.name
+            allOccluded = false
+            anyUnverified = false
+            break
+          elseif visibility == "occluded" then
+            allOccluded = allOccluded and true
+          else
+            anyUnverified = true
+            allOccluded = false
+          end
+        else
+          anyUnverified = true
+          allOccluded = false
+        end
+      end
+
+      if candidate.visibility ~= "visible" then
+        candidate.visibility = allOccluded and not anyUnverified and "occluded" or "unverified"
       end
     end
   end
