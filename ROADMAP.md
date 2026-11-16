@@ -154,17 +154,19 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 
 ## Phase 9 — Local trajectory planning
 
-- [ ] Generate a bounded set of candidate trajectories ahead of the vehicle.
-- [ ] Evaluate candidates against the unified world model and road boundaries.
-- [ ] Check the vehicle's full footprint, not only its center point.
-- [ ] Score route progress, obstacle clearance, road-boundary distance, curvature and steering smoothness.
-- [ ] Account for vehicle dimensions and turning constraints.
-- [ ] Select a safe candidate and expose the reason for the decision.
-- [ ] Request a controlled stop when no candidate is safe.
-- [ ] Visualize the selected trajectory and rejected alternatives.
-- [ ] Add limits on candidate count and planning frequency.
+- [x] Generate five bounded lateral-offset candidate trajectories up to 25 m ahead, sampled at 2.5 m intervals.
+- [x] Evaluate candidates against fresh schema-v2 obstacle clusters and confirmed/coasting vehicle targets.
+- [x] Check the calibrated full vehicle footprint along each sampled trajectory, including projected target-vehicle OBB extents.
+- [x] Score route progress, obstacle clearance, NavGraph corridor margin, curvature and steering smoothness.
+- [x] Account for cached vehicle length/width/height and a conservative length-based turning-radius estimate.
+- [x] Select the highest-scoring safe candidate and expose candidate counts, selected offset, clearance and rejection reason.
+- [x] Stop the built-in route AI when data/road geometry is insufficient or no candidate passes the safety checks.
+- [x] Visualize the selected candidate in green and rejected alternatives in red/blue.
+- [x] Limit planning to five candidates, thirteen samples per candidate and a maximum 5 Hz update rate.
 
-**Acceptance criteria:** the planner selects bounded, collision-checked trajectories and produces a safe stop request when the available space is insufficient.
+**Implementation status:** the code-level planner is present. The NavGraph road band uses a conservative 3.5 m half-width heuristic because the current Drive-mode road API does not provide verified lane boundaries. This is not a formal collision guarantee, and the selected path is preview-only until Phase 10 adds trajectory tracking and low-level control.
+
+**Acceptance criteria:** the planner selects bounded, collision-checked trajectories and produces a safe stop request when the available space is insufficient. Live traffic, curb/road-edge behavior and tight intersections still require repeatable in-game validation.
 
 ## Phase 10 — Autonomous control and parking
 
