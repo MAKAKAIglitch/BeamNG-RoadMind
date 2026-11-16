@@ -2483,7 +2483,6 @@ buildWorldModel = function()
         simulatorVelocity = finiteWorldVector(track.simulatorVelocity),
         velocitySource = track.velocitySource or "not-yet-available",
         relativeSpeedSource = track.relativeSpeedSource,
-        simulatorVelocity = finiteWorldVector(track.simulatorVelocity),
         predictionHorizon = track.predictionHorizon,
         predictedPositionKind = track.estimatedVelocity and "short-horizon-linear-extrapolation" or nil,
         sourceSensors = copySensorSources(track.sourceSensors),
