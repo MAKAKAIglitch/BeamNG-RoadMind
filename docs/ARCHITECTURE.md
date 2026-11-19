@@ -188,3 +188,13 @@ Next implementation phases:
 2. Verify manual takeover, route loss, stale sensors, resets, pause/resume and fault recovery.
 3. Add robust intersection negotiation, lane changes and parking only after baseline control is repeatable.
 4. Add bounded local recording and deterministic replay before optional offline learning.
+
+## Surround-view perception, driver handover and interface split
+
+Camera detection zones are published with the same pose-only detection-zone payload as the other sensor coverage volumes. The GE coordinator intersects the shared vehicle registry/OBB candidates with the active camera frustums and merges overlapping camera/sensor matches. A bounded, rotating and cached occlusion pass confirms line of sight; all cameras share the same raycast budget. Camera-visible targets retain camera source provenance in the track and World Model. This regular-Drive backend is simulator-assisted geometric visibility, not RGB image recognition, and it remains independent of LiDAR acquisition.
+
+The pause-menu entry **RoadMind** now owns sensor acquisition, calibration, 3D sensor overlays and performance. **RoadMind ADAS** owns FCW/AEB/ACC/BSM/parking/LDW settings, ADAS status, route points, route-pilot start/stop and manual-takeover preference. **RoadMind Perception** reads the bounded `getPerceptionSnapshot()` API, which copies the current World Model targets/obstacles plus road and route snapshots. Its Vue view polls at 2 Hz and performs no vehicle-registry scan, raycast or physics query.
+
+The perception view has a top-down mode and a rear-follow-style 2D projection mode. It is not a rendered game camera and does not imply image recognition. Its road line is the NavGraph road centreline, not painted lane markings. Vehicle markers are OBB-derived shapes; obstacle clusters are shown only where the World Model has scene-raycast data.
+
+The route controller's manual-takeover option is on by default. Vehicle Lua compares raw steering/throttle/brake input values with RoadMind's last actuator outputs; on a detected manual intervention it releases its own outputs, stops the route controller and informs the GE coordinator. Camera/view controls are not sampled as driving inputs. Thresholds and handover timing still require testing with keyboard, wheel and gamepad devices.
