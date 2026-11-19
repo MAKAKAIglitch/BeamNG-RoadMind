@@ -5212,7 +5212,18 @@ state._roadmindHelpers.nearestForwardObstacle = function(data)
   local originFallback = asVec3(safeCall(state.activeVehicle, "getPosition"))
   if not forward or not right or not originFallback then return math.huge end
 
+  local playerVelocity = asVec3(safeCall(state.activeVehicle, "getVelocity"))
+  local ownForwardSpeed = playerVelocity and math.max(0, playerVelocity:dot(forward)) or 0
   local minimum = math.huge
+  local nearestHazard = nil
+
+  local function recordHazard(distance, details)
+    if type(distance) == "number" and distance > 0 and distance < minimum then
+      minimum = distance
+      nearestHazard = details
+    end
+  end
+
   local function inspect(point, originData)
     local target = state._roadmindHelpers.vectorFromTable(point)
     local origin = state._roadmindHelpers.vectorFromTable(originData) or originFallback
@@ -5220,8 +5231,12 @@ state._roadmindHelpers.nearestForwardObstacle = function(data)
     local delta = target - origin
     local longitudinal = delta:dot(forward)
     local lateral = math.abs(delta:dot(right))
-    if longitudinal > 0.5 and lateral <= 2.4 and delta:dot(up) > -0.85 then
-      minimum = math.min(minimum, longitudinal)
+    if longitudinal > 0.5 and lateral <= 2.2 and delta:dot(up) > -0.85 then
+      recordHazard(longitudinal, {
+        kind = "scene-raycast",
+        closingSpeed = ownForwardSpeed,
+        source = "LiDAR/radar/ultrasonic"
+      })
     end
   end
 
@@ -5286,9 +5301,20 @@ state._roadmindHelpers.nearestForwardObstacle = function(data)
     local farDistance = longitudinal + forwardRadius
     local lateralGap = math.max(0, lateral - lateralRadius)
 
-    if farDistance > 0.5 and lateralGap <= 2.4
+    if farDistance > 0.5 and lateralGap <= 1.6
         and vertical + verticalRadius > -0.85 then
-      minimum = math.min(minimum, math.max(0.5, nearDistance))
+      local targetVelocity = state._roadmindHelpers.vectorFromTable(target.simulatorVelocity)
+      local closingSpeed = ownForwardSpeed
+      if playerVelocity and targetVelocity then
+        closingSpeed = (playerVelocity - targetVelocity):dot(forward)
+      end
+      recordHazard(math.max(0.5, nearDistance), {
+        kind = "vehicle",
+        closingSpeed = math.max(0, closingSpeed),
+        targetVelocity = targetVelocity and vectorToPlainTable(targetVelocity) or nil,
+        sourceKind = target.sourceKind,
+        trackId = target.trackId or target.sourceVehicleId
+      })
     end
   end
 
@@ -5299,14 +5325,15 @@ state._roadmindHelpers.nearestForwardObstacle = function(data)
       local visibilityFresh = visibilityTimestamp ~= nil
         and visibilityTimestamp <= now + 0.05
         and (now - visibilityTimestamp) <= OCCLUSION_CACHE_MAX_AGE
-      if target.visibility == "visible" and target.sourceKind == "simulator-assisted"
-          and visibilityFresh then
+      local simulatorVehicleSource = target.sourceKind == "simulator-assisted"
+        or target.sourceKind == "simulator-assisted-camera-visibility"
+      if target.visibility == "visible" and simulatorVehicleSource and visibilityFresh then
         inspectVehicleOBB(target)
       end
     end
   end
 
-  return minimum
+  return minimum, nearestHazard
 end
 
 
@@ -5427,28 +5454,43 @@ state._roadmindHelpers.updateADAS = function(dt)
       and timestamp <= now + 0.05 and now - timestamp <= MAX_FRAME_AGE
   end
 
-  local forwardSensorAvailable = freshSensor("lidar", settings.lidarEnabled)
-    or freshSensor("radar", settings.radarEnabled)
-    or freshSensor("ultrasonic", settings.ultrasonicEnabled)
   local ultrasonicAvailable = freshSensor("ultrasonic", settings.ultrasonicEnabled)
   local registryAvailable = state.vehicleRegistrySnapshotValid
     and now - (state.vehicleRegistryTimestamp or -math.huge) <= WORLD_MODEL_REGISTRY_MAX_AGE
+  local cameraAvailable = settings.cameraDetectionEnabled == true
+    and registryAvailable and freshSensor("detectionZones", true)
+  local forwardSensorAvailable = freshSensor("lidar", settings.lidarEnabled)
+    or freshSensor("radar", settings.radarEnabled)
+    or freshSensor("ultrasonic", settings.ultrasonicEnabled)
+    or cameraAvailable
   local roadAvailable = type(state.roadState) == "table" and state.roadState.valid == true
     and (state.roadState.quality == "high" or state.roadState.quality == "medium")
     and now - (tonumber(state.roadState.timestamp) or -math.huge) <= PLANNER_MAX_DATA_AGE
 
   local needsForward = settings.adasFCWEnabled == true or settings.adasAEBEnabled == true
-  local nearest = needsForward and forwardSensorAvailable
-    and state._roadmindHelpers.nearestForwardObstacle(data) or math.huge
+  local nearest, nearestHazard = math.huge, nil
+  if needsForward and forwardSensorAvailable then
+    nearest, nearestHazard = state._roadmindHelpers.nearestForwardObstacle(data)
+  end
+  local closingSpeed = nearestHazard and tonumber(nearestHazard.closingSpeed) or speed
+  closingSpeed = math.max(0, closingSpeed or 0)
+  local timeToCollision = closingSpeed > 0.5 and nearest < math.huge
+    and nearest / closingSpeed or math.huge
   local fcw = settings.adasFCWEnabled == true and forwardSensorAvailable
     and nearest <= math.max(14, speed * 2.5 + 6)
   local aebThreshold = 3.5 + speed * 0.65 + speed * speed / 13.0
+  -- Distance catches stationary objects; TTC also catches a faster closing
+  -- rate against a moving lead vehicle before the geometric gap gets small.
   local aeb = settings.adasAEBEnabled == true and forwardSensorAvailable
-    and speed >= 1.5 and nearest <= aebThreshold
+    and speed >= 1.5 and nearest < math.huge
+    and (nearest <= aebThreshold or timeToCollision <= 1.8)
   local brakeLevel = 0
   if aeb then
-    brakeLevel = math.max(0.35, math.min(1.0,
-      0.35 + (aebThreshold - nearest) / math.max(1, aebThreshold) * 0.65))
+    local distanceUrgency = (aebThreshold - nearest) / math.max(1, aebThreshold)
+    local timeUrgency = timeToCollision < math.huge
+      and (1.8 - timeToCollision) / 1.8 or 0
+    local urgency = math.max(distanceUrgency, timeUrgency)
+    brakeLevel = math.max(0.35, math.min(1.0, 0.35 + urgency * 0.65))
   end
 
   local leftBlindSpot, rightBlindSpot = false, false
@@ -5530,6 +5572,10 @@ state._roadmindHelpers.updateADAS = function(dt)
     aebDistance = aeb and round2(nearest) or nil,
     aebThreshold = settings.adasAEBEnabled == true and forwardSensorAvailable
       and aebThreshold or ROUTE_STOP_DISTANCE,
+    aebClosingSpeed = nearestHazard and round2(closingSpeed) or nil,
+    aebTimeToCollision = timeToCollision < math.huge and round2(timeToCollision) or nil,
+    aebHazardKind = nearestHazard and nearestHazard.kind or nil,
+    aebHazardSource = nearestHazard and nearestHazard.sourceKind or nil,
     leftBlindSpot = leftBlindSpot,
     rightBlindSpot = rightBlindSpot,
     parkingDistance = parkingDistance and round2(parkingDistance) or nil,
