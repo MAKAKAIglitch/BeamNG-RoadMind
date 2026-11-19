@@ -1,147 +1,179 @@
-# RoadMind world model
+# RoadMind World Model
 
-The Game Engine Lua extension exposes a versioned, read-only snapshot for route planning and other consumers:
+## 1. Purpose
 
-```lua
-local snapshot = extensions.roadmind.getWorldModel()
-```
+The World Model is RoadMind's canonical, time-consistent representation of the nearby environment. It combines sensor observations, supported road metadata and ego-motion into a compact local model consumed by RoadMind Map and, later, route/lane planning.
 
-The returned value is a deep copy. Callers may inspect it without being able to mutate RoadMind's internal sensor, tracking or fusion state.
+It is not a copy of the complete BeamNG scene. Every element must have an identifiable evidence source. Simulator-assisted data, map metadata, sensor measurements, fused estimates and predictions must remain distinguishable.
 
-## Coordinate contract
+## 2. Coordinate and time model
 
-| Field | Contract |
+Use a common BeamNG world/map coordinate frame in metres for the current Drive backend. Sensor measurements begin in sensor-local coordinates and pass through the calibrated vehicle-local transform into the common frame.
+
+Every observation must retain the simulation timestamp at which it was measured. When accumulating scans, use the ego pose corresponding to the measurement timestamp. Do not transform an old scan with the current render pose.
+
+Keep these concepts separate:
+- **measurement time** — when the sensor/source produced the data;
+- **processing time** — when RoadMind consumed it;
+- **display time** — when the map rendered it;
+- **prediction horizon** — how far a derived state is projected beyond the last observation.
+
+Prediction and display interpolation never create a new measurement timestamp.
+
+## 3. Common observation envelope
+
+Each observation should contain, as applicable:
+
+| Field | Purpose |
 |---|---|
-| `schemaVersion` | Current schema: `2` |
-| `coordinateFrame` | `beamng-world` |
-| `coordinateUnits` | `meters` |
-| `timestamp` | GE simulation time in seconds |
-| `generation` | Increases whenever RoadMind rebuilds the snapshot |
+| observation_id | Unique ID within the current session |
+| source_id / source_type | Concrete sensor/backend/source |
+| provenance | raycast proxy, native sensor, simulator state, map metadata, fused, derived or predicted |
+| timestamp | Source measurement timestamp |
+| frame_id | Sensor-local, vehicle-local or world/map frame |
+| pose_at_measurement | Ego/sensor pose used for transform |
+| geometry | Point, ray, surface sample, OBB, polygon or other supported primitive |
+| semantic_class | Known class only; otherwise unknown |
+| confidence | Heuristic unless calibrated and validated |
+| freshness / age | Time since the latest valid source update |
+| status | observed, coasting, predicted, stale, occluded, unavailable or invalid |
+| contributors | IDs of observations contributing to a fused result |
 
-Every world position is expressed in BeamNG world coordinates. Observation timestamps and data ages use the same GE simulation clock; they are not wall-clock timestamps.
+The exact field names may change with schema version. Any schema change must be explicit and versioned.
 
-## Top-level shape
+## 4. World Model layers
 
-```text
-WorldModel {
-  schemaVersion, generation, timestamp,
-  coordinateFrame, coordinateUnits,
-  targets[], obstacles[],
-  observations {
-    lidar[], radar[], ultrasonic[], vehicleRegistry[]
-  },
-  observationCount,
-  sourceStatus {},
-  quality {},
-  summary {}
-}
-```
+### 4.1 Ego vehicle
 
-The snapshot has four observation streams. All use a common envelope with an observation ID, position, coordinate frame, timestamp, data age, source sensor, source kind, measurement kind, confidence, and confidence-model label. Orientation, dimensions, sensor origin, ray direction, range, target association and velocity fields are present when they are available.
+Store the player's pose, orientation, dimensions, speed/velocity and available motion signals. The ego footprint is derived from the active vehicle geometry profile and is used to establish transforms and later evaluate the swept path of the full vehicle body.
 
-## Observation sources
+### 4.2 Raw observation store
 
-### LiDAR, radar and ultrasonic
+Keep bounded source-specific measurements for LiDAR, RADAR, ultrasonic, camera/image detections, simulator-assisted vehicle candidates and map metadata. Raw records are immutable after publication; filtering/fusion produces derived records rather than rewriting source data.
 
-These arrays contain individual scene-raycast hit measurements. Each record can include:
+### 4.3 Static geometry memory
 
-- `position`: measured scene hit point.
-- `sensorOrigin` and `rayDirection`: the ray's world-space origin and direction.
-- `range`, `rayIndex`: returned distance and original ray/beam index.
-- `timestamp`, `dataAge`: scan time and age at model-build time.
-- `sourceSensor`, `sensorName`: sensor family and individual mount.
-- `hitObjectId`: simulator object ID when the raycast exposes one.
-- `targetTrackId`: RoadMind track association when the hit belongs to a tracked vehicle.
-- `orientation`, `dimensions`: attached from a tracked vehicle OBB when available.
-- `sourceKind = "scene-raycast-measurement"` and `measurementKind = "geometric-scene-raycast-proxy"`.
+Accumulate stable geometric evidence in world/map coordinates:
+- road and pavement samples;
+- supported road edges and boundaries;
+- curbs, barriers, walls and other static surfaces;
+- unknown obstacle/surface clusters where semantic class is not established.
 
-The raw measurements remain separate by sensor. A radar or ultrasonic raycast proxy is not an RF radar or an acoustic measurement.
+Repeated scans can refine or reject earlier geometry. Use spatial indexing, bounded range and memory caps. Do not permanently insert moving vehicles into static geometry. A geometric hit is not automatically a semantic object such as a tree, building or sign.
 
-### `vehicleRegistry`
+The initial mapping target is session-local memory. Persistent cross-session maps are deferred.
 
-This stream contains only vehicle candidates whose visibility has been confirmed by the bounded occlusion checks. Records share the common observation envelope and can include the OBB center, orientation, dimensions, source sensor zones, simulator velocity and RoadMind track association.
+### 4.4 Road and lane model
 
-These records are explicitly labelled:
+Keep road topology and lane structure separate from raw surface points.
 
-- `sourceKind = "simulator-assisted"`
-- `measurementKind = "vehicle-obb-center-and-extents"`
-- `sourceSensor = "vehicleRegistry"`
+Potential inputs, each with explicit provenance:
+- NavGraph nodes and links for road connectivity and centreline context;
+- DecalRoad nodes, widths and road-surface attributes where available;
+- verified map/level metadata such as lane count, direction, road width, restrictions and junction relationships;
+- sensor-derived boundaries/markings when a real suitable sensor source provides evidence;
+- AI traffic trajectories as supplementary lane/path priors or validation references.
 
-The position and geometry come from BeamNG's vehicle OBB/object data. This is not a physical LiDAR, radar or camera detection. Unverified and occluded candidates are counted in quality metrics instead of being published as confirmed vehicle observations.
+Important distinctions:
+- NavGraph centreline is not a lane polygon.
+- DecalRoad is projected road/decal structure and may not expose every painted marking as independent geometry.
+- A centreline-derived corridor is an estimate, not an observed lane boundary.
+- AI traffic movement is a prior/reference, not a substitute for RoadMind perception or its future planner.
+- If lane direction, boundaries, width or connectivity are not supported, publish unknown/estimated rather than fabricate them.
 
-## Targets
+The target road representation is a lane-level graph: directed lanes/segments, widths, boundaries where known, allowed transitions, junction connections and confidence/provenance. It should support lane localization and future lane selection rather than only road-centre following.
 
-`targets[]` contains one entry per active RoadMind vehicle track, keyed by a session-scoped `trackId` such as `RM-000001`. Multiple sensor-zone detections and ray hits for the same tracked vehicle refer to that one target.
+### 4.5 Dynamic objects and tracking
 
-Important fields:
+Vehicles and other moving objects are held in a separate track store. A track may contain:
+- stable RoadMind track ID;
+- latest observed position and orientation;
+- length, width, height and oriented footprint;
+- estimated velocity and direction;
+- simulator-provided velocity as a separate field where available;
+- last observed timestamp, age and missed-update count;
+- contributing sensors/sources and provenance;
+- confidence and observed/coasting/predicted/stale status.
 
-| Field | Meaning |
-|---|---|
-| `position` | Latest observed OBB-center position; not predicted |
-| `predictedPosition` | Separate short-horizon display/planning estimate |
-| `predictionHorizon` | Maximum extrapolation horizon used by the tracker (0.5 s) |
-| `predictedPositionKind` | `short-horizon-linear-extrapolation` when available |
-| `timestamp`, `dataAge` | Time of last accepted observation and its current age |
-| `status` | `confirmed`, `coasting` or `stale` |
-| `confidence` | Tracker confidence heuristic, not a calibrated probability |
-| `simulatorVelocity` | Velocity reported by BeamNG, kept separate |
-| `estimatedVelocity` | Finite-difference estimate from timestamped positions |
-| `estimatedRelativeSpeed` | Track velocity relative to the player vehicle |
-| `velocitySource`, `relativeSpeedSource` | Explicit provenance of derived velocity fields |
-| `sourceKind`, `measurementKind`, `positionSource` | Simulator-assisted provenance |
+Associate new observations with existing tracks using source IDs, geometry and motion consistency. Camera handoffs must not create duplicate tracks. Coasting is allowed only for a bounded interval. Once a track expires, remove its active footprint and any render attachment so it cannot leave a ghost behind.
 
-The latest observed `position` is never overwritten by the predicted display position. Consumers that require measured state should use `position`, `timestamp` and `dataAge`, and decide whether to accept the separate prediction.
+Estimated target velocity from timestamped positions is not physical radar Doppler. Keep prediction separate from latest measured state.
 
-## Obstacles
+### 4.6 Semantic objects and infrastructure
 
-`obstacles[]` contains non-vehicle scene-raycast hits grouped into 0.75 m world-space cells. Each cluster has a spatial `obstacleId`, averaged position, first/last observation timestamps, data age, confidence heuristic and the source sensors/observation IDs that contributed to it.
+Signs, signals, markings and infrastructure need a suitable semantic source. A LiDAR surface hit may create an unknown geometric surface, but cannot independently prove the class of a sign, tree, building or traffic light.
 
-These are geometric point clusters, not semantic object identities. Two clusters in adjacent cells may represent different parts of the same physical object; no semantic classification or persistent non-vehicle object tracker is claimed. Conflicting hits within a cluster are retained and counted rather than silently treated as exact agreement.
+For traffic signals, use a verified live runtime signal state when available, associate the signal with its actual approach/direction/lane group, and retain timestamp and provenance. A signal's phase must not be guessed from its presence or from an assumed cycle. Camera colour recognition requires a real image frame. Unsupported or ambiguous state is unknown.
 
-Vehicle hits that associate with the vehicle registry/tracker are kept as vehicle observations/targets and are not duplicated as non-vehicle obstacle clusters.
+### 4.7 Points of interest
 
-## Source freshness
+POIs are loaded from verified level metadata when present, not created by GPS. Candidate sources include:
+- level .sites.json data: Locations, Zones and Parking Spots;
+- BeamNGPointOfInterest records;
+- facilities metadata such as fuel stations, charging stations and other supported facilities;
+- parking areas/spaces exposed by level tooling.
 
-`sourceStatus` contains entries for `lidar`, `radar`, `ultrasonic` and `vehicleRegistry`. Each entry reports whether the source is enabled, its latest timestamp, data age and freshness. A stale source is not silently treated as a current measurement.
+Cache static POIs and build a spatial index when a level loads. The current ego position is used to find nearby points and connect a selected POI to the road/lane graph. Preserve POI name, type, bounds/position, orientation, metadata source and confidence. If metadata is missing, report that no POI data is available.
 
-- Scene-raycast source data is considered fresh for up to 1.5 s.
-- The vehicle OBB registry snapshot is considered fresh for up to 1.0 s.
-- A registry may be marked `truncated` when its configured vehicle limit was reached.
+For un-georeferenced levels, all positioning remains in local BeamNG coordinates. Do not manufacture latitude/longitude.
 
-The scan groups run at different rates. The world model retains each source's own timestamp and data age; it does not pretend that all sensors sampled at the same instant.
+### 4.8 Route and trajectory layers
 
-## Quality counters
+Keep route topology, selected lane, candidate trajectories and active trajectory distinct. The selected route/trajectory is rendered in blue on RoadMind Map.
 
-`quality` reports:
+A future planner must compare multiple feasible lane-aware candidates and check the full ego vehicle footprint along the swept path. It must also account for the dimensions and predicted motion of other vehicles, road edges, lane connectivity and relevant traffic controls. A centreline-only path check is insufficient.
 
-- `invalidObservationCount`: malformed coordinates, invalid dimensions/orientation, or timestamps outside the accepted simulation-time range.
-- `staleObservationCount` and `staleSourceCount`: old measurements and enabled sources without fresh data.
-- `truncatedSourceCount`: a vehicle registry snapshot reached its configured cap.
-- `lowConfidenceObservationCount`: records below the current confidence heuristic threshold.
-- `conflictingObservationCount`: spatially grouped hit points that disagree with the current cluster centroid.
-- `droppedObservationCount`: records omitted after the bounded observation budget was reached.
-- `staleTargetCount`: tracked targets whose observation age/status is stale.
-- `unassociatedVehicleHitCount`: a scene ray hit a known registered vehicle but did not associate with an active RoadMind track.
-- `unverifiedVehicleCandidateCount` and `occludedVehicleCandidateCount`: candidate OBBs that are not confirmed-visible.
+Full steering/throttle/brake actuation, autonomous lane changes and overtaking are deferred. Existing experimental route/controller code is not proof that this planning/control target is complete.
 
-Confidence values are heuristics, not calibrated probabilities. A planner should consider source provenance, freshness, confidence and quality counters together.
+## 5. Fusion rules
 
-## Bounds and consumer rules
+1. Transform source measurements using the timestamp-aligned sensor and ego poses.
+2. Validate range, field of view, calibration, occlusion and source freshness.
+3. Preserve raw observations and their provenance.
+4. Fuse only compatible measurements of the same physical feature or target.
+5. Keep source-specific confidence and contribution IDs.
+6. Separate static geometry from dynamic tracks.
+7. Keep observed, coasting and predicted state separate.
+8. Reject outliers and discontinuous associations rather than forcing a match.
+9. Expire stale data under explicit per-layer policies.
+10. Never allow render smoothing or UI state to mutate the source store or fused model.
 
-The model is bounded to 512 observations and 128 tracked targets. Per-sensor observations are preserved while the bounded target/obstacle aggregates provide convenient planning inputs.
+A missing source is not negative evidence unless the sensor was active, healthy and had valid coverage of the region.
 
-- Use `targets` for tracked vehicles and `obstacles` for non-vehicle scene hits.
-- Use the `observations` arrays when source-specific measurements are needed.
-- Reject stale or invalid data according to the consumer's safety policy.
-- Treat `simulator-assisted`, `scene-raycast-measurement`, `estimated` and `predicted` values according to their explicit provenance.
-- Never use render-only interpolated LiDAR point positions as sensor measurements. They are maintained in a separate visualization layer.
+## 6. Visibility and memory
 
-## Local planner consumer contract
+Visibility and memory are different concepts.
 
-Phase 9 consumes timestamped targets, obstacle clusters, per-source freshness and a cloned route-state snapshot. It rejects planning when all enabled obstacle sensor sources are stale, road localization is not high/medium quality, the active vehicle has no valid cached OBB calibration, or no connected route corridor is available.
+- **Visible now:** a fresh measurement confirms the object is currently within valid sensor coverage and not occluded.
+- **Coasting:** a recently observed track is temporarily not refreshed but is retained for a short bounded period.
+- **Predicted:** a derived future position or state, never a new measurement.
+- **Stale:** evidence is too old for a current claim.
+- **Unknown / unavailable:** the source or information needed to decide is absent.
 
-Vehicle targets are checked by projecting their OBB length/width onto each candidate tangent/lateral axis. Non-vehicle obstacles are point clusters and receive a conservative geometric margin; the planner does not infer semantic object shape from them. Only recent obstacle clusters and confirmed/coasting targets are considered. Render-smoothed LiDAR points are never used.
+Static geometry can persist in the current session after it leaves the field of view, but should carry observation age and confidence. Dynamic targets must not persist as static objects. The first version is a bounded session map; long-term storage and cross-session relocalization are future work.
 
-The current Drive-mode road context is a NavGraph centerline, not a lane-boundary polygon. Phase 9 therefore applies a conservative 3.5 m half-width corridor heuristic and a vehicle-length-derived minimum turn radius. Both are explicit approximations and require in-game validation. The planner can stop the built-in route AI if no candidate is safe, but it does not control steering/throttle/brakes; that is Phase 10.
+## 7. Runtime API and snapshots
 
-The regular BeamNG.drive build has no RGB camera stream. Camera frustums therefore do not create camera observations in this schema.
+Expose a versioned, read-only snapshot for RoadMind Map and future consumers. The UI should receive only the local region and relevant route/POI/signal/track information needed for the current view.
+
+Snapshots should:
+- be compact and bounded;
+- include schema version, sequence and simulation timestamp;
+- publish incremental changes where practical;
+- avoid sending the full raw point history or complete level graph every UI update;
+- be copied or immutable from the consumer's perspective.
+
+The current implementation contains an experimental schema-v2 World Model prototype. Treat it as a starting point to reconcile with this target, not as a reason to preserve incomplete semantics or silently break existing consumers.
+
+## 8. Acceptance criteria
+
+- [ ] Every rendered object has a known evidence source and freshness state.
+- [ ] Sensor-local measurements are transformed with timestamp-consistent ego poses.
+- [ ] Static geometry and dynamic tracks cannot contaminate one another.
+- [ ] Repeated observations refine geometry without creating unbounded duplicates.
+- [ ] Occluded or out-of-view targets are not labelled currently visible.
+- [ ] Coasting/predicted objects are visually distinct from fresh detections.
+- [ ] Traffic signals are associated with the correct approach/lane and remain unknown when unsupported.
+- [ ] Lane structure distinguishes map-derived, sensor-observed, inferred and unknown data.
+- [ ] POIs are sourced from level/facility metadata and cached rather than guessed from position.
+- [ ] UI snapshots are versioned, bounded and read-only.
