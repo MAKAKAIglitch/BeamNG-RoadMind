@@ -35,7 +35,7 @@
 - Add independent radar and ultrasonic density, frequency and enable controls.
 - Add independent 3D overlay visibility controls and green/yellow OBB outlines for confirmed/unverified vehicle candidates.
 - Add a session-only accumulated LiDAR map with a configurable 500–10,000 point cap, including vehicle hits and pause-safe rendering.
-- Add optional critically damped inertia for LiDAR endpoints and detected vehicle outlines.
+- Add optional critically damped inertia for eligible world-space LiDAR endpoints; vehicle-attached geometry and tracked traffic surfaces remain body-locked.
 - Remove the manual LiDAR range and horizontal-point sliders; these remain controlled by performance profiles.
 - Add speed-adaptive traffic OBB updates (3.3–10 Hz) independently from scene-raycast work, with a bounded rotating occlusion-check budget.
 - Add a round-robin Vehicle Lua scheduler that handles at most one due LiDAR/radar/ultrasonic/pose/detection-zone job per graphics frame.
