@@ -94,7 +94,7 @@ local VEHICLE_DETECTION_INTERVAL = 0.15
 local VEHICLE_SLOW_UPDATE_INTERVAL = 0.30
 local VEHICLE_FAST_UPDATE_INTERVAL = 0.10
 local MAX_REGISTRY_VEHICLES = 256
-local MAX_OCCLUSION_CHECKS_PER_CYCLE = 2
+local MAX_OCCLUSION_CHECKS_PER_CYCLE = 8
 local OCCLUSION_CACHE_MAX_AGE = 0.75
 local TRACK_UPDATE_INTERVAL = 0.25
 local TRACK_OBSERVATION_MAX_AGE = 0.75
@@ -4897,16 +4897,31 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
   for i = 1, #state.vehicleRegistry do
     local target = state.vehicleRegistry[i]
     local sources = {}
+    local cameraSources = {}
     local nearestDistance = math.huge
     local nearestZone = nil
+    local nearestCameraDistance = math.huge
+    local nearestCameraZone = nil
     local nearDistance = math.huge
     local farDistance = 0
+    local cameraNearDistance = math.huge
+    local cameraFarDistance = 0
 
     for zoneIndex = 1, #zones do
       local zone = zones[zoneIndex]
       local inside, distance, near, far = state._roadmindHelpers.targetInsideSensorZone(target, zone)
       if inside then
-        sources[#sources + 1] = {sensor = zone.sensor, name = zone.name}
+        local source = {sensor = zone.sensor, name = zone.name}
+        sources[#sources + 1] = source
+        if zone.sensor == "camera" then
+          cameraSources[#cameraSources + 1] = source
+          if distance < nearestCameraDistance then
+            nearestCameraDistance = distance
+            nearestCameraZone = zone
+          end
+          cameraNearDistance = math.min(cameraNearDistance, near)
+          cameraFarDistance = math.max(cameraFarDistance, far)
+        end
         if distance < nearestDistance then
           nearestDistance = distance
           nearestZone = zone
@@ -4916,14 +4931,19 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       end
     end
 
+    -- When a target is inside any camera frustum, create a camera-only
+    -- observation. Radar/LiDAR/ultrasonic remain independent obstacle sensors
+    -- and must not steal the vehicle-detection source attribution.
+    local hasCameraSource = #cameraSources > 0
+    if hasCameraSource then
+      sources = cameraSources
+      nearestDistance = nearestCameraDistance
+      nearestZone = nearestCameraZone
+      nearDistance = cameraNearDistance
+      farDistance = cameraFarDistance
+    end
+
     if #sources > 0 and nearestZone then
-      local hasCameraSource = false
-      for sourceIndex = 1, #sources do
-        if sources[sourceIndex].sensor == "camera" then
-          hasCameraSource = true
-          break
-        end
-      end
       local relativeSpeed = nil
       if playerVelocity then
         local relativeVelocity = target.velocity - playerVelocity
