@@ -1982,7 +1982,7 @@ function M.setSetting(key, value)
   end
   state.settings = normalized
   if key == "adasEnabled" or key == "adasAEBEnabled" then
-    if normalized.adasEnabled and normalized.adasAEBEnabled then
+    if normalized.adasEnabled then
       state.adas = {
         available = state.visualizationEnabled and state.frameAge <= MAX_FRAME_AGE,
         fcw = false, aeb = false, leftBlindSpot = false, rightBlindSpot = false,
@@ -3120,10 +3120,7 @@ local function updateVisualizationRenderState(dt)
     local currentPose = captureRenderVehiclePose()
     reanchorAttachedVisuals(renderFrame, state.latestData.vehiclePose, currentPose)
     if type(renderFrame.localization) == "table" then
-      local localizationFrame = {localization = renderFrame.localization}
-      reanchorAttachedVisuals(localizationFrame,
-        state.latestData.localizationVehiclePose or state.latestData.vehiclePose, currentPose)
-      local localization = localizationFrame.localization
+      local localization = renderFrame.localization
       if localization then
         if localization.gnss then
           if localization.gnss.position then
