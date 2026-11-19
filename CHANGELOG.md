@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — native Lua autonomous controller
+
+- Add a native Vehicle Lua trajectory controller with Pure Pursuit-style steering and bounded PI speed control.
+- Route the selected safe planner trajectory directly to the vehicle controller; route following no longer delegates to BeamNG's built-in Vehicle AI.
+- Add direct steering, throttle and brake actuation through Vehicle Lua input events.
+- Add a 20 Hz controller cadence, bounded path input (32 points maximum), and planner-driven path refresh capped at 5 Hz.
+- Add latched full-brake handling for stale path feeds, missing vehicle state and lost route tracking.
+- Keep the controller's work independent from scene-raycast acquisition; no additional sensor queries are introduced.
+- Document the 8 m/s speed cap, nominal wheelbase assumption and outstanding in-game validation requirements.
+
+
 ## Unreleased
 
 - Add NavGraph road localization, short road-centerline context and route-state export.
