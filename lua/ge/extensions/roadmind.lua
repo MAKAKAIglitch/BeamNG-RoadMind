@@ -12,6 +12,7 @@ local DEFAULT_SETTINGS = {
   lidarEnabled = true, lidarQuality = "low", lidarPointCount = 9, lidarHz = 1, lidarRange = 45,
   radarEnabled = false, radarDensity = "low", radarHz = 1,
   ultrasonicEnabled = false, ultrasonicDensity = "single", ultrasonicHz = 1,
+  cameraDetectionEnabled = true,
   poseHz = 2,
   lidarPersistenceEnabled = false,
   lidarPointCloudLimit = 5000,
@@ -27,6 +28,7 @@ local DEFAULT_SETTINGS = {
   adasBSMEnabled = true,
   adasParkingEnabled = true,
   adasLDWEnabled = true,
+  driverTakeoverEnabled = true,
   showLidar = true, showRadar = false, showUltrasonic = false,
   showCameras = false, showLocalization = false, showDetectedVehicles = true,
   showCalibration = false
@@ -54,6 +56,7 @@ local SENSOR_SETTING_KEYS = {
   lidarEnabled = true, lidarQuality = true, lidarPointCount = true, lidarHz = true, lidarRange = true,
   radarEnabled = true, radarDensity = true, radarHz = true,
   ultrasonicEnabled = true, ultrasonicDensity = true, ultrasonicHz = true,
+  cameraDetectionEnabled = true,
   poseHz = true, showCameras = true, showLocalization = true, showCalibration = true,
   adaptiveFpsEnabled = true, speedAdaptiveRateEnabled = true
 }
@@ -148,6 +151,7 @@ local state = {
   currentTrafficUpdateInterval = VEHICLE_DETECTION_INTERVAL,
   vehicleCandidates = {},
   occlusionCache = {},
+  occlusionSourceCursor = {},
   occlusionCursor = 1,
   simulationTime = 0,
   tracks = {},
@@ -876,8 +880,10 @@ state._roadmindHelpers.startNativeRouteController = function(vehicle)
   local planner = updateLocalTrajectoryPlanner()
   local queued, reason = state._roadmindHelpers.sendControllerPath(vehicle, planner, true)
   if not queued then return false, reason end
+  local takeoverEnabled = state.settings and state.settings.driverTakeoverEnabled ~= false
   local command =
     "extensions.load('roadmind_controller'); " ..
+    "roadmind_controller.setDriverTakeoverEnabled(" .. boolString(takeoverEnabled) .. "); " ..
     "roadmind_controller.setTargetSpeed(" .. string.format("%.2f", ROUTE_MAX_SPEED_MPS) .. "); " ..
     "if not roadmind_controller.setEnabled(true) then error('RoadMind: controller could not arm') end"
   if not queueVehicleCommand(vehicle, command) then
@@ -932,6 +938,7 @@ state._roadmindHelpers.resetTrackingState = function(resetClock)
   state.vehicleRenderStates = {}
   state.worldModel = nil
   state.occlusionCache = {}
+  state.occlusionSourceCursor = {}
   state.occlusionCursor = 1
   state.vehicleCandidates = {}
   if resetClock then state.simulationTime = 0 end
@@ -1827,7 +1834,8 @@ state._roadmindHelpers.normalizeSettings = function(source)
   local result = state._roadmindHelpers.copySettings(DEFAULT_SETTINGS)
 
   local booleanKeys = {
-    "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
+    "lidarEnabled", "radarEnabled", "ultrasonicEnabled", "cameraDetectionEnabled",
+    "driverTakeoverEnabled",
     "lidarPersistenceEnabled", "visualizationInertiaEnabled",
     "showLidar", "showRadar", "showUltrasonic", "showCameras",
     "showLocalization", "showDetectedVehicles", "showCalibration",
@@ -1906,7 +1914,8 @@ state._roadmindHelpers.rayCountFor = function(settings)
 end
 
 state._roadmindHelpers.vehicleDetectionEnabled = function(settings)
-  return settings.lidarEnabled or settings.radarEnabled or settings.ultrasonicEnabled
+  return settings.cameraDetectionEnabled == true
+    or settings.lidarEnabled or settings.radarEnabled or settings.ultrasonicEnabled
 end
 
 state._roadmindHelpers.getGameLanguage = function()
@@ -2140,6 +2149,11 @@ function M.setSetting(key, value)
   end
   state.settings = normalized
   if key == "performanceProfilerEnabled" then M.performanceProfiler.reset() end
+  if key == "driverTakeoverEnabled" and state.routePilotEnabled and state.activeVehicle then
+    queueVehicleCommand(state.activeVehicle,
+      "extensions.load('roadmind_controller'); " ..
+      "if roadmind_controller then roadmind_controller.setDriverTakeoverEnabled(" .. boolString(value) .. ") end")
+  end
   if key == "adasEnabled" or key == "adasAEBEnabled" then
     if normalized.adasEnabled then
       state.adas = {
@@ -2371,6 +2385,23 @@ function M.setRoutePilotEnabled(enabled)
   return settingsResult()
 end
 
+
+function M.onDriverTakeover()
+  if not state.routePilotEnabled then return settingsResult() end
+  state.routePilotEnabled = false
+  state.routePilotStarted = false
+  state.routeSafetyStopped = false
+  state.routePilotVehicleId = nil
+  state.routePilotError = "Driver took control"
+  state.routeRetryCooldown = 0
+  state.controllerPathTimestamp = nil
+  state.localPlanner = {
+    status = "idle", reasonCode = "driver_takeover", timestamp = state.simulationTime,
+    candidates = {}, selectedIndex = nil
+  }
+  log("I", "roadmind", "Manual driver input detected; route pilot handed over control")
+  return settingsResult()
+end
 
 function M.setRoutePoints(encodedPoints)
   if type(encodedPoints) ~= "string" or type(jsonDecode) ~= "function" then
@@ -4760,7 +4791,8 @@ state._roadmindHelpers.buildSensorZones = function(data, settings)
 
   for i = 1, #source do
     local raw = source[i]
-    local enabled = (raw.sensor == "lidar" and settings.lidarEnabled)
+    local enabled = (raw.sensor == "camera" and settings.cameraDetectionEnabled == true)
+      or (raw.sensor == "lidar" and settings.lidarEnabled)
       or (raw.sensor == "radar" and settings.radarEnabled)
       or (raw.sensor == "ultrasonic" and settings.ultrasonicEnabled)
     if enabled then
@@ -4885,6 +4917,13 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
     end
 
     if #sources > 0 and nearestZone then
+      local hasCameraSource = false
+      for sourceIndex = 1, #sources do
+        if sources[sourceIndex].sensor == "camera" then
+          hasCameraSource = true
+          break
+        end
+      end
       local relativeSpeed = nil
       if playerVelocity then
         local relativeVelocity = target.velocity - playerVelocity
@@ -4920,8 +4959,9 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
         sensorOrigin = {x = nearestZone.origin.x, y = nearestZone.origin.y, z = nearestZone.origin.z},
         bestSensorName = nearestZone.name,
         sensorSources = sources,
-        sourceKind = "simulator-assisted",
-        measurementKind = "vehicle OBB registry",
+        sourceKind = hasCameraSource and "simulator-assisted-camera-visibility" or "simulator-assisted",
+        measurementKind = hasCameraSource
+          and "camera-frustum-and-line-of-sight-vehicle-OBB" or "vehicle OBB registry",
         visibility = "unverified",
         registryGeneration = state.vehicleRegistryGeneration,
         registryIndex = i
@@ -4942,7 +4982,17 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
     local cached = state.occlusionCache[cacheKey]
     candidate.visibility = "unverified"
 
-    if target and cached and state.simulationTime - cached.timestamp <= OCCLUSION_CACHE_MAX_AGE
+    local cachedSourceStillPresent = false
+    if cached and type(cached.sensorName) == "string" then
+      for sourceIndex = 1, #candidate.sensorSources do
+        if candidate.sensorSources[sourceIndex].name == cached.sensorName then
+          cachedSourceStillPresent = true
+          break
+        end
+      end
+    end
+    if target and cached and cachedSourceStillPresent
+        and state.simulationTime - cached.timestamp <= OCCLUSION_CACHE_MAX_AGE
         and cached.position and (target.center - cached.position):length() <= 1.25 then
       candidate.visibility = cached.visibility
       candidate.visibilityTimestamp = cached.timestamp
@@ -4967,15 +5017,19 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       local anyRaycastResult = false
       local anyUnverified = false
       local sourcesChecked = 0
-      local lastVisibility = "unverified"
       local lastSensorName = nil
+      local sourceCount = #candidate.sensorSources
+      local sourceCursor = state.occlusionSourceCursor[cacheKey] or 1
+      if sourceCount > 0 then sourceCursor = ((sourceCursor - 1) % sourceCount) + 1 end
 
-      -- A second sensor may see a target hidden from the nearest sensor.
-      for sourceIndex = 1, #candidate.sensorSources do
+      -- Rotate source-camera checks as well as target checks. The same two-ray
+      -- budget is shared by every camera and physical-style sensor zone.
+      for sourceOffset = 0, sourceCount - 1 do
         if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE or sourcesChecked >= 2 then
-          if sourceIndex <= #candidate.sensorSources then anyUnverified = true end
+          anyUnverified = true
           break
         end
+        local sourceIndex = ((sourceCursor + sourceOffset - 1) % sourceCount) + 1
         local source = candidate.sensorSources[sourceIndex]
         local zone = zonesByName[source.name]
         if zone then
@@ -4987,6 +5041,7 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
           end
           lastVisibility = visibility
           lastSensorName = zone.name
+          state.occlusionSourceCursor[cacheKey] = (sourceIndex % math.max(1, sourceCount)) + 1
           if visibility == "visible" then
             candidate.visibility = "visible"
             candidate.visibleFrom = zone.name
@@ -6015,6 +6070,104 @@ function M.getWorldModel()
   end
   -- Callers receive an independent snapshot and cannot mutate GE-owned fusion state.
   return state._roadmindHelpers.cloneWorldModelValue(state.worldModel)
+end
+
+function M.getPerceptionSnapshot()
+  local latest = state.latestData or {}
+  local pose = latest.vehiclePose or latest.localizationVehiclePose
+  local position = pose and asVec3(pose.position) or nil
+  local forward = pose and normalizedVec3(pose.forward) or nil
+  local right = pose and normalizedVec3(pose.right) or nil
+  local up = pose and normalizedVec3(pose.up) or nil
+
+  if state.activeVehicle then
+    position = position or asVec3(safeCall(state.activeVehicle, "getPosition"))
+    forward = forward or normalizedVec3(safeCall(state.activeVehicle, "getDirectionVector"))
+    up = up or normalizedVec3(safeCall(state.activeVehicle, "getDirectionVectorUp"))
+    right = right or (forward and up and normalizedVec3(forward:cross(up)) or nil)
+  end
+
+  local vehicle = nil
+  if position and forward and right then
+    vehicle = {
+      position = vectorToPlainTable(position),
+      forward = vectorToPlainTable(forward),
+      right = vectorToPlainTable(right),
+      up = vectorToPlainTable(up),
+      dimensions = state.vehicleGeometry and {
+        length = state.vehicleGeometry.length,
+        width = state.vehicleGeometry.width,
+        height = state.vehicleGeometry.height
+      } or nil
+    }
+  end
+
+  local targets = {}
+  local tracks = latest.tracks or {}
+  for i = 1, math.min(#tracks, 48) do
+    local track = tracks[i]
+    if type(track) == "table" and type(track.position) == "table" then
+      targets[#targets + 1] = {
+        trackId = track.trackId,
+        status = track.status,
+        position = state._roadmindHelpers.cloneWorldModelValue(track.position),
+        predictedPosition = state._roadmindHelpers.cloneWorldModelValue(track.predictedPosition),
+        dimensions = state._roadmindHelpers.cloneWorldModelValue(track.dimensions),
+        orientation = state._roadmindHelpers.cloneWorldModelValue(track.orientation),
+        sourceSensors = state._roadmindHelpers.copySensorSources(track.sourceSensors),
+        dataAge = track.dataAge,
+        visibilityAge = track.visibilityAge,
+        confidence = track.confidence,
+        estimatedSpeed = track.estimatedSpeed,
+        estimatedRelativeSpeed = track.estimatedRelativeSpeed
+      }
+    end
+  end
+
+  local obstacles = {}
+  local model = state.worldModel
+  if model then
+    for i = 1, math.min(#(model.obstacles or {}), 64) do
+      local obstacle = model.obstacles[i]
+      obstacles[#obstacles + 1] = {
+        obstacleId = obstacle.obstacleId,
+        position = state._roadmindHelpers.cloneWorldModelValue(obstacle.position),
+        dataAge = obstacle.dataAge,
+        confidence = obstacle.confidence,
+        sourceSensors = state._roadmindHelpers.copySensorSources(obstacle.sourceSensors)
+      }
+    end
+  end
+
+  local route = {}
+  for i = 1, math.min(#(state.routePath or {}), 48) do
+    local point = state.routePath[i]
+    if type(point) == "table" then
+      route[#route + 1] = {x = point.x, y = point.y, z = point.z}
+    end
+  end
+
+  return {
+    schemaVersion = 1,
+    timestamp = state.simulationTime,
+    frameAge = state.frameAge,
+    vehicle = vehicle,
+    targets = targets,
+    obstacles = obstacles,
+    road = state._roadmindHelpers.cloneWorldModelValue(state.roadState or {
+      valid = false, quality = "unavailable", corridor = {}
+    }),
+    route = route,
+    status = {
+      scanning = state.visualizationEnabled == true,
+      cameraDetectionEnabled = state.settings and state.settings.cameraDetectionEnabled == true,
+      routePilotEnabled = state.routePilotEnabled == true,
+      routePilotStarted = state.routePilotStarted == true,
+      routeSafetyStopped = state.routeSafetyStopped == true,
+      routePilotError = state.routePilotError,
+      plannerStatus = state.localPlanner and state.localPlanner.status or "idle"
+    }
+  }
 end
 
 return M
