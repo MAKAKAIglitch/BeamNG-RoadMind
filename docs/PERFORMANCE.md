@@ -25,14 +25,14 @@ The bounds/axes/mount overlay is off by default. When enabled, it adds one pose/
 ## Vehicle registry and detection budget
 
 - The shared GE vehicle OBB registry refreshes at 3.3–10 Hz depending on player speed, rather than being rebuilt by individual sensors.
-- Sensor-zone/OBB tests run at up to 4 Hz against the cached registry.
+- Sensor-zone/OBB tests run at the same speed-based 3.3–10 Hz cadence as the cached registry refresh.
 - At most 2 occlusion raycasts run per detection cycle: at the fastest 10 Hz cadence, a hard upper bound of 20 additional scene-raycast queries/s. The actual count is lower when fewer than two candidates enter sensor zones.
 - The settings page adds the actual recent occlusion-raycast rate to the scheduled sensor-raycast estimate. This is a workload estimate, not an FPS or CPU measurement.
 
 ## Object tracking budget
 
 - The target registry contains at most 256 valid vehicle OBB snapshots.
-- Sensor-zone detection and tracker ageing run at 3.3–10 Hz against the cached registry and latest zone frame.
+- Sensor-zone detection and tracker ageing run at 3.3–10 Hz against the cached registry and latest zone frame; the exact interval is selected from player speed.
 - The track store is capped at 128 objects. Association uses a source-ID index; the tracker does not perform scene raycasts.
 - Timestamped velocity estimation runs only when a new registry observation arrives. Cached visibility and repeated frames do not count as new measurements.
 - Tracks use a 0.75 s visibility-cache limit and a 1.5 s maximum observation age, with an additional missed-scan and registry-removal check.
@@ -99,23 +99,7 @@ The extra Lua/table and payload cost has not yet been measured in-game. The exis
 
 The High preset scans 51 LiDAR directions (17 × 3); the horizontal ray count and range are profile-controlled rather than exposed as sliders. Radar and ultrasonic limits remain 17 and 36 directions respectively.
 
-The live LiDAR renderer is capped at 99 active ray returns plus 198 fading markers. Inertia uses a critically damped spring and adds no raycasts. A separate session-only point map can retain 500–10,000 deduplicated world-space returns; at the 10,000-point limit it issues up to 10,000 debug-sphere draw calls per graphics frame, so a lower cap is recommended on weaker systems. The map is not aged or cleared by pause; it is cleared only by the explicit clear action or a vehicle switch. Vehicle OBB outlines are limited to the 64 nearest non-occluded candidates. These debug draws are separate from sensor query budgets and can materially affect rendering performance.
-
-## In-game Lua profiler
-
-The optional **Detailed Lua profiler** lives in **ESC → Mods → RoadMind → Performance** and is off by default. Enabling it adds high-resolution timer reads around existing work; it does not change sensor settings, ray counts, update intervals, planner limits, ADAS thresholds or controller cadence.
-
-The profiler keeps a fixed 15-second ring of one-second aggregates in memory. It reports:
-
-- Vehicle Lua sensor scheduler total time and separate LiDAR, radar, ultrasonic, pose and detection-zone jobs.
-- GE sensor-frame decode/merge and per-sensor post-processing.
-- Vehicle detection/tracking, World Model construction, route planner, NavGraph localization and route safety.
-- ADAS, render preparation, 3D Debug Draw and the complete RoadMind GE update callback.
-- Current Game Engine Lua heap estimate from `collectgarbage("count")`.
-
-Each stage shows average, peak and most recent execution time plus call frequency. The total GE callback includes nested stages; do not add the displayed stage times together. The heap estimate is for GE Lua, not total game RAM. These timings do not include other extensions such as `gameplayInterface`, other mods, the GPU or the game's renderer outside RoadMind's callback.
-
-The profiler uses no disk logging and clears its rolling history when toggled. Leave it disabled outside a measurement session to avoid timing overhead.
+The live LiDAR renderer is capped at 99 active ray returns plus 198 fading markers. Inertia uses a critically damped spring and adds no raycasts. A separate session-only point map can retain 500–10,000 deduplicated world-space returns; at the 10,000-point limit it issues up to 10,000 debug-sphere draw calls per graphics frame, so a lower cap is recommended on weaker systems. The map is not aged or cleared by pause; it is cleared only by the explicit clear action or a vehicle switch. Traffic OBB outlines are limited to 64 candidates. Their center and orientation are reconstructed from the actual vehicle SceneObject transform every graphics frame using a stored local center offset; if the object transform is unavailable, a capped 0.5 s track prediction is used as a display-only fallback. This performs bounded pose queries for rendered vehicles, not extra scene raycasts. Debug draws and transform queries are separate from sensor query budgets and can affect rendering performance.
 
 ## Profiling procedure
 
