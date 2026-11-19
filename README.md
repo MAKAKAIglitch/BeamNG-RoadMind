@@ -6,9 +6,9 @@ The project reconstructs a useful local view of the road and nearby traffic from
 
 ## Source of truth
 
-The detailed branch specification is **ROADMAP_BRANCH_TESLA_MAP_STYLE.md**. It defines the intended sensor roles, environment reconstruction, lane-aware road structure, map appearance, data provenance, performance principles, and acceptance criteria.
+This README summarizes the baseline sensor inventory and the current regular BeamNG.drive backend. The detailed branch specification **ROADMAP_BRANCH_TESLA_MAP_STYLE.md** defines the target behavior for sensor use, environment reconstruction, lane-aware road structure, map appearance, data provenance, performance principles, and acceptance criteria.
 
-The technical documents in **docs/** explain how those requirements map to the system architecture. When a technical detail is not available in regular BeamNG.drive, it must be labelled as unavailable, estimated, simulator-assisted, or future work. Do not silently replace a missing sensor measurement with omniscient simulator data.
+The technical documents in **docs/** translate those requirements into the target architecture. When implementation differs from the specification, document the difference as implemented, unvalidated, planned, or unavailable. When a technical detail is not available in regular BeamNG.drive, label it as unavailable, estimated, or simulator-assisted. Do not silently replace a missing sensor measurement with omniscient simulator data.
 
 ## What RoadMind is building
 
