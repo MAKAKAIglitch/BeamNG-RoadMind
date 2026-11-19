@@ -2,7 +2,7 @@
 
 RoadMind aims to become a lightweight, modular autonomous-driving system for BeamNG.drive. Development is organized around a reliable perception foundation first, followed by road understanding, route planning and vehicle control.
 
-**Current status:** virtual sensor suite, simulator-assisted vehicle tracking, NavGraph route input, bounded local trajectory planning and a first native Lua trajectory controller. The controller now owns steering/throttle/brake inputs and no longer relies on the built-in Vehicle AI for route following. Sensor accuracy, steering polarity, vehicle-class coverage, controller tuning, traffic interaction, route behavior and performance still require repeatable in-game validation. Parking and robust intersection/traffic negotiation are not implemented.
+**Current status:** virtual sensor suite, simulator-assisted vehicle tracking, NavGraph route input, bounded local trajectory planning, a first native Lua trajectory controller and an initial configurable ADAS layer. RoadMind owns its route steering/throttle/brake inputs; ADAS includes FCW, AEB, route-pilot ACC, blind-spot monitoring, parking-distance warnings and NavGraph-based lane-departure warnings. Vehicle-mounted debug geometry is re-anchored to the live chassis pose. Sensor accuracy, controller tuning, ADAS thresholds, visual alignment and performance still require repeatable in-game validation. Manual ACC, camera-based lane detection and automatic parking are not implemented.
 
 ## Development priorities
 
@@ -11,7 +11,8 @@ RoadMind aims to become a lightweight, modular autonomous-driving system for Bea
 3. Validate LiDAR point continuity, sensor freshness and world-model quality.
 4. Complete Phase 8 route behavior on intersections, splits and multiple maps.
 5. Validate and harden the native Lua trajectory controller and independent safety supervisor.
-6. Add parking, recording and optional learning only after deterministic route control is validated.
+6. Validate ADAS thresholds, brake blending, blind-spot tracking and pose-locked visualization in repeatable scenarios.
+7. Add manual ACC, camera-based lane perception, automatic parking, recording and optional learning only after deterministic route control is validated.
 
 Phase 9 is implemented as a bounded local planner. Phase 10 now has its first native Vehicle Lua controller prototype; the next milestone is in-game validation and controller hardening, not adding more complexity before basic tracking and braking are proven.
 
@@ -241,6 +242,25 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 
 **Status:** code-level prototype committed; not yet verified in a live BeamNG.drive session. The planner's NavGraph corridor remains a heuristic and the safety supervisor is not a collision guarantee.
 
+## Phase 14 — configurable ADAS and attached-vehicle visualization
+
+- [x] Add a persistent ADAS master switch and separate FCW, AEB, ACC, BSM, parking-distance and LDW toggles.
+- [x] Add an ADAS status panel with sensor-freshness state and active warnings in Russian and English.
+- [x] Add forward-obstacle FCW and AEB logic using currently enabled, fresh sensor observations.
+- [x] Blend AEB brake input during manual driving and preserve route-controller actuator ownership during autonomous route control.
+- [x] Add route-pilot-only adaptive cruise speed targeting from a tracked lead vehicle.
+- [x] Add blind-spot alerts from simulator-assisted vehicle tracks and ultrasonic parking-distance display.
+- [x] Add NavGraph-centreline lane-departure warning (not camera/painted-line recognition).
+- [x] Publish vehicle pose and pose-only mount updates separately from sensor raycast returns.
+- [x] Re-anchor sensor origins, camera frustums, calibration geometry and detection zones to the live vehicle pose.
+- [x] Use tracked/predicted moving-vehicle poses for traffic OBB visualization instead of independent world-space smoothing.
+- [ ] Validate each ADAS feature with controlled in-game scenarios and check false-positive/false-negative behavior.
+- [ ] Verify AEB driver-brake blending and manual takeover across vehicle classes and input devices.
+- [ ] Tune thresholds from repeatable braking-distance and traffic-gap measurements.
+- [ ] Add manual-driving ACC only after reliable lead-vehicle tracking and speed-control arbitration are validated.
+
+**Status:** code-level prototype committed; ADAS and visualization behavior have not yet been verified in a live BeamNG.drive session. Assistance thresholds are heuristics, not a collision guarantee.
+
 ## Performance principles
 
 - Never run scene raycasts in the render loop.
@@ -269,4 +289,4 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 - GNSS-like positioning reports BeamNG world coordinates, not geodetic latitude/longitude.
 - IMU-like values are derived from simulator signals and are not calibrated hardware-grade outputs.
 - Game Engine vehicle-list/bounds data can assist target discovery and tracking, but it is simulator-assisted information, not a LiDAR/camera measurement. Keep that distinction explicit in data and documentation.
-- Route planning and a first native trajectory controller exist as experimental code; they are not considered validated until repeatable in-game tests pass. Parking and learning remain future roadmap items.
+- Route planning, a first native trajectory controller and initial ADAS features exist as experimental code; they are not considered validated until repeatable in-game tests pass. Manual ACC, camera-based lane detection and automatic parking remain future roadmap items.
