@@ -1485,9 +1485,7 @@ local function addSensorHoverPoint(candidates, position, kind, name, radius)
   candidate.radius = radius or 0.10
 end
 
-local function addSensorHoverSegment(candidates, startPosition, endPosition, kind, name, radius)
-  local a = asVec3(startPosition)
-  local b = asVec3(endPosition)
+local function addSensorHoverSegment(candidates, a, b, kind, name, radius)
   if not a or not b then return end
   local candidate = nextSensorHoverCandidate(candidates)
   candidate.kind = kind
@@ -1625,7 +1623,13 @@ local function drawLidar(drawer, lidar, hoverCandidates)
       if hitPoint then
         local measurementOrigin = toPoint3F(ray.origin) or origin
         drawLine(drawer, measurementOrigin, hitPoint, beamColor)
-        addSensorHoverSegment(hoverCandidates, measurementOrigin, hitPoint, "lidar", "Forward LiDAR")
+        addSensorHoverSegment(
+          hoverCandidates,
+          vec3(measurementOrigin),
+          vec3(hitPoint),
+          "lidar",
+          "Forward LiDAR"
+        )
       end
     end
   end
@@ -1924,7 +1928,8 @@ local function drawCameraFrustum(drawer, camera, hoverCandidates)
   local halfWidth = math.tan(hfov * 0.5) * range
   local halfHeight = math.tan(vfov * 0.5) * range
 
-  local center = vec3(origin.x, origin.y, origin.z) + fwd * range
+  local originVector = vec3(origin.x, origin.y, origin.z)
+  local center = originVector + fwd * range
   local farLeftUp = center - right * halfWidth + upVec * halfHeight
   local farRightUp = center + right * halfWidth + upVec * halfHeight
   local farLeftDown = center - right * halfWidth - upVec * halfHeight
@@ -1932,12 +1937,12 @@ local function drawCameraFrustum(drawer, camera, hoverCandidates)
 
   local name = camera.name or "Camera"
   local edges = {
-    {origin, farLeftUp}, {origin, farRightUp},
-    {origin, farLeftDown}, {origin, farRightDown},
+    {originVector, farLeftUp}, {originVector, farRightUp},
+    {originVector, farLeftDown}, {originVector, farRightDown},
     {farLeftUp, farRightUp}, {farRightUp, farRightDown},
     {farRightDown, farLeftDown}, {farLeftDown, farLeftUp}
   }
-  addSensorHoverPoint(hoverCandidates, origin, "camera", name, 0.14)
+  addSensorHoverPoint(hoverCandidates, originVector, "camera", name, 0.14)
   for i = 1, #edges do
     addSensorHoverSegment(hoverCandidates, edges[i][1], edges[i][2], "camera", name, 0.085)
   end
