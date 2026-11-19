@@ -18,6 +18,7 @@ These are calculated query budgets, not measured FPS or CPU percentages. Actual 
 
 - **Automatic sensor quality:** optional FPS feedback controller with a 30–165 FPS target (5 FPS steps). It lowers ray count, sensor resolution and scan frequency when the smoothed FPS remains below target; it restores detail more slowly when FPS has headroom.
 - **Speed-adaptive sensor cadence:** reduces sensor scan frequency below 5 m/s and raises it above 25 m/s. Traffic OBB position refresh independently adapts between 0.30 s, 0.15 s and 0.10 s based on player speed; it does not add scene raycasts.
+- **Detailed Lua profiler:** disabled by default. When enabled, records RoadMind Vehicle Lua sensor-job time and Game Engine Lua processing, tracking, World Model, planner, NavGraph, ADAS, visualization, Debug Draw and total update times. The panel shows average/peak/last milliseconds, calls per second and GE Lua heap size over a rolling 15-second window. It stores no files and reports RoadMind timings only, not whole-game CPU or GPU usage.
 - **Asynchronous work:** Vehicle Lua processes at most one of LiDAR, radar, ultrasonic, pose or detection-zone jobs per graphics frame. Simultaneously due jobs are spread across successive frames.
 - The FPS target is an optimization goal, not a frame-rate lock or guarantee. With minimum sensor settings active, RoadMind cannot force BeamNG.drive to meet a target it cannot sustain.
 
