@@ -6031,9 +6031,6 @@ function M.onUpdate(dt)
   local geStarted = M.performanceProfiler.start()
   state._roadmindHelpers.updateAdaptivePerformance(dt)
   state.frameAge = state.frameAge + dt
-  local adasStarted = M.performanceProfiler.start()
-  state._roadmindHelpers.updateADAS(dt)
-  M.performanceProfiler.stop("adas", adasStarted)
   local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
   local routePilotActive = state.routePilotEnabled
 
@@ -6066,6 +6063,12 @@ function M.onUpdate(dt)
       M.performanceProfiler.stop("route_safety", safetyStarted)
     end
   end
+  -- Use the newest vehicle registry, camera visibility and tracks for ADAS.
+  -- Keep this outside the freshness block so stale data still releases AEB.
+  local adasStarted = M.performanceProfiler.start()
+  state._roadmindHelpers.updateADAS(dt)
+  M.performanceProfiler.stop("adas", adasStarted)
+
   -- Advance render-only inertia at display cadence. This covers own-vehicle
   -- bounds/axes/mounts, radar and ultrasonic returns, camera frustums,
   -- localization, traffic origins, route lines and planner candidates.
