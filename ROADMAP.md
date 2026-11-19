@@ -2,7 +2,7 @@
 
 RoadMind aims to become a lightweight, modular autonomous-driving system for BeamNG.drive. Development is organized around a reliable perception foundation first, followed by road understanding, route planning and vehicle control.
 
-**Current status:** virtual sensor suite, simulator-assisted vehicle tracking and a first NavGraph route-following prototype. The main sensing, tracking, world-model and route-input code exists, but vehicle-class coverage, sensor/track accuracy, route behavior and performance have not been validated in repeatable in-game scenarios. Custom trajectory planning, steering/throttle control, obstacle avoidance and parking are not implemented.
+**Current status:** virtual sensor suite, simulator-assisted vehicle tracking, NavGraph route input, bounded local trajectory planning and a first native Lua trajectory controller. The controller now owns steering/throttle/brake inputs and no longer relies on the built-in Vehicle AI for route following. Sensor accuracy, steering polarity, vehicle-class coverage, controller tuning, traffic interaction, route behavior and performance still require repeatable in-game validation. Parking and robust intersection/traffic negotiation are not implemented.
 
 ## Development priorities
 
@@ -13,7 +13,7 @@ RoadMind aims to become a lightweight, modular autonomous-driving system for Bea
 5. Implement the local trajectory planner and independent safety supervisor.
 6. Add vehicle control, parking, recording and optional learning only after the deterministic planner is validated.
 
-The next implementation milestone is Phase 9: a bounded local planner consuming the timestamped world model and current route state. Native BeamNG AI route following remains a temporary experimental baseline, not RoadMind's own autonomous controller.
+Phase 9 is implemented as a bounded local planner. Phase 10 now has its first native Vehicle Lua controller prototype; the next milestone is in-game validation and controller hardening, not adding more complexity before basic tracking and braking are proven.
 
 ## Phase 1 — Forward LiDAR and world visualization
 
@@ -226,6 +226,21 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 
 ---
 
+## Phase 10 — native Lua trajectory control
+
+- [x] Add a Vehicle Lua controller that consumes a bounded, timestamped local trajectory from the GE planner.
+- [x] Track the selected trajectory with a Pure Pursuit-style lateral controller.
+- [x] Add bounded PI speed control with steering-dependent speed reduction and a conservative 8 m/s cap.
+- [x] Apply steering, throttle and brake through BeamNG's Vehicle Lua input events.
+- [x] Add a latched full-brake supervisor response for stale trajectory feeds, missing vehicle state and lost route tracking.
+- [x] Keep controller updates at 20 Hz and refresh trajectory commands only when the 5 Hz planner publishes a new candidate.
+- [ ] Validate steering direction, steering limits and speed response on several stock vehicle classes.
+- [ ] Tune wheelbase/steering geometry per vehicle and verify braking distances under different tire/road conditions.
+- [ ] Validate manual takeover, pause/resume, vehicle reset, route completion and all supervisor stop/restart paths.
+- [ ] Validate intersections, traffic, lane changes and obstacle avoidance in repeatable scenarios.
+
+**Status:** code-level prototype committed; not yet verified in a live BeamNG.drive session. The planner's NavGraph corridor remains a heuristic and the safety supervisor is not a collision guarantee.
+
 ## Performance principles
 
 - Never run scene raycasts in the render loop.
@@ -254,4 +269,4 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 - GNSS-like positioning reports BeamNG world coordinates, not geodetic latitude/longitude.
 - IMU-like values are derived from simulator signals and are not calibrated hardware-grade outputs.
 - Game Engine vehicle-list/bounds data can assist target discovery and tracking, but it is simulator-assisted information, not a LiDAR/camera measurement. Keep that distinction explicit in data and documentation.
-- Autonomous route planning, trajectory control, parking and learning workflows are future roadmap items and are not considered implemented until validated in-game.
+- Route planning and a first native trajectory controller exist as experimental code; they are not considered validated until repeatable in-game tests pass. Parking and learning remain future roadmap items.
