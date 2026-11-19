@@ -49,6 +49,12 @@
           @update:modelValue="value => setSetting('cameraDetectionEnabled', value)" />
       </BngRow>
       <p class="roadmind-note">{{ t("cameraVehicleDetectionNote") }}</p>
+      <div class="roadmind-camera-diagnostics">
+        <span>{{ t("cameraZones") }}: {{ status.cameraZoneCount || 0 }}</span>
+        <span>{{ t("cameraCandidates") }}: {{ status.cameraCandidateCount || 0 }}</span>
+        <span>{{ t("cameraVisible") }}: {{ status.cameraVisibleVehicleCount || 0 }}</span>
+        <span>{{ t("occlusionChecks") }}: {{ status.occlusionRaycastsPerSecond || 0 }}/s</span>
+      </div>
       <div v-if="status.trackedObjects && status.trackedObjects.length" class="roadmind-track-list">
         <strong>{{ t("trackedObjects") }} ({{ status.trackedVehicleCount || 0 }})</strong>
         <div v-for="track in status.trackedObjects" :key="track.trackId" class="roadmind-track">
@@ -391,7 +397,11 @@ const EN = {
   registryLimited: "limit reached",
   detectionNote: "Vehicle candidates are filtered through each active sensor zone and a bounded line-of-sight check. Camera zones cover the front, sides and rear and work without LiDAR. Drive-mode detection is simulator-assisted geometry, not RGB image recognition.",
   cameraVehicleDetection: "Detect vehicles with the seven cameras",
-  cameraVehicleDetectionNote: "Uses BeamNG vehicle bounds, calibrated camera fields of view and scene occlusion checks. It is not RGB/image recognition and does not require LiDAR.",
+  cameraVehicleDetectionNote: "Vehicles inside camera coverage are tracked from the camera frustums first. Each visible target also passes a scene-occlusion check. This is simulator-assisted geometry, not RGB/image recognition, and does not require LiDAR.",
+  cameraZones: "Active camera zones",
+  cameraCandidates: "Vehicles inside camera frustums",
+  cameraVisible: "Camera-confirmed vehicles",
+  occlusionChecks: "Visibility checks",
   vehicleGeometry: "Vehicle geometry and sensor calibration",
   calibrated: "Geometry calibrated",
   fallbackCalibration: "Using fallback sensor positions",
@@ -571,7 +581,11 @@ const RU = {
   registryLimited: "достигнут лимит",
   detectionNote: "Кандидаты проверяются по зонам датчиков и прямой видимости. Камеры охватывают переднюю, боковые и заднюю зоны и работают без LiDAR. В Drive это геометрическая модель видимости по данным симулятора, а не распознавание изображения.",
   cameraVehicleDetection: "Обнаруживать машины семью камерами",
-  cameraVehicleDetectionNote: "Используются габариты машин BeamNG, поля обзора камер и проверка перекрытий объектами сцены. Это не распознавание RGB-изображений; LiDAR не требуется.",
+  cameraVehicleDetectionNote: "Машины в поле обзора сначала проверяются камерами. Видимость каждой цели дополнительно подтверждается проверкой перекрытий. Это геометрическая модель по данным симулятора, а не распознавание изображения; LiDAR не требуется.",
+  cameraZones: "Активных зон камер",
+  cameraCandidates: "Машин в поле камер",
+  cameraVisible: "Подтверждено камерами",
+  occlusionChecks: "Проверок видимости",
   vehicleGeometry: "Геометрия автомобиля и калибровка датчиков",
   calibrated: "Геометрия определена",
   fallbackCalibration: "Используются резервные позиции датчиков",
@@ -1063,6 +1077,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 0.75em;
 }
+.roadmind-camera-diagnostics { display: flex; flex-wrap: wrap; gap: 0.3em 0.8em; color: var(--bng-cool-gray-300, #bbb); font-size: 0.82em; font-variant-numeric: tabular-nums; }
 .roadmind-track-list {
   display: flex;
   flex-direction: column;
