@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — camera priority and ADAS safety fixes
+
+- Give camera-frustum vehicle observations priority over overlapping LiDAR/radar/ultrasonic vehicle zones; retain camera-only provenance when a target is inside a camera frustum.
+- Increase the shared, rotating and cached occlusion budget to eight scene raycasts per detection cycle (bounded to 80/s at the fastest 10 Hz traffic cadence).
+- Keep the primary LiDAR layer level to world +Z regardless of chassis pitch/roll; use explicit horizontal, downward and upward elevation layers.
+- Allow camera-confirmed vehicle candidates into the forward ADAS hazard guard and mark camera/registry observations as an available forward-perception source.
+- Calculate vehicle-relative closing speed and time-to-collision for FCW/AEB; expose hazard distance, threshold, TTC and source in the ADAS status.
+- Read driver takeover inputs from Vehicle Lua electrics input channels rather than treating the `input` API table as a numeric input table.
+- Add live camera-zone, in-frustum candidate and camera-visible vehicle counters to RoadMind settings.
+
 ## Unreleased — surround-view perception and ADAS interface
 
 - Add seven-camera vehicle candidate zones spanning front, side, rear and rear-corner coverage, independent of LiDAR and camera debug overlays.
