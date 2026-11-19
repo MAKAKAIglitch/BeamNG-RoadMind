@@ -275,42 +275,6 @@
           <BngSwitch :modelValue="settings.speedAdaptiveRateEnabled" :disabled="busy"
             @update:modelValue="value => setSetting('speedAdaptiveRateEnabled', value)" />
         </BngRow>
-        <BngRow>
-          <template #label>{{ t("performanceProfilerEnabled") }}</template>
-          <BngSwitch :modelValue="settings.performanceProfilerEnabled" :disabled="busy"
-            @update:modelValue="value => setSetting('performanceProfilerEnabled', value)" />
-        </BngRow>
-        <p class="roadmind-note">{{ t("profilerNote") }}</p>
-      </div>
-      <div v-if="settings.performanceProfilerEnabled" class="roadmind-world-model">
-        <div class="roadmind-track-heading">
-          <strong>{{ t("profilerTitle") }}</strong>
-          <span>{{ t("profilerHistory") }}: {{ status.profiler && status.profiler.historySeconds || 0 }} / 15 s</span>
-        </div>
-        <span class="roadmind-track-metrics" v-if="status.profiler && status.profiler.memoryKb !== undefined">
-          {{ t("profilerMemory") }}: {{ (status.profiler.memoryKb / 1024).toFixed(1) }} MB
-        </span>
-        <p v-if="status.profiler && status.profiler.available === false" class="roadmind-note">
-          {{ t("profilerUnavailable") }}
-        </p>
-        <p v-else-if="!status.profiler || status.profiler.historySeconds < 1" class="roadmind-note">
-          {{ t("profilerWarmup") }}
-        </p>
-        <div v-else class="roadmind-track-list">
-          <div v-for="stage in status.profiler.stages" :key="stage.key" class="roadmind-track">
-            <div class="roadmind-track-heading">
-              <strong>{{ t("profile_" + stage.key) }}</strong>
-              <span>
-                {{ t("profilerAverage") }}: {{ stage.avgMs.toFixed(3) }} ms
-                · {{ t("profilerPeak") }}: {{ stage.peakMs.toFixed(3) }} ms
-              </span>
-            </div>
-            <span class="roadmind-track-metrics">
-              {{ t("profilerCalls") }}: {{ stage.callsPerSecond.toFixed(1) }}
-              · {{ t("profilerLast") }}: {{ stage.lastMs === undefined ? "—" : stage.lastMs.toFixed(3) + " ms" }}
-            </span>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -506,36 +470,6 @@ const EN = {
   performanceNote: "Economy runs only the forward LiDAR. Radar and ultrasonic start off; Balanced enables all three sensor groups. Changing a setting switches to Custom.",
   adaptivePerformance: "Experimental load control",
   adaptivePerformanceNote: "RoadMind adjusts sensor ray count and scan rates to approach the target FPS. It cannot make the game reach an FPS that the rest of the scene, traffic or hardware cannot sustain.",
-  performanceProfilerEnabled: "Enable detailed Lua profiler",
-  profilerTitle: "RoadMind runtime profile",
-  profilerNote: "Measures execution time inside RoadMind. Enable only while measuring; it adds a small timing overhead. Results are averaged over the last 15 seconds and are not whole-game CPU usage.",
-  profilerHistory: "History",
-  profilerMemory: "GE Lua heap",
-  profilerAverage: "Average",
-  profilerPeak: "Peak",
-  profilerLast: "Last",
-  profilerCalls: "Calls/s",
-  profilerWarmup: "Collecting the first samples…",
-  profilerUnavailable: "High-resolution Lua timer is unavailable in this runtime.",
-  profile_sensor_job: "Vehicle Lua sensor jobs (total)",
-  profile_vehicle_lidar: "Vehicle Lua LiDAR scan",
-  profile_vehicle_radar: "Vehicle Lua radar scan",
-  profile_vehicle_ultrasonic: "Vehicle Lua ultrasonic scan",
-  profile_vehicle_pose: "Vehicle Lua pose and camera job",
-  profile_vehicle_detection_zones: "Vehicle Lua detection-zone job",
-  profile_sensor_frame: "Sensor frame decode and merge",
-  profile_sensor_lidar: "LiDAR processing",
-  profile_sensor_radar: "Radar processing",
-  profile_sensor_ultrasonic: "Ultrasonic processing",
-  profile_vehicle_tracking: "Vehicle detection and tracking",
-  profile_world_model: "World Model build",
-  profile_planner: "Trajectory planner",
-  profile_road_graph: "NavGraph road localization",
-  profile_adas: "ADAS processing",
-  profile_visualization: "Visualization preparation",
-  profile_debug_draw: "3D Debug Draw",
-  profile_route_safety: "Route safety supervisor",
-  profile_ge_update: "Total GE update cycle",
   adaptiveFpsEnabled: "Automatically adapt sensor quality",
   targetFps: "Desired FPS",
   speedAdaptiveRate: "Adjust sensor rate to vehicle speed",
@@ -714,36 +648,6 @@ const RU = {
   performanceNote: "В режиме «Экономный» работает только передний LiDAR. Радар и ультразвук выключены; «Сбалансированный» включает все три группы. Изменение параметра переключает профиль на свои настройки.",
   adaptivePerformance: "Экспериментальная подстройка нагрузки",
   adaptivePerformanceNote: "RoadMind меняет число лучей и частоту датчиков, пытаясь приблизиться к целевому FPS. Он не сможет обеспечить FPS, недостижимый для самой игры, сцены, трафика или оборудования.",
-  performanceProfilerEnabled: "Включить подробный Lua-профайлер",
-  profilerTitle: "Профиль RoadMind",
-  profilerNote: "Измеряет время выполнения кода RoadMind. Включай только на время замеров: измерения добавляют небольшую нагрузку. Показаны средние значения за последние 15 секунд; это не общая загрузка процессора игрой.",
-  profilerHistory: "История",
-  profilerMemory: "Память GE Lua",
-  profilerAverage: "Среднее",
-  profilerPeak: "Пик",
-  profilerLast: "Последнее",
-  profilerCalls: "Вызовов/с",
-  profilerWarmup: "Сбор первых измерений…",
-  profilerUnavailable: "В этой среде недоступен высокоточный Lua-таймер.",
-  profile_sensor_job: "Все задачи датчиков Vehicle Lua",
-  profile_vehicle_lidar: "Сканирование LiDAR в Vehicle Lua",
-  profile_vehicle_radar: "Сканирование радарами в Vehicle Lua",
-  profile_vehicle_ultrasonic: "Сканирование ультразвуком в Vehicle Lua",
-  profile_vehicle_pose: "Поза и камеры в Vehicle Lua",
-  profile_vehicle_detection_zones: "Зоны датчиков в Vehicle Lua",
-  profile_sensor_frame: "Разбор и обработка кадра датчиков",
-  profile_sensor_lidar: "Обработка LiDAR",
-  profile_sensor_radar: "Обработка радара",
-  profile_sensor_ultrasonic: "Обработка ультразвука",
-  profile_vehicle_tracking: "Обнаружение и трекинг машин",
-  profile_world_model: "Построение World Model",
-  profile_planner: "Планировщик траектории",
-  profile_road_graph: "Локализация по NavGraph",
-  profile_adas: "Обработка ADAS",
-  profile_visualization: "Подготовка визуализации",
-  profile_debug_draw: "Отрисовка 3D Debug Draw",
-  profile_route_safety: "Контроль безопасности маршрута",
-  profile_ge_update: "Полное обновление GE",
   adaptiveFpsEnabled: "Автоматически менять качество датчиков",
   targetFps: "Желаемый FPS",
   speedAdaptiveRate: "Менять частоту датчиков по скорости",
@@ -965,7 +869,6 @@ const settings = ref({
   lidarPointCloudLimit: 5000,
   visualizationInertiaEnabled: true,
   adaptiveFpsEnabled: false,
-  performanceProfilerEnabled: false,
   targetFps: 60,
   speedAdaptiveRateEnabled: true,
   adasEnabled: false,
@@ -1011,7 +914,6 @@ const status = ref({
   persistentLidarPointCount: 0,
   persistentLidarPointLimit: 5000,
   currentFps: undefined,
-  profiler: { enabled: false, available: true, historySeconds: 0, memoryKb: undefined, stages: [] },
   targetFps: 60,
   adaptiveQualityTier: 4,
   performanceLimitReached: false,
