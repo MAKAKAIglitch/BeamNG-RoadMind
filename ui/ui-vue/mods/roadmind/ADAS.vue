@@ -23,6 +23,20 @@
         <span v-if="status.adasStatus && status.adasStatus.leftBlindSpot" class="note">{{ t("left") }}</span>
         <span v-if="status.adasStatus && status.adasStatus.rightBlindSpot" class="note">{{ t("right") }}</span>
         <span v-if="status.adasStatus && status.adasStatus.laneDeparture" class="alert">{{ t("lane") }}</span>
+        <span v-if="status.adasStatus && status.adasStatus.aebDistance !== undefined" class="metric">
+          {{ t("aebDistance") }}: {{ Number(status.adasStatus.aebDistance).toFixed(1) }} m
+          / {{ t("aebThreshold") }}: {{ Number(status.adasStatus.aebThreshold).toFixed(1) }} m
+        </span>
+        <span v-if="status.adasStatus && status.adasStatus.aebTimeToCollision !== undefined" class="metric">
+          {{ t("ttc") }}: {{ Number(status.adasStatus.aebTimeToCollision).toFixed(2) }} s
+          · {{ t("closingSpeed") }}: {{ Number(status.adasStatus.aebClosingSpeed || 0).toFixed(1) }} m/s
+        </span>
+        <span v-if="status.adasStatus && status.adasStatus.aebHazardKind" class="metric">
+          {{ t("hazardSource") }}: {{ status.adasStatus.aebHazardSource || status.adasStatus.aebHazardKind }}
+        </span>
+        <span class="metric">
+          {{ t("forwardSource") }}: {{ status.adasStatus && status.adasStatus.cameraAvailable ? t("camera") : (status.adasStatus && status.adasStatus.sensorAvailable ? t("physicalSensors") : t("noForwardSource")) }}
+        </span>
         <span v-if="status.adasStatus && status.adasStatus.leadDistance !== undefined" class="metric">
           {{ t("lead") }}: {{ Number(status.adasStatus.leadDistance).toFixed(1) }} m
         </span>
@@ -102,6 +116,15 @@ const EN = {
   left: "Left blind spot",
   right: "Right blind spot",
   lane: "Lane departure risk",
+  aebDistance: "Hazard distance",
+  aebThreshold: "Braking threshold",
+  ttc: "Time to collision",
+  closingSpeed: "Closing speed",
+  hazardSource: "Detected by",
+  forwardSource: "Forward perception",
+  camera: "Cameras",
+  physicalSensors: "LiDAR / radar / ultrasonic",
+  noForwardSource: "No fresh source",
   lead: "Lead vehicle gap",
   autopilot: "Road-network autopilot (experimental)",
   routeDescription: "The route pilot follows a NavGraph route using RoadMind's Lua controller. Target speed is currently capped at 8 m/s (28.8 km/h).",
@@ -150,6 +173,15 @@ const RU = {
   left: "Слева слепая зона",
   right: "Справа слепая зона",
   lane: "Риск ухода с полосы",
+  aebDistance: "Дистанция до цели",
+  aebThreshold: "Порог торможения",
+  ttc: "Время до столкновения",
+  closingSpeed: "Скорость сближения",
+  hazardSource: "Обнаружено через",
+  forwardSource: "Переднее восприятие",
+  camera: "Камеры",
+  physicalSensors: "LiDAR / радар / ультразвук",
+  noForwardSource: "Нет свежих данных",
   lead: "Дистанция до машины впереди",
   autopilot: "Автопилот по дорожной сети (эксперимент)",
   routeDescription: "Автопилот следует по NavGraph собственным Lua-контроллером RoadMind. Целевая скорость ограничена 8 м/с (28,8 км/ч).",
