@@ -1388,8 +1388,8 @@ local function drawUltrasonic(drawer, ultrasonic)
   local returns = ultrasonic.returns or {}
   for i = 1, #returns do
     local hit = returns[i]
-    local origin = toPoint3F(hit.origin)
-    local target = toPoint3F(hit)
+    local origin = not hit.renderExpired and toPoint3F(hit.origin) or nil
+    local target = not hit.renderExpired and toPoint3F(hit) or nil
     if origin and target then
       drawLine(drawer, origin, target, ColorF(0.10, 1.0, 0.82, 0.95))
       drawSphere(drawer, target, 0.085, ColorF(1.0, 0.88, 0.1, 1.0))
