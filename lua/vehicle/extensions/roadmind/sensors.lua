@@ -27,6 +27,7 @@ local CONFIG = {
 
 local sensorSettings = {
   lidarEnabled = true,
+  cameraDetectionEnabled = true,
   lidarQuality = "low",
   lidarPointCount = 9,
   lidarHz = 1,
@@ -385,6 +386,15 @@ local function buildDetectionZones(frame)
     end
   end
 
+  -- Camera coverage zones are used for vehicle discovery even when the
+  -- optional 3D frustum overlay is hidden.
+  if sensorSettings.cameraDetectionEnabled then
+    for i = 1, #layout.cameras do
+      local cfg = layout.cameras[i]
+      add(cfg.name, "camera", cfg, cfg.hfov, cfg.vfov, cfg.range, 0.35)
+    end
+  end
+
   return {
     timestamp = state.elapsed,
     updateHz = sensorSettings.poseHz,
@@ -445,15 +455,17 @@ local function scanLidar(frame)
   end
 
   local rays = {}
+  local verticalAngles = {0}
+  if cfg.verticalSamples >= 2 then verticalAngles[2] = -cfg.verticalFov * 0.5 end
+  if cfg.verticalSamples >= 3 then verticalAngles[3] = cfg.verticalFov * 0.5 end
   for h = 0, cfg.horizontalSamples - 1 do
     local horizontalAngle = -cfg.horizontalFov * 0.5
       + cfg.horizontalFov * h / math.max(1, cfg.horizontalSamples - 1)
     local cosH = math.cos(horizontalAngle)
     local sinH = math.sin(horizontalAngle)
 
-    for verticalIndex = 0, cfg.verticalSamples - 1 do
-      local verticalAngle = -cfg.verticalFov * 0.5
-        + cfg.verticalFov * verticalIndex / math.max(1, cfg.verticalSamples - 1)
+    for verticalIndex = 1, #verticalAngles do
+      local verticalAngle = verticalAngles[verticalIndex]
       local cosV = math.cos(verticalAngle)
       local sinV = math.sin(verticalAngle)
 
@@ -833,7 +845,7 @@ local function applySensorSettings(source)
   if type(source) ~= "table" then return false end
 
   local booleanKeys = {
-    "lidarEnabled", "radarEnabled", "ultrasonicEnabled", "speedAdaptiveRateEnabled",
+    "lidarEnabled", "radarEnabled", "ultrasonicEnabled", "cameraDetectionEnabled", "speedAdaptiveRateEnabled",
     "cameraFrustumsEnabled", "localizationEnabled", "calibrationDebugEnabled"
   }
   for i = 1, #booleanKeys do
@@ -1076,7 +1088,8 @@ function M.updateGFX(dt)
       or sensorSettings.calibrationDebugEnabled then
     state.poseTimer = state.poseTimer + dt
   end
-  if sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled then
+  if sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled
+      or sensorSettings.cameraDetectionEnabled then
     state.detectionZoneTimer = state.detectionZoneTimer + dt
   end
 
@@ -1108,7 +1121,8 @@ function M.updateGFX(dt)
   local poseDue = (sensorSettings.cameraFrustumsEnabled or sensorSettings.localizationEnabled
       or sensorSettings.calibrationDebugEnabled) and state.poseTimer >= poseInterval
   local zonesDue = state.detectionZoneTimer >= detectionZoneInterval
-    and (sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled)
+    and (sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled
+      or sensorSettings.cameraDetectionEnabled)
 
   -- Round-robin over five independent jobs. A graphics frame handles at most
   -- one due scan/pose/zone job, spreading simultaneous deadlines over frames.
