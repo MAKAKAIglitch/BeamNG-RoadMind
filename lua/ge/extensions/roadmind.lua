@@ -841,9 +841,11 @@ state._roadmindHelpers.sendControllerPath = function(vehicle, planner, force)
   local ok, encoded = pcall(jsonEncode, path)
   if not ok or type(encoded) ~= "string" then return false, "Could not encode the selected trajectory" end
   local command =
-    "extensions.load('roadmind_controller'); " ..
+    "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
+    "if type(roadmind_controller) == 'table' and type(roadmind_controller.setPath) == 'function' then " ..
     "if not roadmind_controller.setPath(" .. string.format("%q", encoded) .. ") then " ..
-    "error('RoadMind: controller rejected trajectory') end"
+    "log('E', 'roadmind', 'Vehicle controller rejected the selected trajectory') end " ..
+    "else log('E', 'roadmind', 'Vehicle route controller is unavailable; trajectory update skipped') end"
   if not queueVehicleCommand(vehicle, command) then
     return false, "Could not queue the controller trajectory"
   end
@@ -887,10 +889,14 @@ state._roadmindHelpers.startNativeRouteController = function(vehicle)
   if not queued then return false, reason end
   local takeoverEnabled = state.settings and state.settings.driverTakeoverEnabled ~= false
   local command =
-    "extensions.load('roadmind_controller'); " ..
+    "if type(roadmind_controller) == 'table' " ..
+    "and type(roadmind_controller.setDriverTakeoverEnabled) == 'function' " ..
+    "and type(roadmind_controller.setTargetSpeed) == 'function' " ..
+    "and type(roadmind_controller.setEnabled) == 'function' then " ..
     "roadmind_controller.setDriverTakeoverEnabled(" .. boolString(takeoverEnabled) .. "); " ..
     "roadmind_controller.setTargetSpeed(" .. string.format("%.2f", ROUTE_MAX_SPEED_MPS) .. "); " ..
-    "if not roadmind_controller.setEnabled(true) then error('RoadMind: controller could not arm') end"
+    "if not roadmind_controller.setEnabled(true) then log('E', 'roadmind', 'Vehicle controller could not arm') end " ..
+    "else log('E', 'roadmind', 'Vehicle route controller is unavailable; route pilot was not armed') end"
   if not queueVehicleCommand(vehicle, command) then
     return false, "Could not queue the autonomous controller start command"
   end
@@ -901,7 +907,7 @@ local function stopNativeRouteController(vehicle)
   state.controllerPathTimestamp = nil
   if not vehicle then return false end
   return queueVehicleCommand(vehicle,
-    "extensions.load('roadmind_controller'); " ..
+    "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
     "if roadmind_controller then roadmind_controller.setSafetyStop('route_safety_supervisor') end"
   )
 end
@@ -910,7 +916,7 @@ state._roadmindHelpers.disableNativeRouteController = function(vehicle)
   state.controllerPathTimestamp = nil
   if not vehicle then return false end
   return queueVehicleCommand(vehicle,
-    "extensions.load('roadmind_controller'); " ..
+    "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
     "if roadmind_controller then roadmind_controller.setEnabled(false) end"
   )
 end
@@ -1308,7 +1314,7 @@ state._roadmindHelpers.detachPreviousVehicle = function()
   if state.activeVehicle then
     if (state.adasLastBrakeCommand or 0) > 0 then
       queueVehicleCommand(state.activeVehicle,
-        "extensions.load('roadmind_controller'); " ..
+        "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
         "if roadmind_controller then roadmind_controller.setAebBrake(0) end")
       state.adasLastBrakeCommand = 0
     end
@@ -2435,7 +2441,7 @@ function M.setSetting(key, value)
   if key == "performanceProfilerEnabled" then M.performanceProfiler.reset() end
   if key == "driverTakeoverEnabled" and state.routePilotEnabled and state.activeVehicle then
     queueVehicleCommand(state.activeVehicle,
-      "extensions.load('roadmind_controller'); " ..
+      "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
       "if roadmind_controller then roadmind_controller.setDriverTakeoverEnabled(" .. boolString(value) .. ") end")
   end
   if key == "adasEnabled" or key == "adasAEBEnabled" then
@@ -2451,7 +2457,7 @@ function M.setSetting(key, value)
     if not normalized.adasEnabled or not normalized.adasAEBEnabled then
       if state.activeVehicle and (state.adasLastBrakeCommand or 0) > 0 then
         queueVehicleCommand(state.activeVehicle,
-          "extensions.load('roadmind_controller'); " ..
+          "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
           "if roadmind_controller then roadmind_controller.setAebBrake(0) end")
       end
       state.adasLastBrakeCommand = 0
@@ -2469,7 +2475,7 @@ function M.setSetting(key, value)
     state.adasLastCruiseCommand = ROUTE_MAX_SPEED_MPS
     if state.routePilotEnabled and state.activeVehicle then
       queueVehicleCommand(state.activeVehicle,
-        "extensions.load('roadmind_controller'); " ..
+        "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
         "if roadmind_controller then roadmind_controller.setTargetSpeed(" ..
         string.format("%.2f", ROUTE_MAX_SPEED_MPS) .. ") end")
     end
@@ -2547,7 +2553,7 @@ function M.setVisualizationEnabled(enabled)
   else
     if state.activeVehicle and (state.adasLastBrakeCommand or 0) > 0 then
       queueVehicleCommand(state.activeVehicle,
-        "extensions.load('roadmind_controller'); " ..
+        "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
         "if roadmind_controller then roadmind_controller.setAebBrake(0) end")
       state.adasLastBrakeCommand = 0
     end
@@ -5644,7 +5650,7 @@ state._roadmindHelpers.setADASBrakeOutput = function(brake)
   if math.abs(brake - previous) < 0.08 and (brake > 0) == (previous > 0) then return end
   state.adasLastBrakeCommand = brake
   if not state.activeVehicle then return end
-  local command = "extensions.load('roadmind_controller'); " ..
+  local command = "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
     "if roadmind_controller then roadmind_controller.setAebBrake(" ..
     string.format("%.3f", brake) .. ") end"
   queueVehicleCommand(state.activeVehicle, command)
@@ -5705,7 +5711,7 @@ state._roadmindHelpers.updateADAS = function(dt)
     if state.routePilotEnabled and state.activeVehicle
         and state.adasLastCruiseCommand ~= ROUTE_MAX_SPEED_MPS then
       queueVehicleCommand(state.activeVehicle,
-        "extensions.load('roadmind_controller'); " ..
+        "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
         "if roadmind_controller then roadmind_controller.setTargetSpeed(" ..
         string.format("%.2f", ROUTE_MAX_SPEED_MPS) .. ") end")
       state.adasLastCruiseCommand = ROUTE_MAX_SPEED_MPS
@@ -5900,7 +5906,7 @@ state._roadmindHelpers.updateADAS = function(dt)
   local cruiseTarget = settings.adasACCEnabled == true and targetSpeed or ROUTE_MAX_SPEED_MPS
   if state.routePilotStarted
       and math.abs(cruiseTarget - (state.adasLastCruiseCommand or ROUTE_MAX_SPEED_MPS)) >= 0.25 then
-    local command = "extensions.load('roadmind_controller'); " ..
+    local command = "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
       "if roadmind_controller then roadmind_controller.setTargetSpeed(" ..
       string.format("%.2f", cruiseTarget) .. ") end"
     queueVehicleCommand(state.activeVehicle, command)
