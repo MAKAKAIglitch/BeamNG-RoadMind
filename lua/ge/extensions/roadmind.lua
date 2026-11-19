@@ -3137,7 +3137,8 @@ state._roadmindHelpers.updateDetectedVehicleRenderStates = function(dt)
 
   local rendered = 0
   local candidates = state.latestData and state.latestData.vehicles or state.vehicleCandidates
-  for i = 1, math.min(#(candidates or {}), MAX_RENDERED_VEHICLE_BOXES) do
+  for i = 1, #(candidates or {}) do
+    if rendered >= MAX_RENDERED_VEHICLE_BOXES then break end
     local candidate = candidates[i]
     if candidate.visibility ~= "occluded" then
       local key = tostring(candidate.sourceVehicleId or candidate.id)
