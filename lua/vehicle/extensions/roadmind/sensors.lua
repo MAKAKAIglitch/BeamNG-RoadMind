@@ -757,7 +757,8 @@ local function buildEmptyFrame()
     geometryDebug = nil,
     detectionZones = {},
     vehicleVelocity = nil,
-    vehiclePose = nil
+    vehiclePose = nil,
+    performance = nil
   }
 end
 
@@ -781,6 +782,7 @@ local function publish()
     sequence = state.sequence,
     updatedSensors = updates,
     vehiclePose = frame.vehiclePose,
+    performance = frame.performance,
     -- Mounts/coverage volumes are cheap pose-only data. Publish separately
     -- from scan returns so GE can re-anchor them without triggering raycasts.
     attachedVisuals = {
@@ -1113,6 +1115,8 @@ function M.updateGFX(dt)
   -- Round-robin over five independent jobs. A graphics frame handles at most
   -- one due scan/pose/zone job, spreading simultaneous deadlines over frames.
   local selectedJob = nil
+  local sensorJobStartedAt = type(os) == "table" and type(os.clock) == "function"
+    and os.clock() or nil
   for offset = 0, 4 do
     local job = ((state.schedulerCursor + offset - 1) % 5) + 1
     if job == 1 and lidarDue then
@@ -1167,10 +1171,18 @@ function M.updateGFX(dt)
     -- against the same vehicle pose sent with this payload; GE can then attach
     -- them to the live car transform without increasing the raycast budget.
     refreshAttachedVisuals(frame)
+    if selectedJob ~= nil and sensorJobStartedAt then
+      local jobNames = {"lidar", "radar", "ultrasonic", "pose", "detection_zones"}
+      state.frame.performance = {
+        job = jobNames[selectedJob],
+        elapsedMs = math.max(0, (os.clock() - sensorJobStartedAt) * 1000)
+      }
+    end
     state.frame.enabled = true
     state.frame.updatedSensors = updatedSensors
     publish()
     state.frame.updatedSensors = {}
+    state.frame.performance = nil
   end
 end
 
