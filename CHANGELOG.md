@@ -26,6 +26,8 @@
 
 ## Unreleased — native Lua autonomous controller
 
+- Place the Vehicle Lua controller at `lua/vehicle/extensions/roadmind/controller.lua`, matching the `roadmind_controller` extension name resolved by BeamNG; guard missing-controller commands to avoid fatal nil dereferences and repeated load attempts.
+
 - Add a native Vehicle Lua trajectory controller with Pure Pursuit-style steering and bounded PI speed control.
 - Route the selected safe planner trajectory directly to the vehicle controller; route following no longer delegates to BeamNG's built-in Vehicle AI.
 - Add direct steering, throttle and brake actuation through Vehicle Lua input events.
