@@ -21,8 +21,8 @@ Phase 9 is implemented as a bounded local planner. Phase 10 now has its first na
 
 - [x] Forward virtual LiDAR with 120° horizontal field of view.
 - [x] Configurable 9/26/51-ray scan density and scan frequency up to 4 Hz.
-- [ ] Make vertical LiDAR layers predictable and useful: one layer points straight ahead horizontally; two layers add a downward ray while retaining the horizontal ray; three layers add an upward ray as well.
-- [ ] Keep horizontal-only as the lowest-cost default; do not make the one-layer mode point at the ground.
+- [x] Make vertical LiDAR layers predictable and useful: one layer points straight ahead horizontally; two layers add a downward ray while retaining the horizontal ray; three layers add an upward ray as well.
+- [x] Keep horizontal-only as the lowest-cost default; do not make the one-layer mode point at the ground.
 - [ ] Verify the generated directions and displayed beams on vehicles with different roof heights and pitch angles.
 - [x] Static and dynamic scene-raycast returns.
 - [x] In-world ray and hit-point visualization.
@@ -82,12 +82,12 @@ Phase 9 is implemented as a bounded local planner. Phase 10 now has its first na
 - [x] Exclude the player's vehicle, invalid OBBs and entries reported as deleted/destroyed; each new snapshot replaces stale entries.
 - [x] Refresh the registry on a controlled 0.5 s schedule instead of scanning the list from each sensor.
 - [x] Define sensor-specific detection volumes from calibrated mount position, orientation, range and horizontal/vertical FOV.
-- [ ] Add camera-specific vehicle observations for every configured camera: windshield, side/mirror, rear and rear-corner views; a vehicle behind the player must be eligible for detection by the rear cameras.
-- [ ] Require a target vehicle OBB to intersect at least one active camera's range and frustum before publishing a camera observation; merge overlapping camera observations into one tracked vehicle with multiple camera sources.
-- [ ] Make camera-based vehicle detection independent of LiDAR being enabled. LiDAR remains an obstacle/geometry sensor and is not required to discover or track other vehicles.
-- [ ] Use the vehicle registry only as an efficient candidate broad phase; camera visibility must still pass per-camera frustum and line-of-sight/occlusion checks before a target is marked visible.
-- [ ] Cache visibility results and spread bounded occlusion checks over time; never cast a ray for every vehicle-camera pair every render frame.
-- [ ] Keep camera-frustum/registry observations explicitly labelled simulator-assisted, not RGB image recognition; retain optional radar observations as a separate source.
+- [x] Add camera-specific vehicle observations for every configured camera: windshield, side/mirror, rear and rear-corner views; a vehicle behind the player must be eligible for detection by the rear cameras.
+- [x] Require a target vehicle OBB to intersect at least one active camera's range and frustum before publishing a camera observation; merge overlapping camera observations into one tracked vehicle with multiple camera sources.
+- [x] Make camera-based vehicle detection independent of LiDAR being enabled. LiDAR remains an obstacle/geometry sensor and is not required to discover or track other vehicles.
+- [x] Use the vehicle registry only as an efficient candidate broad phase; camera visibility must still pass per-camera frustum and line-of-sight/occlusion checks before a target is marked visible.
+- [x] Cache visibility results and spread bounded occlusion checks over time; never cast a ray for every vehicle-camera pair every render frame.
+- [x] Keep camera-frustum/registry observations explicitly labelled simulator-assisted, not RGB image recognition; retain optional radar observations as a separate source.
 - [x] Use a distance broad phase and projected OBB radii before detailed sensor-volume checks.
 - [x] Test the target vehicle's complete OBB against each detection volume, not only its center.
 - [x] Apply per-sensor horizontal/vertical coverage and minimum/maximum range.
@@ -194,10 +194,10 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 - [ ] Add an independent safety supervisor for stale sensors, invalid routes, blocked paths and controller faults.
 - [ ] Add a dedicated autopilot enable/disable binding.
 - [ ] Keep manual control available and make driver handover immediate.
-- [ ] Add configurable driver-intervention takeover for route pilot/autopilot: when the player deliberately applies steering, throttle or brake, transfer control back to the player immediately.
-- [ ] Enable manual takeover by default, while allowing the user to disable it explicitly.
-- [ ] Detect actual input/action values and analog axes through BeamNG's input system so wheel, gamepad, keyboard and user-remapped bindings work; do not hard-code key names or assume default bindings.
-- [ ] Ignore camera look/orbit input when deciding whether the driver has taken control; camera movement is not vehicle-control input.
+- [x] Add configurable driver-intervention takeover for route pilot/autopilot: when the player deliberately applies steering, throttle or brake, transfer control back to the player immediately.
+- [x] Enable manual takeover by default, while allowing the user to disable it explicitly.
+- [x] Detect actual input/action values and analog axes through BeamNG's input system so wheel, gamepad, keyboard and user-remapped bindings work; do not hard-code key names or assume default bindings.
+- [x] Ignore camera look/orbit input when deciding whether the driver has taken control; camera movement is not vehicle-control input.
 - [ ] Define unambiguous controller ownership and re-engagement rules so RoadMind never fights the player's steering/throttle/brake inputs.
 - [ ] Add parking-space boundary and occupancy estimation.
 - [ ] Plan low-speed parking maneuvers, including reverse and multi-point maneuvers where needed.
@@ -281,10 +281,10 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 - [ ] Add trailer-aware rear-assistance behavior: disable or mark unavailable rear parking/ultrasonic/camera functions only when the attached trailer physically blocks their view; keep unobstructed side/rear coverage active.
 - [ ] Keep trailer-camera support as an optional future extension, not a requirement for the first trailer-aware release.
 - [ ] Add coordinated status/configuration for vehicle stability aids (ABS, ESC, traction control/TCS) only where the active vehicle exposes a reliable control or state interface; report unsupported systems instead of showing nonfunctional universal switches.
-- [ ] Add a dedicated pause-menu entry named **RoadMind ADAS** (subtitle: Advanced Driver Assistance Systems), separate from the existing RoadMind settings entry.
-- [ ] Move ADAS/autopilot controls and their status/warnings into the dedicated RoadMind ADAS page; keep core sensor layout, calibration, scan density and performance controls in RoadMind settings.
+- [x] Add a dedicated pause-menu entry named **RoadMind ADAS** (subtitle: Advanced Driver Assistance Systems), separate from the existing RoadMind settings entry.
+- [x] Move ADAS/autopilot controls and their status/warnings into the dedicated RoadMind ADAS page; keep core sensor layout, calibration, scan density and performance controls in RoadMind settings.
 - [ ] Include clear independent controls for FCW, AEB, ACC, blind-spot/rear-cross-traffic alerts, parking assistance, LDW/LKA, lane centering, stability-aid integration and autopilot takeover behavior as each feature becomes available.
-- [ ] Keep the main RoadMind settings page focused on sensors, acquisition, calibration, road/route data, diagnostics and performance.
+- [x] Keep the main RoadMind settings page focused on sensors, acquisition, calibration, road/route data, diagnostics and performance.
 - [ ] Add manual-driving ACC only after reliable lead-vehicle tracking and speed-control arbitration are validated.
 
 **Status:** code-level prototype committed; ADAS and visualization behavior have not yet been verified in a live BeamNG.drive session. Assistance thresholds are heuristics, not a collision guarantee.
@@ -350,17 +350,17 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 
 **Goal:** provide a lightweight in-game mini-application that visualizes the interpreted environment, similar in purpose to a modern vehicle perception display, without duplicating sensor simulation or rendering a second heavy scene.
 
-- [ ] Add a separate compact **RoadMind Perception** application/window with a dark, restrained, high-contrast interface.
-- [ ] Provide a rear-follow presentation that tracks the player's vehicle from behind (similar to BeamNG's vehicle-follow camera framing) and a switchable top-down/overhead road view.
-- [ ] Draw a simple stylized vehicle silhouette, road corridor, known lane boundaries, route path and surrounding detected entities in a flat 2D/Canvas-style view; avoid shaders and expensive 3D post-processing.
-- [ ] Visualize tracked cars as vehicle-shaped markers/OBBs, buildings/walls as bounded obstacle shapes, and other objects according to their world-model class when that class is known.
+- [x] Add a separate compact **RoadMind Perception** application/window with a dark, restrained, high-contrast interface.
+- [x] Provide a rear-follow-style 2D projection and a switchable top-down/overhead road view. This is a perception-map projection, not a live game camera.
+- [x] Draw stylized vehicle markers, the NavGraph road-centreline corridor, the active route and surrounding detected targets in a flat SVG view; lane boundaries are not fabricated.
+- [x] Visualize tracked cars as vehicle-shaped OBB markers and raycast obstacle clusters as generic obstacle points; unsupported object classes are not invented.
 - [ ] Show traffic signs and traffic lights with concise text/state labels (for example, speed limit, STOP, parking restriction, turn warning, SIGNAL: RED) and their current camera/visibility status.
 - [ ] Show lane lines only when measured or supported by map geometry; render an explicit unknown/unavailable state when lane data is missing.
 - [ ] Display object distance, relative speed when available, track confidence/age and source sensor/camera on selection or in a compact details strip.
 - [ ] Use textual statuses such as VISIBLE, OCCLUDED, PREDICTED, STALE and UNKNOWN alongside restrained visual accents; do not make meaning depend on color or emoji alone.
-- [ ] Reuse the latest bounded World Model and road/route snapshots. The application must perform no scene raycasts, vehicle-registry scans, physics queries or perception work in its UI/render loop.
-- [ ] Throttle UI data publication, reuse compact snapshots and cap visible objects/road segments so the display remains usable on low- and mid-range hardware.
-- [ ] Avoid a redundant second raw-LiDAR/obstacle debug layer: show the fused interpreted scene and object classes, while the existing sensor visualization remains the detailed diagnostic view.
+- [x] Reuse the latest bounded World Model and road/route snapshots. The application performs no scene raycasts, vehicle-registry scans, physics queries or perception work in its UI/render loop.
+- [x] Throttle UI polling, reuse compact snapshots and cap targets, obstacles and displayed road points.
+- [x] Avoid a redundant second raw-LiDAR/obstacle debug layer: show the fused interpreted scene and object classes, while the existing sensor visualization remains the detailed diagnostic view.
 - [ ] Add controls for view mode, labels, object categories and display scale; keep the display optional and independently disableable.
 - [ ] Validate readability, object motion, camera handoff, stale-data presentation and UI overhead in dense traffic and on low-end hardware.
 
