@@ -27,7 +27,7 @@ These are calculated query budgets, not measured FPS or CPU percentages. Actual 
 - **Radar:** enable/disable, 1/2 Hz, low (one ray per radar), medium (up to two per radar) or high (all configured rays).
 - **Ultrasonic:** enable/disable, 1/2 Hz, single-ray or three-ray beam.
 - **Point-cloud accumulation:** optional session-only world-space map, with a configurable 500–10,000 point cap (500-point steps), including hits on other vehicles; clear it at any time.
-- **Visualization inertia:** an independent switch for eligible world-space LiDAR returns and route/planner overlays. Vehicle-mounted origins and geometry, traffic OBBs and LiDAR points attached to tracked vehicle surfaces remain body-locked.
+- **Visualization inertia:** an independent switch for eligible world-space LiDAR returns and route/planner overlays. Vehicle-mounted origins and geometry, traffic OBBs, and tracked LiDAR/radar/ultrasonic points on moving cars remain body-locked.
 - **3D display:** independently show or hide LiDAR, radar, ultrasonic, detected vehicle OBBs, camera frustums and IMU/GNSS markers. The last valid overlays remain frozen while the simulation is paused.
 
 Hiding a 3D overlay does not stop its sensor scans. Turn off the sensor group itself to reduce raycast work. Camera frustums and localization sampling can be disabled independently.
