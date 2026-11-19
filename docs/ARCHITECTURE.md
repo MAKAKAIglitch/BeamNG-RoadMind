@@ -98,6 +98,14 @@ Raw LiDAR returns, timestamped measurements, persistent static scan points, and 
 
 This is a code-level visualization implementation. Smoothness, object association and surface-switch behavior still require in-game verification.
 
+## Vehicle-attached visualization
+
+Vehicle-mounted debug geometry is sampled in Vehicle Lua with a common vehicle pose (position and forward/right/up basis). Mounts and coverage geometry are published as a compact pose-only payload alongside the sensor sequence, separate from raycast return arrays. Game Engine Lua re-expresses those local offsets against the live vehicle pose on the render path.
+
+This keeps LiDAR/radar/ultrasonic origins, camera frustums, sensor mounts, calibration bounds and detection-zone origins attached to the vehicle without generating additional scene raycasts. Radar/ultrasonic hit points remain world-space measurements; only their sensor origins are re-anchored. Moving-vehicle OBB outlines use the track's latest predicted position and orientation rather than a separate damped world-space position that could visibly trail the vehicle.
+
+The accumulated LiDAR cloud and static-scene returns intentionally remain fixed in world coordinates. Render transforms are display-only and do not modify sensor observations or the fused world model.
+
 ## Phase 7 — unified world model
 
 The GE coordinator exposes `extensions.roadmind.getWorldModel()`, which returns an independent deep-copied schema-v2 snapshot in BeamNG world coordinates and metres.
@@ -142,6 +150,12 @@ The active route is previewed in world space and consumed by RoadMind's own Vehi
 The sensor-suite binding is defined in `lua/ge/extensions/core/input/actions/roadmind_actions.json`. The in-game settings page is under `ui/ui-vue/mods/roadmind/`.
 
 The settings page supports performance profiles, sensor density/rates, point-cloud visualization, vehicle-geometry status, manual recalibration and the optional calibration overlay. It follows the game's language (Russian/English).
+
+## ADAS assistance layer
+
+The optional ADAS layer runs against cached observations at a 10 Hz maximum update cadence; it does not perform its own scene raycasts. FCW/AEB use the forward obstacle guard and fresh sensor timestamps, BSM uses confirmed/coasting simulator-assisted vehicle tracks, parking distance uses fresh ultrasonic returns, and LDW uses NavGraph lateral offset. ACC currently adjusts the speed target only while the RoadMind route controller is running.
+
+ADAS is disabled by default and each feature has an independent persistent setting. AEB blends brake input only in manual driving; during active route control, the route safety supervisor owns braking so two control loops do not fight over the same actuator. These are uncalibrated assistance heuristics and require repeatable in-game validation.
 
 ## Sensor model boundaries
 
