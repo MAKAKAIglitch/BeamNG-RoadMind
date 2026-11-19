@@ -26,12 +26,13 @@ The latest calibrated sensor mounts define independent detection volumes. Their 
 - LiDAR uses its 120° horizontal and 16° vertical coverage plus configured range.
 - Each radar uses its own horizontal/vertical coverage and range.
 - Each ultrasonic unit uses its close-range coverage and configured minimum/maximum range.
+- Each of the seven calibrated cameras contributes an independent front, side, rear or rear-corner frustum. Camera detection is controlled separately from the optional 3D frustum overlay and does not require LiDAR.
 
 A target's complete OBB is projected onto the sensor's forward/right/up axes. Broad-phase range filtering happens before the detailed bounds test. Multiple sensors observing the same vehicle produce one candidate record with a list of sensor zones.
 
-Up to two candidate targets per detection cycle receive an occlusion raycast (maximum 20 additional queries/s at the 10 Hz traffic cadence). Candidates are classified as **visible**, **occluded** or **unverified**. The 3D visualizer draws non-occluded candidates before their visibility check completes: green OBB wireframes are confirmed visible, while amber/yellow wireframes are still unverified. Explicitly occluded candidates remain hidden; confirmed-visible targets feed the experimental obstacle guard.
+Up to two candidate/source combinations per detection cycle receive an occlusion raycast. At a 10 Hz traffic cadence this is bounded to 20 additional queries/s, shared across all camera and physical-style sensor zones. A rotating candidate cursor and a per-target rotating source cursor prevent the same two nearest cars or first two cameras from monopolizing the budget. Recent results are cached briefly while the target remains close to its checked position and the source zone is still active. Candidates are classified as **visible**, **occluded** or **unverified**; confirmed-visible targets feed the session-scoped tracker.
 
-This is simulator-assisted vehicle discovery based on the game's vehicle registry and OBB data. It is not a raw physical-style LiDAR or radar point return, and camera frustums do not participate in vehicle recognition. Confirmed-visible candidates feed the implemented session-scoped RoadMind tracker described below; stable identity and visibility behavior still need live-traffic validation.
+Camera detection uses the BeamNG vehicle registry only as a candidate broad phase. The complete target OBB must intersect a calibrated camera frustum, then a Game Engine scene raycast must confirm an unobstructed line of sight to the target. Front, side, rear-wide and rear-corner cameras all participate; multiple camera/sensor zones are merged into one target candidate. This works with LiDAR disabled. In regular BeamNG.drive it is a simulator-assisted camera-visibility model based on OBBs and scene geometry, not RGB image recognition. The same scene-occlusion test prevents a target from being reported as visible through a wall or another vehicle. Stable handoff, occlusion and visibility behavior still require live-traffic validation.
 
 ## Vehicle tracks and motion estimates
 
@@ -79,7 +80,7 @@ The optional accumulated scan map stores every accepted world-space LiDAR hit, i
 
 The Vehicle Lua scheduler spreads LiDAR, radar, ultrasonic, pose and detection-zone work over successive graphics frames, with at most one due job executed per frame. Vehicle speed optionally changes scan intervals: 1.5× slower below 5 m/s and 0.75× faster at or above 25 m/s.
 
-The forward LiDAR uses 9–33 horizontal samples and 1–3 vertical elevations (up to 99 ray directions; the High preset uses 51, while Economy uses 9). Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
+The forward LiDAR uses 9–33 horizontal samples and 1–3 vertical elevations (up to 99 ray directions; the High preset uses 51, while Economy uses 9). The first elevation is always horizontal and forward; the second adds a downward layer; the third adds an upward layer. Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
 
 The scanner is intentionally forward-facing, not a 360° roof scanner.
 
@@ -113,9 +114,9 @@ Seven camera mounts show the intended view coverage:
 6. Rear left
 7. Rear right
 
-Each mount has its own 3D frustum using its position, orientation, horizontal FOV, vertical FOV and visualization distance.
+Each mount has its own calibrated frustum using its vehicle-local position, orientation, horizontal FOV, vertical FOV and coverage distance. These same frustums are used for camera-based vehicle candidate filtering even when the debug frustum overlay is hidden.
 
-In regular BeamNG.drive, this prototype does not read a camera image stream or perform image recognition. Native rendered camera/depth/semantic sensor access belongs to the BeamNG.tech sensor system.
+In regular BeamNG.drive, RoadMind does not read RGB frames or perform pixel-level image recognition. Vehicle candidates come from the game's OBB registry, are filtered through these camera frustums, and then pass a bounded scene-raycast line-of-sight check. Native rendered camera/depth/semantic sensor access belongs to BeamNG.tech.
 
 ## Localization and motion
 
