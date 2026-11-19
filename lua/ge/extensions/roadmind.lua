@@ -17,6 +17,7 @@ local DEFAULT_SETTINGS = {
   lidarPointCloudLimit = 5000,
   visualizationInertiaEnabled = true,
   adaptiveFpsEnabled = false,
+  performanceProfilerEnabled = true,
   targetFps = 60,
   speedAdaptiveRateEnabled = true,
   adasEnabled = false,
@@ -218,6 +219,135 @@ local state = {
 }
 
 local checkTimer = 0
+
+local PROFILE_HISTORY_SECONDS = 15
+local PROFILE_STAGES = {
+  {key = "sensor_job"}, {key = "sensor_frame"},
+  {key = "sensor_lidar"}, {key = "sensor_radar"}, {key = "sensor_ultrasonic"},
+  {key = "vehicle_tracking"}, {key = "world_model"}, {key = "planner"},
+  {key = "road_graph"}, {key = "adas"}, {key = "visualization"},
+  {key = "debug_draw"}, {key = "route_safety"}, {key = "ge_update"}
+}
+local performanceClock = type(os) == "table" and type(os.clock) == "function" and os.clock or nil
+local profiler = {
+  current = {}, history = {}, historyCount = 0, historyCursor = 1,
+  elapsed = 0, memoryKb = nil, lastSampleDuration = 0
+}
+
+local function newProfileBucket()
+  return {calls = 0, totalMs = 0, peakMs = 0, lastMs = 0}
+end
+
+for i = 1, #PROFILE_STAGES do
+  profiler.current[PROFILE_STAGES[i].key] = newProfileBucket()
+end
+for sampleIndex = 1, PROFILE_HISTORY_SECONDS do
+  local sample = {duration = 0, stages = {}}
+  for stageIndex = 1, #PROFILE_STAGES do
+    sample.stages[PROFILE_STAGES[stageIndex].key] = newProfileBucket()
+  end
+  profiler.history[sampleIndex] = sample
+end
+
+local function isProfilerEnabled()
+  return performanceClock ~= nil
+    and (state.settings or DEFAULT_SETTINGS).performanceProfilerEnabled == true
+end
+
+local function profileStart()
+  if not isProfilerEnabled() then return nil end
+  return performanceClock()
+end
+
+local function profileRecord(key, elapsedMs)
+  if not isProfilerEnabled() then return end
+  local bucket = profiler.current[key]
+  elapsedMs = tonumber(elapsedMs)
+  if not bucket or not elapsedMs or elapsedMs < 0 or elapsedMs ~= elapsedMs then return end
+  bucket.calls = bucket.calls + 1
+  bucket.totalMs = bucket.totalMs + elapsedMs
+  bucket.lastMs = elapsedMs
+  if elapsedMs > bucket.peakMs then bucket.peakMs = elapsedMs end
+end
+
+local function profileStop(key, startedAt)
+  if startedAt == nil or not isProfilerEnabled() then return end
+  profileRecord(key, math.max(0, (performanceClock() - startedAt) * 1000))
+end
+
+local function resetProfilerHistory()
+  profiler.historyCount, profiler.historyCursor = 0, 1
+  profiler.elapsed, profiler.memoryKb, profiler.lastSampleDuration = 0, nil, 0
+  for i = 1, #PROFILE_STAGES do
+    local bucket = profiler.current[PROFILE_STAGES[i].key]
+    bucket.calls, bucket.totalMs, bucket.peakMs, bucket.lastMs = 0, 0, 0, 0
+  end
+  for sampleIndex = 1, PROFILE_HISTORY_SECONDS do
+    local sample = profiler.history[sampleIndex]
+    sample.duration = 0
+    for stageIndex = 1, #PROFILE_STAGES do
+      local bucket = sample.stages[PROFILE_STAGES[stageIndex].key]
+      bucket.calls, bucket.totalMs, bucket.peakMs, bucket.lastMs = 0, 0, 0, 0
+    end
+  end
+end
+
+local function advanceProfiler(dt)
+  if not isProfilerEnabled() then return end
+  profiler.elapsed = profiler.elapsed + math.max(0, tonumber(dt) or 0)
+  if profiler.elapsed < 1.0 then return end
+
+  local duration = profiler.elapsed
+  profiler.elapsed = profiler.elapsed % 1.0
+  local sample = profiler.history[profiler.historyCursor]
+  sample.duration = duration
+  profiler.lastSampleDuration = duration
+  for i = 1, #PROFILE_STAGES do
+    local key = PROFILE_STAGES[i].key
+    local current, stored = profiler.current[key], sample.stages[key]
+    stored.calls, stored.totalMs = current.calls, current.totalMs
+    stored.peakMs, stored.lastMs = current.peakMs, current.lastMs
+    current.calls, current.totalMs, current.peakMs, current.lastMs = 0, 0, 0, 0
+  end
+  profiler.historyCursor = (profiler.historyCursor % PROFILE_HISTORY_SECONDS) + 1
+  profiler.historyCount = math.min(PROFILE_HISTORY_SECONDS, profiler.historyCount + 1)
+  if type(collectgarbage) == "function" then
+    local ok, memory = pcall(collectgarbage, "count")
+    if ok and type(memory) == "number" then profiler.memoryKb = memory end
+  end
+end
+
+local function getProfilerSnapshot()
+  local enabled = isProfilerEnabled()
+  local result = {
+    enabled = enabled, available = performanceClock ~= nil,
+    historySeconds = profiler.historyCount,
+    memoryKb = profiler.memoryKb and round2(profiler.memoryKb) or nil,
+    stages = {}
+  }
+  if not enabled then return result end
+  local oldest = ((profiler.historyCursor - profiler.historyCount - 1) % PROFILE_HISTORY_SECONDS) + 1
+  for stageIndex = 1, #PROFILE_STAGES do
+    local key = PROFILE_STAGES[stageIndex].key
+    local calls, totalMs, peakMs, lastMs, duration = 0, 0, 0, nil, 0
+    for offset = 0, profiler.historyCount - 1 do
+      local sampleIndex = ((oldest + offset - 1) % PROFILE_HISTORY_SECONDS) + 1
+      local sample, bucket = profiler.history[sampleIndex], profiler.history[sampleIndex].stages[key]
+      calls = calls + bucket.calls
+      totalMs = totalMs + bucket.totalMs
+      peakMs = math.max(peakMs, bucket.peakMs)
+      if bucket.calls > 0 then lastMs = bucket.lastMs end
+      duration = duration + sample.duration
+    end
+    result.stages[#result.stages + 1] = {
+      key = key, calls = calls,
+      callsPerSecond = duration > 0 and round2(calls / duration) or 0,
+      avgMs = calls > 0 and round2(totalMs / calls) or 0,
+      peakMs = round2(peakMs), lastMs = lastMs and round2(lastMs) or nil
+    }
+  end
+  return result
+end
 
 -- Forward declarations used by the sensor-frame and world-model pipeline.
 local buildLidarRenderPoints, buildWorldModel, trimPersistentLidarPoints, updateLocalTrajectoryPlanner
@@ -1707,6 +1837,7 @@ local function normalizeSettings(source)
     "lidarPersistenceEnabled", "visualizationInertiaEnabled",
     "showLidar", "showRadar", "showUltrasonic", "showCameras",
     "showLocalization", "showDetectedVehicles", "showCalibration",
+    "performanceProfilerEnabled",
     "adasEnabled", "adasFCWEnabled", "adasAEBEnabled", "adasACCEnabled",
     "adasBSMEnabled", "adasParkingEnabled", "adasLDWEnabled"
   }
@@ -1856,6 +1987,7 @@ local function settingsResult()
         and state.performanceFps ~= nil
         and state.performanceFps < (settings.targetFps or 60) * 0.92,
       speedAdaptiveRateEnabled = settings.speedAdaptiveRateEnabled ~= false,
+      profiler = getProfilerSnapshot(),
       trafficUpdateHz = 1 / math.max(0.01,
         state.currentTrafficUpdateInterval or VEHICLE_DETECTION_INTERVAL),
       vehicleRegistryCount = #state.vehicleRegistry,
@@ -1978,7 +2110,8 @@ function M.setSetting(key, value)
 
   local candidate = copySettings(state.settings)
   candidate[key] = value
-  if key ~= "preset" and not tostring(key):match("^adas") then candidate.preset = "custom" end
+  if key ~= "preset" and key ~= "performanceProfilerEnabled"
+      and not tostring(key):match("^adas") then candidate.preset = "custom" end
   local normalized = normalizeSettings(candidate)
 
   if type(DEFAULT_SETTINGS[key]) == "boolean" and type(value) ~= "boolean" then
@@ -2012,6 +2145,7 @@ function M.setSetting(key, value)
     return {ok = false, error = "Target FPS must be 30–165 in steps of 5"}
   end
   state.settings = normalized
+  if key == "performanceProfilerEnabled" then resetProfilerHistory() end
   if key == "adasEnabled" or key == "adasAEBEnabled" then
     if normalized.adasEnabled then
       state.adas = {
@@ -3377,6 +3511,15 @@ local function finiteWorldVector(value)
   return {x = x, y = y, z = z}
 end
 
+local function buildTimedWorldModel()
+  local builder = buildWorldModel
+  if type(builder) ~= "function" then return nil end
+  local startedAt = profileStart()
+  local result = builder()
+  profileStop("world_model", startedAt)
+  return result
+end
+
 local function cloneWorldModelValue(value)
   if type(value) ~= "table" then return value end
   local result = {}
@@ -4450,6 +4593,14 @@ updateLocalTrajectoryPlanner = function()
       sampleCount = #centerlineSamples
     })
 end
+
+local updateLocalTrajectoryPlannerImpl = updateLocalTrajectoryPlanner
+updateLocalTrajectoryPlanner = function()
+  local startedAt = profileStart()
+  local result = updateLocalTrajectoryPlannerImpl()
+  profileStop("planner", startedAt)
+  return result
+end
 local function refreshVehicleRegistry()
   local registry = {}
   local examined = 0
@@ -4900,7 +5051,7 @@ local function updateVehicleDetection(dt)
   if state.latestData then
     state.latestData.vehicles = candidates
     state.latestData.tracks = tracks
-    state.worldModel = buildWorldModel and buildWorldModel() or state.worldModel
+    state.worldModel = buildWorldModel and buildTimedWorldModel() or state.worldModel
   end
 end
 
@@ -5484,6 +5635,7 @@ local function mergeSensorFrame(frame)
   latest.sequence = frame.sequence
 
   if updates.lidar == true then
+    local sensorStartedAt = profileStart()
     latest.lidar = processLidar(frame.lidar)
     latest.lidar.scanTimestamp = state.simulationTime
     latest.lidar.scanSequence = tonumber(frame.sequence) or 0
@@ -5493,8 +5645,10 @@ local function mergeSensorFrame(frame)
     latest.sensorTimestamps.lidar = state.simulationTime
     rememberLidarPoints(latest.lidar)
     buildLidarRenderPoints(latest.lidar)
+    profileStop("sensor_lidar", sensorStartedAt)
   end
   if updates.radar == true then
+    local sensorStartedAt = profileStart()
     latest.radar = processRadar(frame.radar)
     attachTrackedVehicleReturns(latest.radar.returns)
     latest.radar.scanTimestamp = state.simulationTime
@@ -5503,8 +5657,10 @@ local function mergeSensorFrame(frame)
       latest.radar.returns[i].measurementTimestamp = state.simulationTime
     end
     latest.sensorTimestamps.radar = state.simulationTime
+    profileStop("sensor_radar", sensorStartedAt)
   end
   if updates.ultrasonic == true then
+    local sensorStartedAt = profileStart()
     latest.ultrasonic = processUltrasonic(frame.ultrasonic)
     attachTrackedVehicleReturns(latest.ultrasonic.returns)
     latest.ultrasonic.scanTimestamp = state.simulationTime
@@ -5513,6 +5669,7 @@ local function mergeSensorFrame(frame)
       latest.ultrasonic.returns[i].measurementTimestamp = state.simulationTime
     end
     latest.sensorTimestamps.ultrasonic = state.simulationTime
+    profileStop("sensor_ultrasonic", sensorStartedAt)
   end
   if updates.detectionZones == true then
     latest.detectionZones = type(frame.detectionZones) == "table"
@@ -5567,7 +5724,12 @@ function M.onSensorData(encodedFrame)
     resetFrame()
     return
   end
+  if type(frame.performance) == "table" then
+    profileRecord("sensor_job", frame.performance.elapsedMs)
+  end
+  local sensorFrameStartedAt = profileStart()
   mergeSensorFrame(frame)
+  profileStop("sensor_frame", sensorFrameStartedAt)
 end
 
 
@@ -5636,9 +5798,12 @@ function M.onUpdate(dt)
   if dt < 0 then dt = 0 end
   if not state.visualizationEnabled then return end
 
+  local geUpdateStartedAt = profileStart()
   updateAdaptivePerformance(dt)
   state.frameAge = state.frameAge + dt
+  local adasStartedAt = profileStart()
   updateADAS(dt)
+  profileStop("adas", adasStartedAt)
   local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
   local routePilotActive = state.routePilotEnabled
 
@@ -5654,22 +5819,36 @@ function M.onUpdate(dt)
     state.roadUpdateTimer = (state.roadUpdateTimer or 0) + dt
     if state.roadUpdateTimer >= 0.5 then
       state.roadUpdateTimer = state.roadUpdateTimer % 0.5
+      local roadStartedAt = profileStart()
       updateRoadUnderstanding()
+      profileStop("road_graph", roadStartedAt)
     end
+    local trackingStartedAt = profileStart()
     updateVehicleDetection(dt)
+    profileStop("vehicle_tracking", trackingStartedAt)
     if visualFrameFresh then
       updateLidarRenderPoints(dt)
       updateDetectedVehicleRenderStates(dt)
     end
-    if routePilotActive then updateRoutePilotSafety(dt) end
+    if routePilotActive then
+      local safetyStartedAt = profileStart()
+      updateRoutePilotSafety(dt)
+      profileStop("route_safety", safetyStartedAt)
+    end
   end
   -- Advance render-only inertia at display cadence. This covers own-vehicle
   -- bounds/axes/mounts, radar and ultrasonic returns, camera frustums,
   -- localization, traffic origins, route lines and planner candidates.
+  local visualizationStartedAt = profileStart()
   updateVisualizationRenderState(dt)
+  profileStop("visualization", visualizationStartedAt)
 
   -- Keep redrawing the last valid snapshot while the simulation is paused.
+  local drawStartedAt = profileStart()
   drawFrame()
+  profileStop("debug_draw", drawStartedAt)
+  profileStop("ge_update", geUpdateStartedAt)
+  advanceProfiler(dt)
 end
 
 function M.onVehicleDestroyed(vehicleId)
@@ -5737,7 +5916,7 @@ end
 
 function M.getWorldModel()
   if not state.worldModel and buildWorldModel then
-    state.worldModel = buildWorldModel()
+    state.worldModel = buildTimedWorldModel()
   end
   if not state.worldModel then
     return {
