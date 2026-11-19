@@ -15,6 +15,7 @@
 - Publish vehicle pose and pose-only sensor-mount updates independently from raycast returns.
 - Re-anchor mounted sensors, camera frustums, calibration geometry and detection zones to the live vehicle pose during rendering.
 - Remove independent world-space smoothing from tracked traffic OBB centres so boxes follow their tracked/predicted vehicle poses.
+- Bypass world-space easing for vehicle-mounted overlays and render LiDAR points on tracked vehicle surfaces directly from their OBB-local coordinates.
 
 
 
