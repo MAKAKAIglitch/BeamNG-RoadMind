@@ -16,6 +16,8 @@
 - Re-anchor mounted sensors, camera frustums, calibration geometry and detection zones to the live vehicle pose during rendering.
 - Remove independent world-space smoothing from tracked traffic OBB centres so boxes follow their tracked/predicted vehicle poses.
 - Bypass world-space easing for vehicle-mounted overlays and render LiDAR points on tracked vehicle surfaces directly from their OBB-local coordinates.
+- Reproject radar and ultrasonic hit points on tracked vehicles from OBB-local surface coordinates; expire attached returns when the target track is lost.
+- Deep-copy attached visual frames before render transforms so the source measurements and World Model remain immutable.
 
 
 
