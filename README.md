@@ -26,6 +26,8 @@ Open **ESC → Mods → RoadMind** (BeamNG.drive 0.39+). The bilingual settings 
 - LiDAR enable, profile-controlled resolution, frequency and range.
 - Radar and ultrasonic enable, ray density and frequency.
 - Independent switches for 3D sensor overlays.
+- A dedicated ADAS panel with a master switch and separate FCW, AEB, ACC, blind-spot, parking-distance and lane-departure toggles.
+- Live ADAS state and warning indicators, with missing/stale sensor data reported explicitly.
 - OBB-based vehicle geometry status, manual recalibration and an optional bounds/axes/sensor-mount overlay.
 - A tracked-object list showing RoadMind IDs, track state, estimated speed, relative speed, data age, confidence and sensor-zone sources.
 - Green/yellow oriented vehicle-box outlines for visible and not-yet-verified vehicle candidates.
@@ -42,6 +44,21 @@ The 3D beams and returns are drawn directly into the game world; there is no sep
 ### Experimental road route pilot
 
 The Mods page includes an experimental NavGraph route pilot. It accepts up to 12 ordered world-coordinate points (`X, Y, Z` in metres), builds a connected path on the current map and reports route progress and road localization. The pilot switches to the Balanced sensor profile; enabled, fresh sensor streams and confirmed vehicle OBB footprints feed a best-effort safety supervisor. A bounded local planner evaluates five candidate trajectories against obstacle and vehicle footprints.
+
+### ADAS driver assistance
+
+ADAS is off by default and is configured independently in **ESC → Mods → RoadMind**. The master switch and each feature can be toggled separately:
+
+- **FCW:** warns about forward obstacles using fresh enabled sensor returns.
+- **AEB:** can apply brake input during manual driving. During an active RoadMind route it extends the route supervisor's stopping threshold instead of competing with the route controller.
+- **ACC:** adjusts the target speed to keep a gap behind a tracked lead vehicle, currently only while the RoadMind route controller is running.
+- **BSM:** reports confirmed/coasting tracked vehicles in the left and right blind-spot zones.
+- **Parking distance:** displays the nearest fresh ultrasonic return; ultrasonic sensors must be enabled.
+- **LDW:** warns when the vehicle moves laterally away from the current NavGraph road centreline. It does not detect painted lane markings.
+
+FCW/AEB depend on fresh forward sensor data; BSM depends on recent vehicle tracking; LDW depends on reliable NavGraph localization. ADAS is an experimental assistance layer, not a collision guarantee. Its thresholds and vehicle tracking still need in-game validation.
+
+Vehicle-mounted sensor origins, mounts, frustums, calibration geometry and detection zones are now re-anchored to the live vehicle pose for display. Dynamic vehicle OBB boxes use the tracked/predicted vehicle pose instead of a separate world-space smoothing spring. Scene measurements remain in world coordinates; only the visual attachment geometry is transformed.
 
 The first native RoadMind Vehicle Lua controller now tracks the selected safe trajectory with Pure Pursuit-style lateral control and a bounded PI speed controller. It sends steering, throttle and brake inputs directly through BeamNG's Vehicle Lua input system; it no longer delegates route following to the built-in Vehicle AI. The controller runs at 20 Hz, accepts short planner paths (up to 32 points), and latches a full-brake stop when its path feed becomes stale or route tracking is lost. Target speed is capped at 8 m/s (28.8 km/h). The road corridor and turning limits remain conservative NavGraph heuristics, not detected lane boundaries or collision guarantees. This is an initial control foundation, not a validated production autopilot: steering polarity, vehicle-class handling, braking, intersections, traffic behavior and recovery must be tested in-game before relying on it.
 
