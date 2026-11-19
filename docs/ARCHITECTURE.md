@@ -56,13 +56,13 @@ Scene raycasts run only when a sensor scan is due, not in the render loop.
 
 The GE coordinator maintains one shared registry of nearby vehicle OBB snapshots:
 
-- The vehicle list is collected on a 0.5 s schedule, not once per sensor or LiDAR ray.
+- The shared registry and sensor-zone detection refresh at a speed-based 0.30 s / 0.15 s / 0.10 s cadence (below 5 m/s, 5–20 m/s, and at/above 20 m/s respectively), not once per sensor or LiDAR ray.
 - The player vehicle, invalid entries and entries reported as deleted/destroyed are excluded. Entries without usable world OBB data are not registered; each fresh snapshot replaces the previous one.
 - Each registered vehicle stores its ID, OBB center, three axes, half-extents, position and simulator velocity.
 - Detection runs on a separate 0.25 s schedule using the latest sensor frame.
 - Calibrated LiDAR, radar and ultrasonic mounts define their own horizontal/vertical coverage volumes, minimum range and maximum range.
 - A cheap range check precedes OBB projection tests against each sensor volume. One vehicle is emitted once with all sensor zones that contain its OBB.
-- At most four candidate-to-target occlusion raycasts run per detection cycle (up to 16/s). Candidates are classified as visible, occluded or unverified. Only visible targets are drawn and used by the experimental route safety guard.
+- At most two candidate-to-target occlusion raycasts run per detection cycle (up to 20/s at the fastest 10 Hz cadence). Candidates are classified as visible, occluded or unverified. Occluded candidates are hidden; visible and unverified candidates may be drawn with distinct states, while confirmed-visible tracks feed the route safety guard.
 
 This service is **simulator-assisted**: the game provides the list of vehicles and their OBBs. It is not a claim that a physical LiDAR/radar/camera independently recognized the target. Confirmed candidates feed the session-scoped tracker and schema-v2 world model described in [WORLD_MODEL.md](WORLD_MODEL.md).
 
@@ -70,7 +70,7 @@ This service is **simulator-assisted**: the game provides the list of vehicles a
 
 The GE coordinator associates each confirmed-visible simulator-assisted OBB observation with a session-scoped RoadMind track ID (`RM-000001`, etc.). The transient BeamNG vehicle ID is retained only as an internal association key; it is not used as the RoadMind track identifier.
 
-Each track stores the OBB center, dimensions, vehicle orientation, sensor-zone sources, simulator-provided velocity (separately labelled), last-observed simulation timestamp, confidence, data age, missed-scan count and status.
+Each track stores the OBB center, dimensions, vehicle orientation, sensor-zone sources, simulator-provided velocity (separately labelled), last-observed simulation timestamp, confidence, data age, missed-scan count and status. It also retains an internal SceneObject reference and the OBB-center offset in the vehicle's local forward/right/up basis; these are render-only attachments and are not copied into the World Model or exported settings.
 
 Estimated target velocity is derived from successive timestamped OBB-center positions. Estimated relative speed subtracts the current simulator vehicle velocity and projects along the player-to-target direction. Neither value is physical radar Doppler. A short predicted position (capped to a 0.5 s horizon) is exposed separately from the latest observed position.
 
@@ -102,7 +102,9 @@ This is a code-level visualization implementation. Smoothness, object associatio
 
 Vehicle-mounted debug geometry is sampled in Vehicle Lua with a common vehicle pose (position and forward/right/up basis). Mounts and coverage geometry are published as a compact pose-only payload alongside the sensor sequence, separate from raycast return arrays. Game Engine Lua re-expresses those local offsets against the live vehicle pose on the render path.
 
-This keeps LiDAR/radar/ultrasonic origins, camera frustums, sensor mounts, calibration bounds and detection-zone origins attached to the ego vehicle without generating additional scene raycasts. Hits associated with a tracked moving vehicle store an OBB-local surface coordinate and are reconstructed from the latest predicted target pose for LiDAR, radar and ultrasonic display. A tracked surface return is removed when its target track expires instead of being left as a world-space ghost. Moving-vehicle OBB outlines use the track's predicted position and orientation rather than a separate damped world-space position.
+This keeps LiDAR/radar/ultrasonic origins, camera frustums, sensor mounts, calibration bounds and detection-zone origins attached to the ego vehicle without generating additional scene raycasts. Hits associated with a tracked moving vehicle store an OBB-local surface coordinate and are reconstructed from the latest target pose for LiDAR, radar and ultrasonic display. A tracked surface return is removed when its target track expires instead of being left as a world-space ghost.
+
+Traffic OBB outlines use the same live SceneObject transform as the source vehicle: the renderer samples its current position and forward/up basis each graphics frame, then reapplies the stored local OBB-center offset. Dimensions remain the calibrated OBB dimensions. This avoids waiting for the slower registry/tracking cadence before moving the drawn box and prevents world-space smoothing from making a fast vehicle appear to leave its hitbox. If the SceneObject is no longer readable, the render layer falls back to the track's bounded 0.5 s velocity prediction; it does not invent a new measurement. The renderer processes at most 64 OBBs per frame and adds no scene raycasts.
 
 The accumulated LiDAR cloud and static-scene returns intentionally remain fixed in world coordinates. The renderer deep-copies the bounded visual frame before re-anchoring or target reprojection; raw sensor observations and the fused world model are not modified.
 
