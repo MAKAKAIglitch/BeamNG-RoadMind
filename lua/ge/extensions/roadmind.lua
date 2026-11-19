@@ -1526,7 +1526,7 @@ local function findHoveredSensor(candidates)
   end
 
   local ok, ray = pcall(getCameraMouseRay)
-  if not ok or type(ray) ~= "table" then return nil end
+  if not ok or not ray then return nil end
   local origin = asVec3(ray.pos)
   local direction = normalizedVec3(ray.dir)
   if not origin or not direction then return nil end
