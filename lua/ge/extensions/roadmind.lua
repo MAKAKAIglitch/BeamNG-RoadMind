@@ -707,7 +707,7 @@ local function sendControllerPath(vehicle, planner, force)
   return true
 end
 
-local function startNativeRouteAI(vehicle)
+local function startNativeRouteController(vehicle)
   if not vehicle then return false, "No active vehicle" end
 
   local pathIds, pathPoints, pathError
@@ -751,7 +751,7 @@ local function startNativeRouteAI(vehicle)
   return true
 end
 
-local function stopNativeRouteAI(vehicle)
+local function stopNativeRouteController(vehicle)
   state.controllerPathTimestamp = nil
   if not vehicle then return false end
   return queueVehicleCommand(vehicle,
@@ -1155,7 +1155,7 @@ end
 
 local function detachPreviousVehicle()
   if state.activeVehicle then
-    if state.routePilotEnabled then stopNativeRouteAI(state.activeVehicle) end
+    if state.routePilotEnabled then stopNativeRouteController(state.activeVehicle) end
     queueVehicleCommand(
       state.activeVehicle,
       "if roadmind_sensors then roadmind_sensors.setEnabled(false, " .. tostring(state.activeVehicleId) .. ") end"
@@ -2027,7 +2027,7 @@ function M.setVisualizationEnabled(enabled)
     end
   else
     if state.routePilotEnabled and state.activeVehicle then
-      stopNativeRouteAI(state.activeVehicle)
+      stopNativeRouteController(state.activeVehicle)
     end
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
@@ -2069,7 +2069,7 @@ function M.setRoutePilotEnabled(enabled)
 
   if enabled ~= true then
     if state.routePilotEnabled and state.activeVehicle then
-      stopNativeRouteAI(state.activeVehicle)
+      stopNativeRouteController(state.activeVehicle)
       disableNativeRouteController(state.activeVehicle)
     end
     state.routePilotEnabled = false
@@ -2167,7 +2167,7 @@ function M.setRoutePoints(encodedPoints)
   if not pathIds then return {ok = false, error = reason or "Could not build the requested route"} end
 
   if state.routePilotEnabled then
-    stopNativeRouteAI(state.activeVehicle)
+    stopNativeRouteController(state.activeVehicle)
     state.routePilotStarted = false
     state.routeSafetyStopped = true
     state.routePilotError = "Waiting for fresh sensor data"
@@ -2198,7 +2198,7 @@ end
 
 function M.clearRoutePoints()
   if state.routePilotEnabled and state.activeVehicle then
-    stopNativeRouteAI(state.activeVehicle)
+    stopNativeRouteController(state.activeVehicle)
     disableNativeRouteController(state.activeVehicle)
   end
   state.routePilotEnabled = false
@@ -4726,7 +4726,7 @@ local function updateRoutePilotSafety(dt)
 
   if not state.activeVehicle or state.routePilotVehicleId ~= state.activeVehicleId then
     if state.activeVehicle then
-      stopNativeRouteAI(state.activeVehicle)
+      stopNativeRouteController(state.activeVehicle)
       disableNativeRouteController(state.activeVehicle)
     end
     state.routePilotEnabled = false
@@ -4741,7 +4741,7 @@ local function updateRoutePilotSafety(dt)
 
   updateRouteProgress(dt)
   if state.routePilotStarted and (state.routeLostUpdates or 0) >= ROUTE_MAX_LOST_UPDATES then
-    stopNativeRouteAI(state.activeVehicle)
+    stopNativeRouteController(state.activeVehicle)
     state.routePilotStarted = false
     state.routeSafetyStopped = true
     state.routePilotError = "Route localization lost"
@@ -4752,7 +4752,7 @@ local function updateRoutePilotSafety(dt)
 
   if state.frameAge > MAX_FRAME_AGE or not state.latestData then
     if state.routePilotStarted then
-      stopNativeRouteAI(state.activeVehicle)
+      stopNativeRouteController(state.activeVehicle)
       state.routePilotStarted = false
       state.routeSafetyStopped = true
     end
@@ -4763,7 +4763,7 @@ local function updateRoutePilotSafety(dt)
   local planner = updateLocalTrajectoryPlanner()
   if planner.status ~= "ready" or not planner.selectedIndex then
     if state.routePilotStarted then
-      stopNativeRouteAI(state.activeVehicle)
+      stopNativeRouteController(state.activeVehicle)
       state.routePilotStarted = false
       log("W", "roadmind", "Local planner stopped the route pilot: " .. tostring(planner.reasonCode))
     end
@@ -4782,7 +4782,7 @@ local function updateRoutePilotSafety(dt)
   if state.routePilotStarted then
     local sent, sendError = sendControllerPath(state.activeVehicle, planner, false)
     if not sent then
-      stopNativeRouteAI(state.activeVehicle)
+      stopNativeRouteController(state.activeVehicle)
       state.routePilotStarted = false
       state.routeSafetyStopped = true
       state.routePilotError = sendError or "Could not refresh controller trajectory"
@@ -4793,7 +4793,7 @@ local function updateRoutePilotSafety(dt)
   local clearance = nearestForwardObstacle(state.latestData)
   if clearance <= ROUTE_STOP_DISTANCE then
     if state.routePilotStarted then
-      stopNativeRouteAI(state.activeVehicle)
+      stopNativeRouteController(state.activeVehicle)
       state.routePilotStarted = false
       log("W", "roadmind", "Route pilot paused by sensor obstacle guard")
     end
@@ -4808,7 +4808,7 @@ local function updateRoutePilotSafety(dt)
     if position and endpoint then
       local dx, dy, dz = endpoint.x - position.x, endpoint.y - position.y, endpoint.z - position.z
       if math.sqrt(dx * dx + dy * dy + dz * dz) <= ROUTE_DESTINATION_REACHED_M then
-        stopNativeRouteAI(state.activeVehicle)
+        stopNativeRouteController(state.activeVehicle)
         disableNativeRouteController(state.activeVehicle)
         state.routePilotEnabled = false
         state.routePilotStarted = false
@@ -4833,7 +4833,7 @@ local function updateRoutePilotSafety(dt)
       local dx, dy = endpoint.x - position.x, endpoint.y - position.y
       local distance = math.sqrt(dx * dx + dy * dy)
       if distance <= ROUTE_REPLAN_DISTANCE and state.routeRetryCooldown <= 0 then
-        local started, reason = startNativeRouteAI(state.activeVehicle)
+        local started, reason = startNativeRouteController(state.activeVehicle)
         state.routeRetryCooldown = ROUTE_REPLAN_COOLDOWN
         if started then
           state.routePilotError = nil
@@ -4847,7 +4847,7 @@ local function updateRoutePilotSafety(dt)
 
   if state.routeSafetyStopped or not state.routePilotStarted then
     if clearance >= ROUTE_RESUME_DISTANCE and state.routeRetryCooldown <= 0 then
-      local started, reason = startNativeRouteAI(state.activeVehicle)
+      local started, reason = startNativeRouteController(state.activeVehicle)
       if started then
         state.routePilotStarted = true
         state.routeSafetyStopped = false
