@@ -3153,13 +3153,29 @@ local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
 
 end
 
-local function copyVisualizationValue(value)
+local ATTACHED_VISUAL_FIELDS = {
+  lidar = true, radar = true, ultrasonic = true,
+  cameras = true, mounts = true, geometryDebug = true,
+  detectionZones = true, localization = true,
+  vehicles = true, tracks = true
+}
+
+-- Reuse the render-side table tree instead of allocating a full deep copy on
+-- every graphics frame. The source snapshot remains immutable.
+local function copyVisualizationValueInto(value, target)
   if type(value) ~= "table" then return value end
-  local result = {}
+  target = type(target) == "table" and target or {}
   for key, item in pairs(value) do
-    result[key] = copyVisualizationValue(item)
+    if type(item) == "table" then
+      target[key] = copyVisualizationValueInto(item, target[key])
+    else
+      target[key] = item
+    end
   end
-  return result
+  for key in pairs(target) do
+    if value[key] == nil then target[key] = nil end
+  end
+  return target
 end
 
 local function updateVisualizationRenderState(dt)
@@ -3168,20 +3184,19 @@ local function updateVisualizationRenderState(dt)
   local now = state.visualizationRenderClock
   local inertiaEnabled = (state.settings or DEFAULT_SETTINGS).visualizationInertiaEnabled ~= false
   if type(state.latestData) == "table" then
-    local renderFrame = {}
-    local attachedFields = {
-      lidar = true, radar = true, ultrasonic = true,
-      cameras = true, mounts = true, geometryDebug = true,
-      detectionZones = true, localization = true,
-      vehicles = true, tracks = true
-    }
+    local renderFrame = type(state.visualizationRenderFrame) == "table"
+      and state.visualizationRenderFrame or {}
+    -- Drop fields that disappeared from the latest source snapshot.
+    for key in pairs(renderFrame) do
+      if state.latestData[key] == nil then renderFrame[key] = nil end
+    end
     for key, value in pairs(state.latestData) do
       -- Vehicle-mounted geometry and moving-object measurements must not be
       -- eased in world space before the ego-pose re-anchor. Doing so would
       -- introduce a visible lag even after converting back to vehicle-local
       -- coordinates. LiDAR object returns have their own track-local renderer.
-      if attachedFields[key] then
-        renderFrame[key] = copyVisualizationValue(value)
+      if ATTACHED_VISUAL_FIELDS[key] then
+        renderFrame[key] = copyVisualizationValueInto(value, renderFrame[key])
       else
         renderFrame[key] = smoothVisualizationValue(
           value, "frame/" .. tostring(key), dt, now, inertiaEnabled
