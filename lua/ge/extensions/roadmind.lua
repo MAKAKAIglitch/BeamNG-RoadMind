@@ -5103,15 +5103,21 @@ local function updateADAS(dt)
   local lead = settings.adasACCEnabled == true and state.routePilotStarted and registryAvailable
     and getADASLeadVehicle(data, forward, right, position) or nil
   local targetSpeed = ROUTE_MAX_SPEED_MPS
-  if settings.adasACCEnabled == true and state.routePilotStarted and lead then
-    local desiredGap = 5.0 + speed * 1.55
-    local gapFactor = math.max(0, math.min(1, (lead.distance - 3.0) / math.max(1, desiredGap - 3.0)))
-    targetSpeed = math.min(targetSpeed, math.max(0, speed * gapFactor))
-    if lead.targetVelocity then
-      local closingSpeed = (velocity - lead.targetVelocity):dot(forward)
-      if closingSpeed > 0.5 then
-        local ttc = lead.distance / closingSpeed
-        if ttc < 3.0 then targetSpeed = math.min(targetSpeed, math.max(0, speed * ttc / 3.0)) end
+  if settings.adasACCEnabled == true and state.routePilotStarted then
+    if not registryAvailable then
+      -- If traffic observations go stale, hold the current speed target rather
+      -- than accelerating into an unobserved lead-vehicle gap.
+      targetSpeed = math.min(targetSpeed, speed)
+    elseif lead then
+      local desiredGap = 5.0 + speed * 1.55
+      local gapFactor = math.max(0, math.min(1, (lead.distance - 3.0) / math.max(1, desiredGap - 3.0)))
+      targetSpeed = math.min(targetSpeed, math.max(0, speed * gapFactor))
+      if lead.targetVelocity then
+        local closingSpeed = (velocity - lead.targetVelocity):dot(forward)
+        if closingSpeed > 0.5 then
+          local ttc = lead.distance / closingSpeed
+          if ttc < 3.0 then targetSpeed = math.min(targetSpeed, math.max(0, speed * ttc / 3.0)) end
+        end
       end
     end
   end
