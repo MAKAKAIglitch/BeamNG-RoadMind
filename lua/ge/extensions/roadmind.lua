@@ -980,6 +980,8 @@ state._roadmindHelpers.makeTrackObservation = function(candidate)
 
   return {
     sourceVehicleId = candidate.sourceVehicleId or candidate.id,
+    vehicleObject = candidate.vehicleObject,
+    centerOffsetLocal = candidate.centerOffsetLocal,
     sensorOrigin = asVec3(candidate.sensorOrigin),
     position = position,
     dimensions = candidate.dimensions,
@@ -1051,6 +1053,8 @@ state._roadmindHelpers.updateObjectTracks = function(candidates)
           state._roadmindHelpers.estimateTrackVelocity(track, observation.position, observation.observationTimestamp)
           track.position = vectorToPlainTable(observation.position)
           track.orientation = observation.orientation
+          track.vehicleObject = observation.vehicleObject
+          track.centerOffsetLocal = observation.centerOffsetLocal
           track.dimensions = {
             length = observation.dimensions.length,
             width = observation.dimensions.width,
@@ -1582,6 +1586,7 @@ local function drawDetectedVehicles(drawer, candidates, tracks)
     local renderState = state.vehicleRenderStates[key]
     local position = renderState and renderState.position or item.position
     local orientation = renderState and renderState.orientation or item.orientation
+    local dimensions = renderState and renderState.dimensions or item.dimensions
     if not position then return end
     local itemState = isTrack and item.status or item.visibility
     local color
@@ -1592,7 +1597,7 @@ local function drawDetectedVehicles(drawer, candidates, tracks)
     else
       color = ColorF(1.0, 0.78, 0.16, 0.72)
     end
-    drawVehicleObb(drawer, position, orientation, item.dimensions, color)
+    drawVehicleObb(drawer, position, orientation, dimensions, color)
     local sensorOrigin = toPoint3F(item.sensorOrigin)
     local centerPoint = toPoint3F(position)
     if sensorOrigin and centerPoint then drawLine(drawer, sensorOrigin, centerPoint, color) end
@@ -3044,9 +3049,11 @@ state._roadmindHelpers.rememberLidarPoints = function(lidar)
 end
 
 state._roadmindHelpers.updateDetectedVehicleRenderStates = function(dt)
-  -- Traffic boxes represent moving rigid bodies. Interpolating their world-space
-  -- centers independently makes them visibly trail the actual vehicle. Use the
-  -- tracker prediction directly and rebuild the OBB from one coherent pose.
+  -- Keep traffic OBBs attached to their real scene objects. The registry and
+  -- occlusion work stay rate-limited, but the render pose is sampled each frame.
+  local settings = state.settings or DEFAULT_SETTINGS
+  if settings.showDetectedVehicles == false then return end
+
   local updated = state.updatedVehicleRenderKeys or {}
   state.updatedVehicleRenderKeys = updated
   for key in pairs(updated) do updated[key] = nil end
@@ -3057,13 +3064,52 @@ state._roadmindHelpers.updateDetectedVehicleRenderStates = function(dt)
     return target
   end
 
-  local function updatePosition(key, positionValue, orientationValue)
+  local function writeDimensions(target, value)
+    target = type(target) == "table" and target or {}
+    target.length = tonumber(value and value.length) or target.length
+    target.width = tonumber(value and value.width) or target.width
+    target.height = tonumber(value and value.height) or target.height
+    return target
+  end
+
+  local function attachedPose(vehicle, centerOffsetLocal)
+    if not vehicle then return nil end
+    local position = asVec3(safeCall(vehicle, "getPosition"))
+    local forward = normalizedVec3(safeCall(vehicle, "getDirectionVector"))
+    local up = normalizedVec3(safeCall(vehicle, "getDirectionVectorUp"))
+    if not position or not forward or not up then return nil end
+    local right = normalizedVec3(forward:cross(up))
+    if not right then return nil end
+    up = normalizedVec3(right:cross(forward)) or up
+
+    local center = position
+    if type(centerOffsetLocal) == "table" then
+      local longitudinal = tonumber(centerOffsetLocal.forward) or 0
+      local lateral = tonumber(centerOffsetLocal.right) or 0
+      local vertical = tonumber(centerOffsetLocal.up) or 0
+      center = position + forward * longitudinal + right * lateral + up * vertical
+    end
+    return center, {forward = forward, right = right, up = up}
+  end
+
+  local function predictPosition(track)
+    local position = asVec3(track and track.position)
+    if not position then return nil end
+    local velocity = asVec3(track.simulatorVelocity) or asVec3(track.estimatedVelocity)
+    local timestamp = tonumber(track.lastObservedAt)
+    if not velocity or not timestamp then return position end
+    local age = math.max(0, math.min(0.5, state.simulationTime - timestamp))
+    return position + velocity * age
+  end
+
+  local function updatePosition(key, positionValue, orientationValue, dimensionsValue)
     local position = asVec3(positionValue)
-    if not position then return end
+    if not position then return false end
 
     local entry = state.vehicleRenderStates[key] or {}
     entry.position = writeVector(entry.position, position)
     entry.lastSeenAt = state.simulationTime
+
     local forward = orientationValue and normalizedVec3(orientationValue.forward) or nil
     local up = orientationValue and normalizedVec3(orientationValue.up) or nil
     if forward and up then
@@ -3081,37 +3127,61 @@ state._roadmindHelpers.updateDetectedVehicleRenderStates = function(dt)
     else
       entry.orientation = nil
     end
+    if type(dimensionsValue) == "table" then
+      entry.dimensions = writeDimensions(entry.dimensions, dimensionsValue)
+    end
     state.vehicleRenderStates[key] = entry
     updated[key] = true
+    return true
   end
 
+  local rendered = 0
   local candidates = state.latestData and state.latestData.vehicles or state.vehicleCandidates
-  for i = 1, #(candidates or {}) do
+  for i = 1, math.min(#(candidates or {}), MAX_RENDERED_VEHICLE_BOXES) do
     local candidate = candidates[i]
     if candidate.visibility ~= "occluded" then
       local key = tostring(candidate.sourceVehicleId or candidate.id)
       local track = state.tracksBySourceId[key]
+      local vehicle = (track and track.vehicleObject) or candidate.vehicleObject
+      local centerOffset = (track and track.centerOffsetLocal) or candidate.centerOffsetLocal
+      local livePosition, liveOrientation = attachedPose(vehicle, centerOffset)
+      local usedLivePose = livePosition ~= nil
+      if not usedLivePose then
+        livePosition = track and predictPosition(track) or candidate.position
+        liveOrientation = track and track.orientation or candidate.orientation
+      end
       updatePosition(
         key,
-        track and (track.predictedPosition or track.position) or candidate.position,
-        track and track.orientation or candidate.orientation
+        livePosition,
+        liveOrientation,
+        (track and track.dimensions) or candidate.dimensions
       )
+      rendered = rendered + 1
     end
   end
 
   local tracks = state.latestData and state.latestData.tracks or {}
   for i = 1, #tracks do
+    if rendered >= MAX_RENDERED_VEHICLE_BOXES then break end
     local track = tracks[i]
     if track.status == "confirmed" or track.status == "coasting" then
       local key = tostring(track.sourceVehicleId)
       if not updated[key] then
-        updatePosition(key, track.predictedPosition or track.position, track.orientation)
+        local livePosition, liveOrientation = attachedPose(track.vehicleObject, track.centerOffsetLocal)
+        if not livePosition then
+          livePosition = predictPosition(track)
+          liveOrientation = track.orientation
+        end
+        if updatePosition(key, livePosition, liveOrientation, track.dimensions) then
+          rendered = rendered + 1
+        end
       end
     end
   end
 
   for key, entry in pairs(state.vehicleRenderStates) do
-    if not updated[key] and state.simulationTime - (entry.lastSeenAt or -math.huge) > TRACK_MAX_AGE then
+    if not updated[key]
+        and state.simulationTime - (entry.lastSeenAt or -math.huge) > TRACK_MAX_AGE then
       state.vehicleRenderStates[key] = nil
     end
   end
@@ -3988,15 +4058,22 @@ state._roadmindHelpers.snapshotVehicleBounds = function(vehicle, vehicleId)
   local width = projectedHalfExtent(right) * 2
   local height = projectedHalfExtent(up) * 2
   local radius = math.sqrt(hx * hx + hy * hy + hz * hz)
+  local centerOffset = center - position
 
   return {
     id = vehicleId,
+    vehicleObject = vehicle,
     center = center,
     position = position,
     velocity = velocity,
     forward = forward,
     right = right,
     up = up,
+    centerOffsetLocal = {
+      forward = centerOffset:dot(forward),
+      right = centerOffset:dot(right),
+      up = centerOffset:dot(up)
+    },
     dimensions = {length = length, width = width, height = height},
     axes = axes,
     half = {hx, hy, hz},
@@ -4818,6 +4895,8 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       candidates[#candidates + 1] = {
         id = target.id,
         sourceVehicleId = target.id,
+        vehicleObject = target.vehicleObject,
+        centerOffsetLocal = target.centerOffsetLocal,
         position = {x = target.center.x, y = target.center.y, z = target.center.z},
         simulatorVelocity = {x = target.velocity.x, y = target.velocity.y, z = target.velocity.z},
         orientation = {
