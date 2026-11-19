@@ -1356,8 +1356,8 @@ local function drawRadar(drawer, radar)
   local returns = radar.returns or {}
   for i = 1, #returns do
     local hit = returns[i]
-    local origin = toPoint3F(hit.origin)
-    local target = toPoint3F(hit)
+    local origin = not hit.renderExpired and toPoint3F(hit.origin) or nil
+    local target = not hit.renderExpired and toPoint3F(hit) or nil
     if origin and target then
       local approaching = type(hit.radialSpeed) == "number" and hit.radialSpeed < -0.5
       local color = approaching
@@ -2779,9 +2779,14 @@ local function updateTrackedVehicleReturns(returns)
   for i = 1, #(returns or {}) do
     local hit = returns[i]
     if hit.trackId and hit.localPosition and hit.worldMeasurement then
-      local position = getTrackedLidarWorldPosition(hit)
-      if position then
-        hit.x, hit.y, hit.z = position.x, position.y, position.z
+      local track = state.tracks[hit.trackId]
+      if not trackCanOwnLidarPoint(track) then
+        hit.renderExpired = true
+      else
+        local position = getTrackedLidarWorldPosition(hit)
+        if position then
+          hit.x, hit.y, hit.z = position.x, position.y, position.z
+        end
       end
     end
   end
