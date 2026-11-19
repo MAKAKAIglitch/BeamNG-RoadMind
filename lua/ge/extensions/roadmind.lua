@@ -255,12 +255,12 @@ local function isProfilerEnabled()
     and (state.settings or DEFAULT_SETTINGS).performanceProfilerEnabled == true
 end
 
-local function performanceProfiler.start()
+local function profileStart()
   if not isProfilerEnabled() then return nil end
   return performanceClock()
 end
 
-local function performanceProfiler.record(key, elapsedMs)
+local function profileRecord(key, elapsedMs)
   if not isProfilerEnabled() then return end
   local bucket = profiler.current[key]
   elapsedMs = tonumber(elapsedMs)
@@ -271,12 +271,12 @@ local function performanceProfiler.record(key, elapsedMs)
   if elapsedMs > bucket.peakMs then bucket.peakMs = elapsedMs end
 end
 
-local function performanceProfiler.stop(key, startedAt)
+local function profileStop(key, startedAt)
   if startedAt == nil or not isProfilerEnabled() then return end
-  performanceProfiler.record(key, math.max(0, (performanceClock() - startedAt) * 1000))
+  profileRecord(key, math.max(0, (performanceClock() - startedAt) * 1000))
 end
 
-local function performanceProfiler.reset()
+local function resetProfilerHistory()
   profiler.historyCount, profiler.historyCursor = 0, 1
   profiler.elapsed, profiler.memoryKb, profiler.lastSampleDuration = 0, nil, 0
   for i = 1, #PROFILE_STAGES do
@@ -293,7 +293,7 @@ local function performanceProfiler.reset()
   end
 end
 
-local function performanceProfiler.advance(dt)
+local function advanceProfiler(dt)
   if not isProfilerEnabled() then return end
   profiler.elapsed = profiler.elapsed + math.max(0, tonumber(dt) or 0)
   if profiler.elapsed < 1.0 then return end
@@ -318,7 +318,7 @@ local function performanceProfiler.advance(dt)
   end
 end
 
-local function performanceProfiler.snapshot()
+local function getProfilerSnapshot()
   local enabled = isProfilerEnabled()
   local result = {
     enabled = enabled, available = performanceClock ~= nil,
