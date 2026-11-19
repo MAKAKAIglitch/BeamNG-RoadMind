@@ -1947,7 +1947,7 @@ function M.setSetting(key, value)
 
   local candidate = copySettings(state.settings)
   candidate[key] = value
-  if key ~= "preset" then candidate.preset = "custom" end
+  if key ~= "preset" and not tostring(key):match("^adas") then candidate.preset = "custom" end
   local normalized = normalizeSettings(candidate)
 
   if type(DEFAULT_SETTINGS[key]) == "boolean" and type(value) ~= "boolean" then
@@ -1982,6 +1982,15 @@ function M.setSetting(key, value)
   end
   state.settings = normalized
   if key == "adasEnabled" or key == "adasAEBEnabled" then
+    if normalized.adasEnabled and normalized.adasAEBEnabled then
+      state.adas = {
+        available = state.visualizationEnabled and state.frameAge <= MAX_FRAME_AGE,
+        fcw = false, aeb = false, leftBlindSpot = false, rightBlindSpot = false,
+        parkingDistance = nil, laneDeparture = false, leadDistance = nil,
+        targetSpeedMps = ROUTE_MAX_SPEED_MPS,
+        status = "waiting_for_sensors"
+      }
+    end
     if not normalized.adasEnabled or not normalized.adasAEBEnabled then
       if state.activeVehicle and (state.adasLastBrakeCommand or 0) > 0 then
         queueVehicleCommand(state.activeVehicle,
@@ -1996,6 +2005,16 @@ function M.setSetting(key, value)
         targetSpeedMps = ROUTE_MAX_SPEED_MPS,
         status = normalized.adasEnabled and "standby" or "disabled"
       }
+    end
+  end
+  if (key == "adasEnabled" and value == false)
+      or (key == "adasACCEnabled" and value == false) then
+    state.adasLastCruiseCommand = ROUTE_MAX_SPEED_MPS
+    if state.routePilotEnabled and state.activeVehicle then
+      queueVehicleCommand(state.activeVehicle,
+        "extensions.load('roadmind_controller'); " ..
+        "if roadmind_controller then roadmind_controller.setTargetSpeed(" ..
+        string.format("%.2f", ROUTE_MAX_SPEED_MPS) .. ") end")
     end
   end
   if key == "adaptiveFpsEnabled" and value == true then
@@ -4902,6 +4921,14 @@ local function updateADAS(dt)
   local settings = state.settings or DEFAULT_SETTINGS
   if settings.adasEnabled ~= true then
     if (state.adasLastBrakeCommand or 0) > 0 then setADASBrakeOutput(0) end
+    if state.routePilotEnabled and state.activeVehicle
+        and state.adasLastCruiseCommand ~= ROUTE_MAX_SPEED_MPS then
+      queueVehicleCommand(state.activeVehicle,
+        "extensions.load('roadmind_controller'); " ..
+        "if roadmind_controller then roadmind_controller.setTargetSpeed(" ..
+        string.format("%.2f", ROUTE_MAX_SPEED_MPS) .. ") end")
+      state.adasLastCruiseCommand = ROUTE_MAX_SPEED_MPS
+    end
     state.adas = {
       available = false, fcw = false, aeb = false, leftBlindSpot = false,
       rightBlindSpot = false, parkingDistance = nil, laneDeparture = false,
@@ -4940,7 +4967,16 @@ local function updateADAS(dt)
 
   local speed = velocity:length()
   local nearest = nearestForwardObstacle(data)
-  local sensorAvailable = nearest < math.huge
+  local now = state.simulationTime
+  local timestamps = data.sensorTimestamps or {}
+  local function freshSensor(key, enabled)
+    local timestamp = tonumber(timestamps[key])
+    return enabled == true and timestamp ~= nil
+      and timestamp <= now + 0.05 and now - timestamp <= MAX_FRAME_AGE
+  end
+  local sensorAvailable = freshSensor("lidar", settings.lidarEnabled)
+    or freshSensor("radar", settings.radarEnabled)
+    or freshSensor("ultrasonic", settings.ultrasonicEnabled)
   local fcw = settings.adasFCWEnabled == true and sensorAvailable
     and nearest <= math.max(14, speed * 2.5 + 6)
   local aebThreshold = 3.5 + speed * 0.65 + speed * speed / 13.0
@@ -5005,7 +5041,7 @@ local function updateADAS(dt)
   -- supervisor applies the stop, avoiding competing control sources.
   setADASBrakeOutput(not state.routePilotEnabled and aeb and brakeLevel or 0)
 
-  local nextStatus = "active"
+  local nextStatus = sensorAvailable and "active" or "waiting_for_sensors"
   if aeb then nextStatus = "aeb"
   elseif fcw then nextStatus = "fcw"
   elseif leftBlindSpot or rightBlindSpot then nextStatus = "blind_spot"
@@ -5016,7 +5052,8 @@ local function updateADAS(dt)
     fcw = fcw,
     aeb = aeb,
     aebDistance = aeb and round2(nearest) or nil,
-    aebThreshold = settings.adasAEBEnabled == true and aebThreshold or ROUTE_STOP_DISTANCE,
+    aebThreshold = settings.adasAEBEnabled == true and sensorAvailable
+      and aebThreshold or ROUTE_STOP_DISTANCE,
     leftBlindSpot = leftBlindSpot,
     rightBlindSpot = rightBlindSpot,
     parkingDistance = parkingDistance and round2(parkingDistance) or nil,
