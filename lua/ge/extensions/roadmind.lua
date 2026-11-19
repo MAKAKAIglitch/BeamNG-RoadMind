@@ -3108,9 +3108,18 @@ local function updateVisualizationRenderState(dt)
   local inertiaEnabled = (state.settings or DEFAULT_SETTINGS).visualizationInertiaEnabled ~= false
   if type(state.latestData) == "table" then
     local renderFrame = {}
+    local attachedFields = {
+      lidar = true, radar = true, ultrasonic = true,
+      cameras = true, mounts = true, geometryDebug = true,
+      detectionZones = true, localization = true,
+      vehicles = true, tracks = true
+    }
     for key, value in pairs(state.latestData) do
-      -- LiDAR has its own identity-aware spring and fade layer.
-      if key == "lidar" then
+      -- Vehicle-mounted geometry and moving-object measurements must not be
+      -- eased in world space before the ego-pose re-anchor. Doing so would
+      -- introduce a visible lag even after converting back to vehicle-local
+      -- coordinates. LiDAR object returns have their own track-local renderer.
+      if attachedFields[key] then
         renderFrame[key] = value
       else
         renderFrame[key] = smoothVisualizationValue(
