@@ -86,6 +86,63 @@
     </section>
 
     <section class="roadmind-section">
+      <BngCardHeading>{{ t("adas") }}</BngCardHeading>
+      <BngRow>
+        <template #label>{{ t("adasMaster") }}</template>
+        <BngSwitch :modelValue="settings.adasEnabled" :disabled="busy"
+          @update:modelValue="value => setSetting('adasEnabled', value)" />
+      </BngRow>
+      <p class="roadmind-note">{{ t("adasNote") }}</p>
+      <BngRow>
+        <template #label>{{ t("adasFCW") }}</template>
+        <BngSwitch :modelValue="settings.adasFCWEnabled" :disabled="busy || !settings.adasEnabled"
+          @update:modelValue="value => setSetting('adasFCWEnabled', value)" />
+      </BngRow>
+      <BngRow>
+        <template #label>{{ t("adasAEB") }}</template>
+        <BngSwitch :modelValue="settings.adasAEBEnabled" :disabled="busy || !settings.adasEnabled"
+          @update:modelValue="value => setSetting('adasAEBEnabled', value)" />
+      </BngRow>
+      <BngRow>
+        <template #label>{{ t("adasACC") }}</template>
+        <BngSwitch :modelValue="settings.adasACCEnabled" :disabled="busy || !settings.adasEnabled"
+          @update:modelValue="value => setSetting('adasACCEnabled', value)" />
+      </BngRow>
+      <BngRow>
+        <template #label>{{ t("adasBSM") }}</template>
+        <BngSwitch :modelValue="settings.adasBSMEnabled" :disabled="busy || !settings.adasEnabled"
+          @update:modelValue="value => setSetting('adasBSMEnabled', value)" />
+      </BngRow>
+      <BngRow>
+        <template #label>{{ t("adasParking") }}</template>
+        <BngSwitch :modelValue="settings.adasParkingEnabled" :disabled="busy || !settings.adasEnabled"
+          @update:modelValue="value => setSetting('adasParkingEnabled', value)" />
+      </BngRow>
+      <BngRow>
+        <template #label>{{ t("adasLDW") }}</template>
+        <BngSwitch :modelValue="settings.adasLDWEnabled" :disabled="busy || !settings.adasEnabled"
+          @update:modelValue="value => setSetting('adasLDWEnabled', value)" />
+      </BngRow>
+      <div v-if="settings.adasEnabled" class="roadmind-world-model">
+        <strong>{{ t("adasState") }}: {{ t("adasStatus_" + ((status.adasStatus && status.adasStatus.status) || "standby")) }}</strong>
+        <span v-if="status.adasStatus && status.adasStatus.fcw" class="roadmind-error">{{ t("adasAlertFCW") }}</span>
+        <span v-if="status.adasStatus && status.adasStatus.aeb" class="roadmind-error">{{ t("adasAlertAEB") }}</span>
+        <span v-if="status.adasStatus && status.adasStatus.leftBlindSpot" class="roadmind-note">{{ t("adasAlertLeft") }}</span>
+        <span v-if="status.adasStatus && status.adasStatus.rightBlindSpot" class="roadmind-note">{{ t("adasAlertRight") }}</span>
+        <span v-if="status.adasStatus && status.adasStatus.laneDeparture" class="roadmind-note">{{ t("adasAlertLane") }}</span>
+        <span v-if="status.adasStatus && status.adasStatus.parkingDistance !== undefined" class="roadmind-track-metrics">
+          {{ t("adasParkingDistance") }}: {{ status.adasStatus.parkingDistance.toFixed(1) }} m
+        </span>
+        <span v-if="status.adasStatus && status.adasStatus.leadDistance !== undefined" class="roadmind-track-metrics">
+          {{ t("adasLeadDistance") }}: {{ status.adasStatus.leadDistance.toFixed(1) }} m
+        </span>
+        <p v-if="status.adasStatus && status.adasStatus.sensorAvailable === false" class="roadmind-note">
+          {{ t("adasRequiresSensors") }}
+        </p>
+      </div>
+    </section>
+
+    <section class="roadmind-section">
       <BngCardHeading>{{ t("vehicleGeometry") }}</BngCardHeading>
       <div class="roadmind-runtime">
         <div>
@@ -374,6 +431,33 @@ import {
 const EN = {
   title: "RoadMind settings",
   intro: "Configure the virtual sensors and their 3D display. Scanning stays off until you start it.",
+  adas: "ADAS driver assistance",
+  adasMaster: "Enable ADAS",
+  adasNote: "ADAS needs active scanning and fresh measurements. AEB can apply brakes while driving manually. ACC currently adjusts speed only while the RoadMind route pilot is active. Lane departure uses the NavGraph road centreline, not detected lane markings.",
+  adasFCW: "Forward collision warning (FCW)",
+  adasAEB: "Automatic emergency braking (AEB)",
+  adasACC: "Adaptive cruise control (ACC, route pilot)",
+  adasBSM: "Blind spot monitoring (BSM)",
+  adasParking: "Parking distance warning",
+  adasLDW: "Lane departure warning (LDW)",
+  adasState: "ADAS status",
+  adasStatus_disabled: "Off",
+  adasStatus_standby: "Standby",
+  adasStatus_waiting_for_sensors: "Waiting for fresh sensor data",
+  adasStatus_vehicle_state_unavailable: "Vehicle data unavailable",
+  adasStatus_active: "Monitoring",
+  adasStatus_fcw: "Forward collision warning",
+  adasStatus_aeb: "Emergency braking active",
+  adasStatus_blind_spot: "Vehicle in blind spot",
+  adasStatus_lane_departure: "Lane departure risk",
+  adasAlertFCW: "Obstacle ahead",
+  adasAlertAEB: "AEB braking",
+  adasAlertLeft: "Left blind spot",
+  adasAlertRight: "Right blind spot",
+  adasAlertLane: "Lane departure risk",
+  adasParkingDistance: "Nearest parking obstacle",
+  adasLeadDistance: "Lead vehicle gap",
+  adasRequiresSensors: "Enable the required sensor groups: LiDAR/radar for forward warnings, ultrasonic for parking, and scanning/vehicle tracking for blind spots.",
   sensorSuite: "Sensor suite",
   running: "Scanning enabled",
   stopped: "Scanning stopped",
@@ -525,6 +609,33 @@ const EN = {
 const RU = {
   title: "Настройки RoadMind",
   intro: "Настройка виртуальных датчиков и их отображения в 3D-мире. Сканирование запускается вручную.",
+  adas: "Системы помощи водителю (ADAS)",
+  adasMaster: "Включить ADAS",
+  adasNote: "ADAS требует запущенного сканирования и свежих измерений. AEB может тормозить при ручном управлении. ACC пока регулирует скорость только при активном маршрутном автопилоте RoadMind. Контроль ухода с полосы оценивается по оси NavGraph, а не по распознанной разметке.",
+  adasFCW: "Предупреждение о столкновении (FCW)",
+  adasAEB: "Автоматическое экстренное торможение (AEB)",
+  adasACC: "Адаптивный круиз-контроль (ACC, автопилот)",
+  adasBSM: "Контроль слепых зон (BSM)",
+  adasParking: "Парковочное предупреждение о препятствиях",
+  adasLDW: "Предупреждение о сходе с полосы (LDW)",
+  adasState: "Состояние ADAS",
+  adasStatus_disabled: "Выключено",
+  adasStatus_standby: "Ожидание",
+  adasStatus_waiting_for_sensors: "Ожидание свежих данных датчиков",
+  adasStatus_vehicle_state_unavailable: "Нет данных автомобиля",
+  adasStatus_active: "Мониторинг",
+  adasStatus_fcw: "Предупреждение о препятствии",
+  adasStatus_aeb: "Экстренное торможение",
+  adasStatus_blind_spot: "Машина в слепой зоне",
+  adasStatus_lane_departure: "Риск схода с полосы",
+  adasAlertFCW: "Препятствие впереди",
+  adasAlertAEB: "AEB тормозит",
+  adasAlertLeft: "Слева слепая зона",
+  adasAlertRight: "Справа слепая зона",
+  adasAlertLane: "Риск ухода с полосы",
+  adasParkingDistance: "Ближайшее препятствие при парковке",
+  adasLeadDistance: "Дистанция до машины впереди",
+  adasRequiresSensors: "Включи нужные датчики: LiDAR/радар для передних предупреждений, ультразвук для парковки, сканирование и отслеживание машин для слепых зон.",
   sensorSuite: "Комплект датчиков",
   running: "Сканирование включено",
   stopped: "Сканирование остановлено",
@@ -760,6 +871,13 @@ const settings = ref({
   adaptiveFpsEnabled: false,
   targetFps: 60,
   speedAdaptiveRateEnabled: true,
+  adasEnabled: false,
+  adasFCWEnabled: true,
+  adasAEBEnabled: true,
+  adasACCEnabled: false,
+  adasBSMEnabled: true,
+  adasParkingEnabled: true,
+  adasLDWEnabled: true,
   showLidar: true,
   showRadar: false,
   showUltrasonic: false,
@@ -774,6 +892,10 @@ const status = ref({
   estimatedRaycastsPerSecond: 0,
   routePilotEnabled: false,
   routeSafetyStopped: false,
+  adasStatus: {
+    available: false, fcw: false, aeb: false, leftBlindSpot: false,
+    rightBlindSpot: false, laneDeparture: false, status: "disabled"
+  },
   plannerStatus: "idle",
   plannerReasonCode: "inactive",
   plannerCandidateCount: 0,
