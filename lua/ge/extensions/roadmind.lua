@@ -2909,28 +2909,39 @@ local function updateDetectedVehicleRenderStates(dt)
   -- Traffic boxes represent moving rigid bodies. Interpolating their world-space
   -- centers independently makes them visibly trail the actual vehicle. Use the
   -- tracker prediction directly and rebuild the OBB from one coherent pose.
-  local updated = {}
+  local updated = state.updatedVehicleRenderKeys or {}
+  state.updatedVehicleRenderKeys = updated
+  for key in pairs(updated) do updated[key] = nil end
+
+  local function writeVector(target, value)
+    target = type(target) == "table" and target or {}
+    target.x, target.y, target.z = value.x, value.y, value.z
+    return target
+  end
 
   local function updatePosition(key, positionValue, orientationValue)
     local position = asVec3(positionValue)
     if not position then return end
 
-    local entry = {
-      position = vectorToPlainTable(position),
-      lastSeenAt = state.simulationTime
-    }
+    local entry = state.vehicleRenderStates[key] or {}
+    entry.position = writeVector(entry.position, position)
+    entry.lastSeenAt = state.simulationTime
     local forward = orientationValue and normalizedVec3(orientationValue.forward) or nil
     local up = orientationValue and normalizedVec3(orientationValue.up) or nil
     if forward and up then
       local right = normalizedVec3(forward:cross(up))
       if right then
         up = normalizedVec3(right:cross(forward)) or up
-        entry.orientation = {
-          forward = vectorToPlainTable(forward),
-          right = vectorToPlainTable(right),
-          up = vectorToPlainTable(up)
-        }
+        local orientation = entry.orientation or {}
+        orientation.forward = writeVector(orientation.forward, forward)
+        orientation.right = writeVector(orientation.right, right)
+        orientation.up = writeVector(orientation.up, up)
+        entry.orientation = orientation
+      else
+        entry.orientation = nil
       end
+    else
+      entry.orientation = nil
     end
     state.vehicleRenderStates[key] = entry
     updated[key] = true
