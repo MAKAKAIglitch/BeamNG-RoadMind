@@ -1463,7 +1463,7 @@ local function addSensorHoverPoint(candidates, position, kind, name, radius)
   local point = asVec3(position)
   if not point then return end
   candidates[#candidates + 1] = {
-    kind = kind, name = name, label = sensorHoverLabel(kind, name),
+    kind = kind, name = name,
     a = point, radius = radius or 0.10
   }
 end
@@ -1473,7 +1473,7 @@ local function addSensorHoverSegment(candidates, startPosition, endPosition, kin
   local b = asVec3(endPosition)
   if not a or not b then return end
   candidates[#candidates + 1] = {
-    kind = kind, name = name, label = sensorHoverLabel(kind, name),
+    kind = kind, name = name,
     a = a, b = b, radius = radius or 0.075
   }
 end
@@ -1544,7 +1544,7 @@ local function findHoveredSensor(candidates)
         local score = distance / tolerance + depth * 0.000001
         if score < bestScore then
           bestScore = score
-          best = {label = candidate.label, kind = candidate.kind, name = candidate.name, position = position}
+          best = {kind = candidate.kind, name = candidate.name, position = position}
         end
       end
     end
@@ -1562,7 +1562,7 @@ local function drawSensorHoverTooltip(drawer, candidates)
     drawer.drawTextAdvanced,
     drawer,
     position:toPoint3F(),
-    String(hover.label),
+    String(sensorHoverLabel(hover.kind, hover.name)),
     ColorF(1.0, 1.0, 1.0, 1.0),
     true,
     false,
