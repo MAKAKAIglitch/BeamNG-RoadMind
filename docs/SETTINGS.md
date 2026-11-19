@@ -32,6 +32,21 @@ These are calculated query budgets, not measured FPS or CPU percentages. Actual 
 
 Hiding a 3D overlay does not stop its sensor scans. Turn off the sensor group itself to reduce raycast work. Camera frustums and localization sampling can be disabled independently.
 
+## ADAS driver assistance
+
+ADAS is **off by default**. Enable the master switch to expose the individual feature switches. Every feature can be disabled independently; changes are saved in `/settings/roadmind.json`.
+
+| Setting | Behavior | Requirements / limits |
+|---|---|---|
+| Forward collision warning (FCW) | Warns when a fresh forward obstacle measurement enters the speed-dependent warning distance. | LiDAR, radar or ultrasonic must be enabled and delivering fresh data. |
+| Automatic emergency braking (AEB) | Applies brake input during manual driving when a forward obstacle enters the estimated stopping threshold. | Fresh forward sensor data; while the RoadMind route controller is active, its safety supervisor handles the stop instead of a competing brake input. |
+| Adaptive cruise control (ACC) | Reduces the route controller's target speed to maintain a time gap behind a tracked lead vehicle. | Currently works only while the RoadMind route controller is running; it is not manual-driving cruise control. |
+| Blind-spot monitoring (BSM) | Flags recent tracked vehicles near the left or right rear quarter. | Requires current vehicle-registry observations and valid tracks; detection is simulator-assisted. |
+| Parking distance warning | Displays the nearest fresh ultrasonic return. | Requires ultrasonic sensors to be enabled. It is a distance display, not automatic parking or automatic braking. |
+| Lane departure warning (LDW) | Warns when lateral offset from the current road graph centreline becomes large. | Requires medium/high NavGraph localization. It does not detect painted lane markings. |
+
+The ADAS status panel reports whether measurements are fresh and shows active warnings. A missing or stale required sensor stream puts the relevant function into a waiting state. Thresholds are initial engineering heuristics, not calibrated safety distances or a collision guarantee.
+
 ## Experimental road route pilot
 
 The route section uses the current map's NavGraph. Enter 1–12 ordered world-coordinate points in metres, one per line as `X, Y, Z`. The route builder snaps each point to a nearby road segment and shows the final-node snap distance. RoadMind's own Vehicle Lua controller tracks the selected safe local trajectory and controls steering, throttle and brake, with a conservative 8 m/s (28.8 km/h) speed cap.
