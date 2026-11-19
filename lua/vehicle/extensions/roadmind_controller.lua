@@ -22,6 +22,7 @@ local SPEED_INTEGRAL_LIMIT = 3.0
 
 local state = {
   enabled = false,
+  driverTakeoverEnabled = true,
   safetyLatched = false,
   path = {},
   pathAge = math.huge,
@@ -64,6 +65,45 @@ local function applyInputs(steering, throttle, brake)
   state.lastSteering = steering
   state.lastThrottle = throttle
   state.lastBrake = brake
+end
+
+local function detectDriverOverride()
+  if not state.driverTakeoverEnabled or type(input) ~= "table" then return nil end
+
+  -- BeamNG's Vehicle Lua input module exposes raw control values. Compare
+  -- them with RoadMind's own last outputs, and ignore camera/view actions.
+  local steer = tonumber(input.steering)
+  local throttle = tonumber(input.throttle)
+  local brake = tonumber(input.brake)
+
+  if steer and math.abs(steer - (state.lastSteering or 0)) >= 0.18
+      and math.abs(steer) >= 0.12 then
+    return "steering"
+  end
+  if throttle and math.abs(throttle - (state.lastThrottle or 0)) >= 0.18
+      and (throttle >= 0.16 or (state.lastThrottle or 0) >= 0.28) then
+    return "throttle"
+  end
+  if brake and math.abs(brake - (state.lastBrake or 0)) >= 0.10
+      and (brake >= 0.10 or (state.lastBrake or 0) >= 0.20) then
+    return "brake"
+  end
+  return nil
+end
+
+local function handControlToDriver(reason)
+  state.enabled = false
+  state.safetyLatched = false
+  state.status = "manual_takeover"
+  state.reason = "driver_takeover_" .. tostring(reason or "input")
+  state.speedIntegral = 0
+  state.updateTimer = 0
+  applyInputs(0, 0, 0)
+
+  if obj and type(obj.queueGameEngineLua) == "function" then
+    pcall(obj.queueGameEngineLua, obj,
+      "extensions.load('roadmind'); if roadmind then roadmind.onDriverTakeover() end")
+  end
 end
 
 local function failSafe(reason)
@@ -140,6 +180,11 @@ end
 
 local function controlStep(dt)
   if not state.enabled then return end
+  local takeoverReason = detectDriverOverride()
+  if takeoverReason then
+    handControlToDriver(takeoverReason)
+    return
+  end
   if state.safetyLatched then
     applyInputs(0, 0, 1)
     state.status = "stopped"
@@ -235,6 +280,11 @@ function M.setPath(encodedPath)
   return true
 end
 
+function M.setDriverTakeoverEnabled(enabled)
+  state.driverTakeoverEnabled = enabled == true
+  return state.driverTakeoverEnabled
+end
+
 function M.setEnabled(enabled)
   if enabled == true and state.adasBrakeActive then
     emit("brake", clamp(state.adasDriverBrake or 0, 0, 1))
@@ -308,6 +358,7 @@ end
 function M.getStatus()
   return {
     enabled = state.enabled,
+    driverTakeoverEnabled = state.driverTakeoverEnabled,
     status = state.status,
     reason = state.reason,
     pathPoints = #state.path,
