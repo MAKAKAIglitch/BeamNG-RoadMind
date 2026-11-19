@@ -5072,8 +5072,8 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       local sourceCursor = state.occlusionSourceCursor[cacheKey] or 1
       if sourceCount > 0 then sourceCursor = ((sourceCursor - 1) % sourceCount) + 1 end
 
-      -- Rotate source-camera checks as well as target checks. The same two-ray
-      -- budget is shared by every camera and physical-style sensor zone.
+      -- Rotate source-camera checks as well as target checks. Check no more
+      -- than two source zones per target and eight raycasts globally per cycle.
       for sourceOffset = 0, sourceCount - 1 do
         if checked >= MAX_OCCLUSION_CHECKS_PER_CYCLE or sourcesChecked >= 2 then
           anyUnverified = true
