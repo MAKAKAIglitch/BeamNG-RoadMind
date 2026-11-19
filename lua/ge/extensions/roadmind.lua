@@ -3113,41 +3113,93 @@ local function transformAttachedDirection(direction, sourcePose, currentPose)
   return normalized and vectorToPlainTable(normalized) or direction
 end
 
-local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
-  if type(frame) ~= "table" or type(sourcePose) ~= "table" or type(currentPose) ~= "table" then return end
+local function makeAttachedPoseTransform(sourcePose, currentPose)
+  local transform = {
+    sourcePosition = asVec3(sourcePose and sourcePose.position),
+    sourceForward = normalizedVec3(sourcePose and sourcePose.forward),
+    sourceRight = normalizedVec3(sourcePose and sourcePose.right),
+    sourceUp = normalizedVec3(sourcePose and sourcePose.up),
+    targetPosition = asVec3(currentPose and currentPose.position),
+    targetForward = normalizedVec3(currentPose and currentPose.forward),
+    targetRight = normalizedVec3(currentPose and currentPose.right),
+    targetUp = normalizedVec3(currentPose and currentPose.up)
+  }
+  transform.valid = transform.sourcePosition and transform.sourceForward
+    and transform.sourceRight and transform.sourceUp and transform.targetPosition
+    and transform.targetForward and transform.targetRight and transform.targetUp
+  return transform
+end
 
+local function transformAttachedPointWithBasis(point, transform)
+  if not transform or not transform.valid then return point end
+  local world = asVec3(point)
+  if not world then return point end
+  local delta = world - transform.sourcePosition
+  local localForward = delta:dot(transform.sourceForward)
+  local localRight = delta:dot(transform.sourceRight)
+  local localUp = delta:dot(transform.sourceUp)
+  local transformed = transform.targetPosition
+    + transform.targetForward * localForward
+    + transform.targetRight * localRight
+    + transform.targetUp * localUp
+  return vectorToPlainTable(transformed)
+end
+
+local function transformAttachedDirectionWithBasis(direction, transform)
+  if not transform or not transform.valid then return direction end
+  local vector = asVec3(direction)
+  if not vector then return direction end
+  local transformed = transform.targetForward * vector:dot(transform.sourceForward)
+    + transform.targetRight * vector:dot(transform.sourceRight)
+    + transform.targetUp * vector:dot(transform.sourceUp)
+  local normalized = normalizedVec3(transformed)
+  return normalized and vectorToPlainTable(normalized) or direction
+end
+
+local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
+  if type(frame) ~= "table" or type(sourcePose) ~= "table" or type(currentPose) ~= "table" then
+    return nil
+  end
+
+  local transform = makeAttachedPoseTransform(sourcePose, currentPose)
   local function transformMounts(items)
     for i = 1, #(items or {}) do
       local item = items[i]
       if type(item) == "table" then
-        if item.position then item.position = transformAttachedPoint(item.position, sourcePose, currentPose) end
-        if item.origin then item.origin = transformAttachedPoint(item.origin, sourcePose, currentPose) end
-        for _, field in ipairs({"direction", "forward", "right", "up"}) do
-          if item[field] then item[field] = transformAttachedDirection(item[field], sourcePose, currentPose) end
-        end
+        if item.position then item.position = transformAttachedPointWithBasis(item.position, transform) end
+        if item.origin then item.origin = transformAttachedPointWithBasis(item.origin, transform) end
+        if item.direction then item.direction = transformAttachedDirectionWithBasis(item.direction, transform) end
+        if item.forward then item.forward = transformAttachedDirectionWithBasis(item.forward, transform) end
+        if item.right then item.right = transformAttachedDirectionWithBasis(item.right, transform) end
+        if item.up then item.up = transformAttachedDirectionWithBasis(item.up, transform) end
       end
     end
   end
 
   if type(frame.lidar) == "table" and frame.lidar.origin then
-    frame.lidar.origin = transformAttachedPoint(frame.lidar.origin, sourcePose, currentPose)
-    for _, field in ipairs({"forward", "right", "up"}) do
-      if frame.lidar[field] then frame.lidar[field] = transformAttachedDirection(frame.lidar[field], sourcePose, currentPose) end
-    end
+    frame.lidar.origin = transformAttachedPointWithBasis(frame.lidar.origin, transform)
+    if frame.lidar.forward then frame.lidar.forward = transformAttachedDirectionWithBasis(frame.lidar.forward, transform) end
+    if frame.lidar.right then frame.lidar.right = transformAttachedDirectionWithBasis(frame.lidar.right, transform) end
+    if frame.lidar.up then frame.lidar.up = transformAttachedDirectionWithBasis(frame.lidar.up, transform) end
   end
   if type(frame.radar) == "table" then transformMounts(frame.radar.mounts) end
   if type(frame.ultrasonic) == "table" then transformMounts(frame.ultrasonic.mounts) end
   transformMounts(frame.cameras)
   transformMounts(frame.mounts)
+
   local detectionPose = frame.detectionZonesVehiclePose or sourcePose
-  for _, collection in ipairs({frame.vehicles or {}, frame.tracks or {}}) do
-    for i = 1, #collection do
-      local item = collection[i]
-      if item.sensorOrigin then
-        item.sensorOrigin = transformAttachedPoint(item.sensorOrigin, detectionPose, currentPose)
+  local detectionTransform = detectionPose == sourcePose
+    and transform or makeAttachedPoseTransform(detectionPose, currentPose)
+  local function transformSensorOrigins(items)
+    for i = 1, #(items or {}) do
+      local item = items[i]
+      if type(item) == "table" and item.sensorOrigin then
+        item.sensorOrigin = transformAttachedPointWithBasis(item.sensorOrigin, detectionTransform)
       end
     end
   end
+  transformSensorOrigins(frame.vehicles)
+  transformSensorOrigins(frame.tracks)
 
   local zones = frame.detectionZones and frame.detectionZones.zones
   transformMounts(zones)
@@ -3155,23 +3207,18 @@ local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
   local geometry = frame.geometryDebug
   if type(geometry) == "table" then
     for i = 1, #(geometry.corners or {}) do
-      geometry.corners[i] = transformAttachedPoint(geometry.corners[i], sourcePose, currentPose)
+      geometry.corners[i] = transformAttachedPointWithBasis(geometry.corners[i], transform)
     end
-    if type(geometry.axes) == "table" then
-      for _, field in ipairs({"origin", "forward", "right", "up"}) do
-        if geometry.axes[field] then
-          if field == "origin" then
-            geometry.axes[field] = transformAttachedPoint(geometry.axes[field], sourcePose, currentPose)
-          else
-            geometry.axes[field] = transformAttachedPoint(geometry.axes[field], sourcePose, currentPose)
-          end
-        end
-      end
+    local axes = geometry.axes
+    if type(axes) == "table" then
+      if axes.origin then axes.origin = transformAttachedPointWithBasis(axes.origin, transform) end
+      if axes.forward then axes.forward = transformAttachedPointWithBasis(axes.forward, transform) end
+      if axes.right then axes.right = transformAttachedPointWithBasis(axes.right, transform) end
+      if axes.up then axes.up = transformAttachedPointWithBasis(axes.up, transform) end
     end
   end
-
+  return transform
 end
-
 local ATTACHED_VISUAL_FIELDS = {
   lidar = true, radar = true, ultrasonic = true,
   cameras = true, mounts = true, geometryDebug = true,
@@ -3233,25 +3280,23 @@ local function updateVisualizationRenderState(dt)
     if type(renderFrame.localization) == "table" then
       local localization = renderFrame.localization
       if localization then
+        local localizationPose = state.latestData.localizationVehiclePose or state.latestData.vehiclePose
+        local localizationTransform = localizationPose == state.latestData.vehiclePose
+          and makeAttachedPoseTransform(state.latestData.vehiclePose, currentPose)
+          or makeAttachedPoseTransform(localizationPose, currentPose)
         if localization.gnss then
           if localization.gnss.position then
-            localization.gnss.position = transformAttachedPoint(
-              localization.gnss.position,
-              state.latestData.localizationVehiclePose or state.latestData.vehiclePose,
-              currentPose)
+            localization.gnss.position = transformAttachedPointWithBasis(
+              localization.gnss.position, localizationTransform)
           end
           if localization.gnss.worldPosition then
-            localization.gnss.worldPosition = transformAttachedPoint(
-              localization.gnss.worldPosition,
-              state.latestData.localizationVehiclePose or state.latestData.vehiclePose,
-              currentPose)
+            localization.gnss.worldPosition = transformAttachedPointWithBasis(
+              localization.gnss.worldPosition, localizationTransform)
           end
         end
         if localization.imu and localization.imu.position then
-          localization.imu.position = transformAttachedPoint(
-            localization.imu.position,
-            state.latestData.localizationVehiclePose or state.latestData.vehiclePose,
-            currentPose)
+          localization.imu.position = transformAttachedPointWithBasis(
+            localization.imu.position, localizationTransform)
         end
       end
       renderFrame.localization = localization
