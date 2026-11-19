@@ -1177,7 +1177,10 @@ local function detachPreviousVehicle()
         "if roadmind_controller then roadmind_controller.setAebBrake(0) end")
       state.adasLastBrakeCommand = 0
     end
-    if state.routePilotEnabled then stopNativeRouteController(state.activeVehicle) end
+    if state.routePilotEnabled then
+      stopNativeRouteController(state.activeVehicle)
+      disableNativeRouteController(state.activeVehicle)
+    end
     queueVehicleCommand(
       state.activeVehicle,
       "if roadmind_sensors then roadmind_sensors.setEnabled(false, " .. tostring(state.activeVehicleId) .. ") end"
@@ -1187,6 +1190,16 @@ local function detachPreviousVehicle()
   state.routePilotEnabled = false
   state.routePilotStarted = false
   state.routeSafetyStopped = false
+  state.adasTimer = 0
+  state.adasLastBrakeCommand = 0
+  state.adasLastCruiseCommand = nil
+  state.adas = {
+    available = false, fcw = false, aeb = false, leftBlindSpot = false,
+    rightBlindSpot = false, parkingDistance = nil, laneDeparture = false,
+    leadDistance = nil, targetSpeedMps = ROUTE_MAX_SPEED_MPS,
+    status = state.settings and state.settings.adasEnabled == true
+      and "waiting_for_sensors" or "disabled"
+  }
   state.routePilotVehicleId = nil
   state.routePilotError = nil
   state.routeRetryCooldown = 0
@@ -2096,7 +2109,16 @@ function M.setVisualizationEnabled(enabled)
     end
     if state.routePilotEnabled and state.activeVehicle then
       stopNativeRouteController(state.activeVehicle)
+      disableNativeRouteController(state.activeVehicle)
     end
+    state.adasTimer = 0
+    state.adasLastCruiseCommand = nil
+    state.adas = {
+      available = false, fcw = false, aeb = false, leftBlindSpot = false,
+      rightBlindSpot = false, parkingDistance = nil, laneDeparture = false,
+      leadDistance = nil, targetSpeedMps = ROUTE_MAX_SPEED_MPS,
+      status = state.settings.adasEnabled == true and "waiting_for_sensors" or "disabled"
+    }
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
     state.vehicleRegistrySnapshotValid = false
