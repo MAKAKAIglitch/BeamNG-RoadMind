@@ -256,6 +256,35 @@ function M.setEnabled(enabled)
   return true
 end
 
+function M.setAebBrake(value)
+  value = clamp(tonumber(value) or 0, 0, 1)
+  -- The route controller has its own safety supervisor; ADAS blending is for
+  -- manual driving only, so two systems never compete for the same inputs.
+  if state.enabled then return false end
+
+  local values = type(electrics) == "table" and type(electrics.values) == "table"
+    and electrics.values or {}
+  local currentBrake = tonumber(values.brake_input) or 0
+
+  if value > 0.01 then
+    if not state.adasBrakeActive then
+      state.adasDriverBrake = clamp(currentBrake, 0, 1)
+    elseif currentBrake > (state.adasLastOutput or 0) + 0.04 then
+      state.adasDriverBrake = math.max(state.adasDriverBrake or 0, currentBrake)
+    end
+    local output = math.max(value, state.adasDriverBrake or 0)
+    emit("brake", output)
+    state.adasLastOutput = output
+    state.adasBrakeActive = true
+  elseif state.adasBrakeActive then
+    emit("brake", clamp(state.adasDriverBrake or 0, 0, 1))
+    state.adasBrakeActive = false
+    state.adasDriverBrake = 0
+    state.adasLastOutput = 0
+  end
+  return true
+end
+
 function M.setSafetyStop(reason)
   if state.enabled then
     state.safetyLatched = true
@@ -298,6 +327,12 @@ function M.updateGFX(dt)
 end
 
 function M.onReset()
+  if state.adasBrakeActive then
+    emit("brake", clamp(state.adasDriverBrake or 0, 0, 1))
+  end
+  state.adasBrakeActive = false
+  state.adasDriverBrake = 0
+  state.adasLastOutput = 0
   state.enabled = false
   state.safetyLatched = false
   state.path = {}
