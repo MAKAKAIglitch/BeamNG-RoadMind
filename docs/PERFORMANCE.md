@@ -86,6 +86,15 @@ The combined stop guard, planner and controller are bounded geometric/control lo
 
 The extra Lua/table and payload cost has not yet been measured in-game. The existing scene-raycast estimates do not represent total CPU, serialization or rendering cost.
 
+## Allocation-conscious rendering
+
+- The render snapshot reuses its table tree between graphics frames. Attached sensor data is still copied before pose transforms, so the source measurements and World Model remain immutable, but existing destination tables are updated in place instead of allocating a fresh deep-copy tree each frame.
+- Inertia output tables and spring-state position/velocity tables are reused. This preserves the same critically damped spring constants and snap threshold while reducing short-lived Lua table creation.
+- The vehicle pose basis is converted and normalized once per render frame, then reused for mounted geometry, sensor origins and localization transforms.
+- Vehicle OBB corner storage and duplicate-suppression keys are scratch tables reused by the renderer.
+- Persistent LiDAR cloud points are immutable after insertion, so their engine Point3F representation is cached rather than recreated for every draw.
+- These changes do not alter sensor ray counts, scan cadence, range, tracking cadence, planner candidate/sample limits, controller cadence or ADAS thresholds. They reduce Lua allocation and repeated conversion work; the actual FPS/CPU gain still needs an in-game before/after measurement.
+
 ## Rendering budget
 
 The High preset scans 51 LiDAR directions (17 × 3); the horizontal ray count and range are profile-controlled rather than exposed as sliders. Radar and ultrasonic limits remain 17 and 36 directions respectively.
