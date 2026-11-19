@@ -1402,10 +1402,15 @@ local function drawPersistentLidarCloud(drawer)
   for i = 1, (state.lidarPointCount or #state.lidarPointCloud) do
     local point = state.lidarPointCloud[i]
     if point then
-      drawSphere(drawer, toPoint3F(point), 0.045, ColorF(0.95, 0.72, 0.20, 0.82))
+      -- Persistent cloud points never move after insertion, so keep their
+      -- engine Point3F conversion instead of rebuilding it on every draw.
+      if not point.renderPoint then point.renderPoint = toPoint3F(point) end
+      drawSphere(drawer, point.renderPoint, 0.045, ColorF(0.95, 0.72, 0.20, 0.82))
     end
   end
 end
+
+local vehicleObbCornerScratch = {}
 
 local function drawVehicleObb(drawer, positionValue, orientation, dimensions, color)
   local center = asVec3(positionValue)
@@ -1421,7 +1426,7 @@ local function drawVehicleObb(drawer, positionValue, orientation, dimensions, co
     drawSphere(drawer, center:toPoint3F(), 0.42, color)
     return
   end
-  local corners = {}
+  local corners = vehicleObbCornerScratch
   for i = 1, #VEHICLE_BOX_CORNER_SIGNS do
     local sign = VEHICLE_BOX_CORNER_SIGNS[i]
     local point = center + forward * (sign[1] * length * 0.5)
@@ -1438,7 +1443,10 @@ local function drawVehicleObb(drawer, positionValue, orientation, dimensions, co
 end
 
 local function drawDetectedVehicles(drawer, candidates, tracks)
-  local rendered, seen = 0, {}
+  local rendered = 0
+  local seen = state.detectedVehicleRenderSeen or {}
+  state.detectedVehicleRenderSeen = seen
+  for key in pairs(seen) do seen[key] = nil end
   local function drawCandidate(item, isTrack)
     if rendered >= MAX_RENDERED_VEHICLE_BOXES or type(item) ~= "table" then return end
     if item.visibility == "occluded" then return end
