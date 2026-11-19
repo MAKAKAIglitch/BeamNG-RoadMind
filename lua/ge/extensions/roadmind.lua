@@ -1397,15 +1397,21 @@ local function drawUltrasonic(drawer, ultrasonic)
   end
 end
 
+local persistentLidarCloudColor = nil
+
 local function drawPersistentLidarCloud(drawer)
   if not state.settings or not state.settings.lidarPersistenceEnabled then return end
+  if not persistentLidarCloudColor then
+    persistentLidarCloudColor = ColorF(0.95, 0.72, 0.20, 0.82)
+  end
+  local color = persistentLidarCloudColor
   for i = 1, (state.lidarPointCount or #state.lidarPointCloud) do
     local point = state.lidarPointCloud[i]
     if point then
       -- Persistent cloud points never move after insertion, so keep their
       -- engine Point3F conversion instead of rebuilding it on every draw.
       if not point.renderPoint then point.renderPoint = toPoint3F(point) end
-      drawSphere(drawer, point.renderPoint, 0.045, ColorF(0.95, 0.72, 0.20, 0.82))
+      drawSphere(drawer, point.renderPoint, 0.045, color)
     end
   end
 end
@@ -1427,6 +1433,7 @@ local function drawVehicleObb(drawer, positionValue, orientation, dimensions, co
     return
   end
   local corners = vehicleObbCornerScratch
+  local centerPoint = center:toPoint3F()
   for i = 1, #VEHICLE_BOX_CORNER_SIGNS do
     local sign = VEHICLE_BOX_CORNER_SIGNS[i]
     local point = center + forward * (sign[1] * length * 0.5)
@@ -1437,8 +1444,8 @@ local function drawVehicleObb(drawer, positionValue, orientation, dimensions, co
     local edge = VEHICLE_BOX_EDGES[i]
     drawLine(drawer, corners[edge[1]], corners[edge[2]], color)
   end
-  drawSphere(drawer, center:toPoint3F(), 0.13, color)
-  drawLine(drawer, center:toPoint3F(),
+  drawSphere(drawer, centerPoint, 0.13, color)
+  drawLine(drawer, centerPoint,
     (center + forward * math.min(length * 0.65, 2.8)):toPoint3F(), color)
 end
 
