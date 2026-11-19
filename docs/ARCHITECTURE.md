@@ -1,6 +1,6 @@
 # RoadMind architecture
 
-RoadMind is a layered sensor and driving-stack prototype for BeamNG.drive. Current development follows the perception-first roadmap: vehicle geometry, calibrated sensors, target observations and a timestamped world model come before custom trajectory planning and control.
+RoadMind is a layered sensor and autonomous-driving prototype for BeamNG.drive. Its stack now includes vehicle geometry, calibrated sensor proxies, target observations, a timestamped world model, bounded trajectory planning and an initial native Lua vehicle controller. Each layer remains subject to in-game validation.
 
 ## Vehicle geometry and calibration
 
