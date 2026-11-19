@@ -780,7 +780,18 @@ local function publish()
     sourceVehicleId = state.sourceVehicleId,
     sequence = state.sequence,
     updatedSensors = updates,
-    vehiclePose = frame.vehiclePose
+    vehiclePose = frame.vehiclePose,
+    -- Mounts/coverage volumes are cheap pose-only data. Publish separately
+    -- from scan returns so GE can re-anchor them without triggering raycasts.
+    attachedVisuals = {
+      lidarOrigin = frame.lidar and frame.lidar.origin,
+      radarMounts = frame.radar and frame.radar.mounts or {},
+      ultrasonicMounts = frame.ultrasonic and frame.ultrasonic.mounts or {},
+      cameras = frame.cameras or {},
+      mounts = frame.mounts or {},
+      geometryDebug = frame.geometryDebug,
+      detectionZones = frame.detectionZones or {}
+    }
   }
 
   if updates.lidar then payload.lidar = frame.lidar end
