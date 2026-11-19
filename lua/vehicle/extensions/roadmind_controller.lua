@@ -22,6 +22,7 @@ local SPEED_INTEGRAL_LIMIT = 3.0
 
 local state = {
   enabled = false,
+  safetyLatched = false,
   path = {},
   pathAge = math.huge,
   updateTimer = 0,
@@ -139,6 +140,11 @@ end
 
 local function controlStep(dt)
   if not state.enabled then return end
+  if state.safetyLatched then
+    applyInputs(0, 0, 1)
+    state.status = "stopped"
+    return
+  end
   if state.pathAge > PATH_MAX_AGE then
     failSafe("path_feed_stale")
     return
@@ -221,6 +227,7 @@ function M.setPath(encodedPath)
 
   state.path = path
   state.pathAge = 0
+  state.safetyLatched = false
   state.status = "ready"
   state.reason = "path_received"
   state.speedIntegral = 0
@@ -249,7 +256,10 @@ function M.setEnabled(enabled)
 end
 
 function M.setSafetyStop(reason)
-  if state.enabled then failSafe(reason or "supervisor_stop") end
+  if state.enabled then
+    state.safetyLatched = true
+    failSafe(reason or "supervisor_stop")
+  end
   return true
 end
 
@@ -288,6 +298,7 @@ end
 
 function M.onReset()
   state.enabled = false
+  state.safetyLatched = false
   state.path = {}
   state.pathAge = math.huge
   state.updateTimer = 0
