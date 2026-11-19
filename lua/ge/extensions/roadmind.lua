@@ -3039,6 +3039,7 @@ local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
       local item = items[i]
       if type(item) == "table" then
         if item.position then item.position = transformAttachedPoint(item.position, sourcePose, currentPose) end
+        if item.origin then item.origin = transformAttachedPoint(item.origin, sourcePose, currentPose) end
         for _, field in ipairs({"direction", "forward", "right", "up"}) do
           if item[field] then item[field] = transformAttachedDirection(item[field], sourcePose, currentPose) end
         end
@@ -5021,7 +5022,7 @@ local function updateADAS(dt)
 
   local lead = getADASLeadVehicle(data, forward, right, position)
   local targetSpeed = ROUTE_MAX_SPEED_MPS
-  if settings.adasACCEnabled == true and state.routePilotEnabled and lead then
+  if settings.adasACCEnabled == true and state.routePilotStarted and lead then
     local desiredGap = 5.0 + speed * 1.55
     local gapFactor = math.max(0, math.min(1, (lead.distance - 3.0) / math.max(1, desiredGap - 3.0)))
     targetSpeed = math.min(targetSpeed, math.max(0, speed * gapFactor))
@@ -5036,7 +5037,7 @@ local function updateADAS(dt)
 
   -- AEB can brake a manually driven car. In route mode the independent route
   -- supervisor applies the stop, avoiding competing control sources.
-  setADASBrakeOutput(not state.routePilotEnabled and aeb and brakeLevel or 0)
+  setADASBrakeOutput(not state.routePilotStarted and aeb and brakeLevel or 0)
 
   local nextStatus = sensorAvailable and "active" or "waiting_for_sensors"
   if aeb then nextStatus = "aeb"
@@ -5063,14 +5064,14 @@ local function updateADAS(dt)
   }
 
   local cruiseTarget = settings.adasACCEnabled == true and targetSpeed or ROUTE_MAX_SPEED_MPS
-  if state.routePilotEnabled
+  if state.routePilotStarted
       and math.abs(cruiseTarget - (state.adasLastCruiseCommand or ROUTE_MAX_SPEED_MPS)) >= 0.25 then
     local command = "extensions.load('roadmind_controller'); " ..
       "if roadmind_controller then roadmind_controller.setTargetSpeed(" ..
       string.format("%.2f", cruiseTarget) .. ") end"
     queueVehicleCommand(state.activeVehicle, command)
     state.adasLastCruiseCommand = cruiseTarget
-  elseif not state.routePilotEnabled then
+  elseif not state.routePilotStarted then
     state.adasLastCruiseCommand = nil
   end
 end
@@ -5203,7 +5204,7 @@ local function updateRoutePilotSafety(dt)
       log("W", "roadmind", "Route pilot paused by sensor obstacle guard")
     end
     state.routeSafetyStopped = true
-    state.routePilotError = string.format("Obstacle inside %.0f m safety distance", ROUTE_STOP_DISTANCE)
+    state.routePilotError = string.format("Obstacle inside %.0f m safety distance", routeStopDistance)
     return
   end
 
