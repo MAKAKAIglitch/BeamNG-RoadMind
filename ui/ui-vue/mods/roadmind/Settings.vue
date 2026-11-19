@@ -300,7 +300,10 @@
           <div v-for="stage in status.profiler.stages" :key="stage.key" class="roadmind-track">
             <div class="roadmind-track-heading">
               <strong>{{ t("profile_" + stage.key) }}</strong>
-              <span>{{ stage.avgMs.toFixed(3) }} / {{ stage.peakMs.toFixed(3) }} ms</span>
+              <span>
+                {{ t("profilerAverage") }}: {{ stage.avgMs.toFixed(3) }} ms
+                · {{ t("profilerPeak") }}: {{ stage.peakMs.toFixed(3) }} ms
+              </span>
             </div>
             <span class="roadmind-track-metrics">
               {{ t("profilerCalls") }}: {{ stage.callsPerSecond.toFixed(1) }}
@@ -514,7 +517,12 @@ const EN = {
   profilerCalls: "Calls/s",
   profilerWarmup: "Collecting the first samples…",
   profilerUnavailable: "High-resolution Lua timer is unavailable in this runtime.",
-  profile_sensor_job: "Vehicle Lua sensor job",
+  profile_sensor_job: "Vehicle Lua sensor jobs (total)",
+  profile_vehicle_lidar: "Vehicle Lua LiDAR scan",
+  profile_vehicle_radar: "Vehicle Lua radar scan",
+  profile_vehicle_ultrasonic: "Vehicle Lua ultrasonic scan",
+  profile_vehicle_pose: "Vehicle Lua pose and camera job",
+  profile_vehicle_detection_zones: "Vehicle Lua detection-zone job",
   profile_sensor_frame: "Sensor frame decode and merge",
   profile_sensor_lidar: "LiDAR processing",
   profile_sensor_radar: "Radar processing",
@@ -717,7 +725,12 @@ const RU = {
   profilerCalls: "Вызовов/с",
   profilerWarmup: "Сбор первых измерений…",
   profilerUnavailable: "В этой среде недоступен высокоточный Lua-таймер.",
-  profile_sensor_job: "Задача датчиков Vehicle Lua",
+  profile_sensor_job: "Все задачи датчиков Vehicle Lua",
+  profile_vehicle_lidar: "Сканирование LiDAR в Vehicle Lua",
+  profile_vehicle_radar: "Сканирование радарами в Vehicle Lua",
+  profile_vehicle_ultrasonic: "Сканирование ультразвуком в Vehicle Lua",
+  profile_vehicle_pose: "Поза и камеры в Vehicle Lua",
+  profile_vehicle_detection_zones: "Зоны датчиков в Vehicle Lua",
   profile_sensor_frame: "Разбор и обработка кадра датчиков",
   profile_sensor_lidar: "Обработка LiDAR",
   profile_sensor_radar: "Обработка радара",
