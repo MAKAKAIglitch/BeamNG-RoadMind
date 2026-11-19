@@ -5012,7 +5012,8 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
     local index = ((cursor + offset - 1) % count) + 1
     local candidate = candidates[index]
     local target = state.vehicleRegistry[candidate.registryIndex]
-    if target then
+    if target and candidate.visibility ~= "visible" then
+      local cacheKey = tostring(candidate.sourceVehicleId)
       local allOccluded = true
       local anyRaycastResult = false
       local anyUnverified = false
@@ -5039,12 +5040,15 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
             sourcesChecked = sourcesChecked + 1
             anyRaycastResult = true
           end
-          lastVisibility = visibility
           lastSensorName = zone.name
           state.occlusionSourceCursor[cacheKey] = (sourceIndex % math.max(1, sourceCount)) + 1
           if visibility == "visible" then
             candidate.visibility = "visible"
             candidate.visibleFrom = zone.name
+            candidate.sourceKind = zone.sensor == "camera"
+              and "simulator-assisted-camera-visibility" or "simulator-assisted"
+            candidate.measurementKind = zone.sensor == "camera"
+              and "camera-frustum-and-line-of-sight-vehicle-OBB" or "vehicle OBB registry"
             allOccluded = false
             anyUnverified = false
             break
