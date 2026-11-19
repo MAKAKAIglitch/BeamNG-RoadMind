@@ -72,7 +72,9 @@ When the experimental route pilot is active, the forward stop guard evaluates at
 
 The local trajectory planner runs at up to 5 Hz. It evaluates at most five candidates and thirteen samples per candidate, with up to 128 nearby obstacle clusters and 96 tracked vehicle targets considered per plan. It uses the cached vehicle geometry profile, not new per-ray OBB queries. The planner performs no scene raycasts. Its current road boundary is a 3.5 m half-width NavGraph heuristic, not a verified lane polygon. When sensor/road data is stale or no candidate is safe, it requests a stop from the built-in Vehicle AI. The selected trajectory is visualized but not yet tracked by steering control; that belongs to Phase 10.
 
-The combined stop guard and planner are bounded geometry checks, not a collision guarantee. CPU cost and behavior have not yet been measured in-game.
+The controller receives only the selected candidate path and does not perform scene raycasts. It parses at most 32 path points (currently up to 13) only when the planner publishes a new candidate, at a maximum of 5 Hz. Vehicle Lua computes steering and speed control at 20 Hz with no per-frame path serialization or new scene queries. The full-brake timeout is 0.75 s without a fresh path. These are configured workload bounds, not measured CPU or FPS results.
+
+The combined stop guard, planner and controller are bounded geometric/control logic, not a collision guarantee. Actual CPU cost, control stability and braking performance have not yet been measured in-game.
 
 ## Rendering budget
 
