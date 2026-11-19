@@ -5508,11 +5508,16 @@ state._roadmindHelpers.updateADAS = function(dt)
   local fcw = settings.adasFCWEnabled == true and forwardSensorAvailable
     and nearest <= math.max(14, speed * 2.5 + 6)
   local aebThreshold = 3.5 + speed * 0.65 + speed * speed / 13.0
-  -- Distance catches stationary objects; TTC also catches a faster closing
-  -- rate against a moving lead vehicle before the geometric gap gets small.
+  local movingVehicleHazard = nearestHazard and nearestHazard.kind == "vehicle"
+  local vehicleClosingEnough = not movingVehicleHazard
+    or closingSpeed >= math.max(0.75, speed * 0.25)
+  -- Static obstacles use ego stopping distance. Moving vehicles also need a
+  -- meaningful closing rate; TTC catches high relative-speed approaches.
+  local distanceTrigger = nearest <= aebThreshold and vehicleClosingEnough
+  local ttcTrigger = closingSpeed > 0.5 and timeToCollision <= 1.8
   local aeb = settings.adasAEBEnabled == true and forwardSensorAvailable
     and speed >= 1.5 and nearest < math.huge
-    and (nearest <= aebThreshold or timeToCollision <= 1.8)
+    and (distanceTrigger or ttcTrigger)
   local brakeLevel = 0
   if aeb then
     local distanceUrgency = (aebThreshold - nearest) / math.max(1, aebThreshold)
