@@ -3083,25 +3083,28 @@ local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
   end
   if type(frame.radar) == "table" then
     transformMounts(frame.radar.mounts)
+    local scanPose = frame.radar.vehiclePose or sourcePose
     for i = 1, #(frame.radar.returns or {}) do
       local hit = frame.radar.returns[i]
-      if hit.origin then hit.origin = transformAttachedPoint(hit.origin, sourcePose, currentPose) end
+      if hit.origin then hit.origin = transformAttachedPoint(hit.origin, scanPose, currentPose) end
     end
   end
   if type(frame.ultrasonic) == "table" then
     transformMounts(frame.ultrasonic.mounts)
+    local scanPose = frame.ultrasonic.vehiclePose or sourcePose
     for i = 1, #(frame.ultrasonic.returns or {}) do
       local hit = frame.ultrasonic.returns[i]
-      if hit.origin then hit.origin = transformAttachedPoint(hit.origin, sourcePose, currentPose) end
+      if hit.origin then hit.origin = transformAttachedPoint(hit.origin, scanPose, currentPose) end
     end
   end
   transformMounts(frame.cameras)
   transformMounts(frame.mounts)
+  local detectionPose = frame.detectionZonesVehiclePose or sourcePose
   for _, collection in ipairs({frame.vehicles or {}, frame.tracks or {}}) do
     for i = 1, #collection do
       local item = collection[i]
       if item.sensorOrigin then
-        item.sensorOrigin = transformAttachedPoint(item.sensorOrigin, sourcePose, currentPose)
+        item.sensorOrigin = transformAttachedPoint(item.sensorOrigin, detectionPose, currentPose)
       end
     end
   end
@@ -5337,6 +5340,7 @@ local function mergeSensorFrame(frame)
     latest.radar = processRadar(frame.radar)
     latest.radar.scanTimestamp = state.simulationTime
     latest.radar.scanSequence = tonumber(frame.sequence) or 0
+    latest.radar.vehiclePose = type(frame.vehiclePose) == "table" and frame.vehiclePose or nil
     for i = 1, #(latest.radar.returns or {}) do
       latest.radar.returns[i].measurementTimestamp = state.simulationTime
     end
@@ -5346,6 +5350,7 @@ local function mergeSensorFrame(frame)
     latest.ultrasonic = processUltrasonic(frame.ultrasonic)
     latest.ultrasonic.scanTimestamp = state.simulationTime
     latest.ultrasonic.scanSequence = tonumber(frame.sequence) or 0
+    latest.ultrasonic.vehiclePose = type(frame.vehiclePose) == "table" and frame.vehiclePose or nil
     for i = 1, #(latest.ultrasonic.returns or {}) do
       latest.ultrasonic.returns[i].measurementTimestamp = state.simulationTime
     end
@@ -5378,6 +5383,8 @@ local function mergeSensorFrame(frame)
     latest.geometryDebug = attached.geometryDebug
     if type(attached.detectionZones) == "table" then
       latest.detectionZones = attached.detectionZones
+      latest.detectionZonesVehiclePose = type(frame.vehiclePose) == "table"
+        and frame.vehiclePose or latest.detectionZonesVehiclePose
       latest.sensorTimestamps.detectionZones = state.simulationTime
     end
   end
