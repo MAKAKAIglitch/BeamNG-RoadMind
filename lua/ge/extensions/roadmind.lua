@@ -96,6 +96,7 @@ local VEHICLE_FAST_UPDATE_INTERVAL = 0.10
 local MAX_REGISTRY_VEHICLES = 256
 local MAX_OCCLUSION_CHECKS_PER_CYCLE = 8
 local OCCLUSION_CACHE_MAX_AGE = 0.75
+local CAMERA_OCCLUSION_CACHE_MAX_AGE = 0.36
 local TRACK_UPDATE_INTERVAL = 0.25
 local TRACK_OBSERVATION_MAX_AGE = 0.75
 local TRACK_MAX_AGE = 1.5
@@ -1771,12 +1772,50 @@ local function drawDetectedVehicles(drawer, candidates, tracks)
   local seen = state.detectedVehicleRenderSeen or {}
   state.detectedVehicleRenderSeen = seen
   for key in pairs(seen) do seen[key] = nil end
+
+  -- A camera track may coast internally for ADAS/history, but it is drawn only
+  -- while a matching camera candidate has a fresh, raycast-confirmed view.
+  local cameraVisible = state.detectedCameraVisibleById or {}
+  state.detectedCameraVisibleById = cameraVisible
+  for key in pairs(cameraVisible) do cameraVisible[key] = nil end
+
+  local function hasCameraSource(item)
+    if item.sourceKind == "simulator-assisted-camera-visibility" then return true end
+    local sources = item.sensorSources or item.sourceSensors or {}
+    for i = 1, #sources do
+      if sources[i].sensor == "camera" then return true end
+    end
+    return false
+  end
+
+  for i = 1, #(candidates or {}) do
+    local candidate = candidates[i]
+    if type(candidate) == "table" and hasCameraSource(candidate)
+        and candidate.visibility == "visible" then
+      local timestamp = tonumber(candidate.visibilityTimestamp)
+      local age = timestamp and (state.simulationTime - timestamp) or math.huge
+      local sourceId = candidate.sourceVehicleId or candidate.id
+      if sourceId ~= nil and age >= -0.05 and age <= CAMERA_OCCLUSION_CACHE_MAX_AGE then
+        cameraVisible[tostring(sourceId)] = true
+      end
+    end
+  end
+
   local function drawCandidate(item, isTrack)
     if rendered >= MAX_RENDERED_VEHICLE_BOXES or type(item) ~= "table" then return end
     if item.visibility == "occluded" then return end
     local sourceId = item.sourceVehicleId or item.id
     local key = tostring(sourceId or item.trackId or "")
     if key == "" or seen[key] then return end
+
+    local cameraSource = hasCameraSource(item)
+    if cameraSource then
+      -- Unverified camera candidates and stale/coasting camera tracks are not
+      -- rendered as if the camera had actually seen the vehicle.
+      if not cameraVisible[key] then return end
+      if not isTrack and item.visibility ~= "visible" then return end
+    end
+
     local renderState = state.vehicleRenderStates[key]
     local position = renderState and renderState.position or item.position
     local orientation = renderState and renderState.orientation or item.orientation
@@ -5098,25 +5137,35 @@ state._roadmindHelpers.checkTargetOcclusion = function(zone, target)
   local centerDistance = delta:length()
   if centerDistance < 0.01 then return "unverified", false end
 
+  -- The ray starts at this exact sensor mount (for cameras: the camera lens)
+  -- and ends inside the candidate vehicle. Only a hit on that same vehicle
+  -- confirms visibility; a nearby hit is never treated as a positive result.
   local ok, hit = pcall(castRay, zone.origin, target.center, true, true)
   if not ok or not hit then return "unverified", true end
 
-  local hitDistance = safeField(hit, "dist")
-  local hitObject = safeField(hit, "obj")
+  local hitDistance = tonumber(safeField(hit, "dist"))
+  local hitObject = safeField(hit, "obj") or safeField(hit, "object")
   local hitObjectId = getVehicleId(hitObject)
-  if hitObjectId and tostring(hitObjectId) == tostring(target.id) then
+  if hitObjectId == nil and (type(hitObject) == "number" or type(hitObject) == "string") then
+    hitObjectId = hitObject
+  end
+  if hitObject == target.vehicleObject
+      or (hitObjectId ~= nil and tostring(hitObjectId) == tostring(target.id)) then
     return "visible", true
   end
+
+  -- Any other identified scene object is the first thing seen by the sensor,
+  -- so the candidate is behind an occluder (another vehicle, wall or prop).
+  if hitObject ~= nil then return "occluded", true end
 
   local rayDirection = delta / centerDistance
   local expectedTargetSurface = math.max(0,
     centerDistance - state._roadmindHelpers.projectedBoxRadius(target, rayDirection))
-  if type(hitDistance) == "number" and hitDistance < expectedTargetSurface - 0.4 then
+  if hitDistance and hitDistance < expectedTargetSurface - 0.10 then
     return "occluded", true
   end
-  if type(hitDistance) == "number" and hitDistance <= centerDistance + 0.4 then
-    return "visible", true
-  end
+
+  -- A ray without a reliably identified target hit is not proof of visibility.
   return "unverified", true
 end
 
@@ -5256,8 +5305,10 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
         end
       end
     end
+    local cacheMaxAge = candidate.sourceKind == "simulator-assisted-camera-visibility"
+      and CAMERA_OCCLUSION_CACHE_MAX_AGE or OCCLUSION_CACHE_MAX_AGE
     if target and cached and cachedSourceStillPresent
-        and state.simulationTime - cached.timestamp <= OCCLUSION_CACHE_MAX_AGE
+        and state.simulationTime - cached.timestamp <= cacheMaxAge
         and cached.position and (target.center - cached.position):length() <= 1.25 then
       candidate.visibility = cached.visibility
       candidate.visibilityTimestamp = cached.timestamp
