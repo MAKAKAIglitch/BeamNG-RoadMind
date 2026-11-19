@@ -101,6 +101,22 @@ The High preset scans 51 LiDAR directions (17 × 3); the horizontal ray count an
 
 The live LiDAR renderer is capped at 99 active ray returns plus 198 fading markers. Inertia uses a critically damped spring and adds no raycasts. A separate session-only point map can retain 500–10,000 deduplicated world-space returns; at the 10,000-point limit it issues up to 10,000 debug-sphere draw calls per graphics frame, so a lower cap is recommended on weaker systems. The map is not aged or cleared by pause; it is cleared only by the explicit clear action or a vehicle switch. Vehicle OBB outlines are limited to the 64 nearest non-occluded candidates. These debug draws are separate from sensor query budgets and can materially affect rendering performance.
 
+## In-game Lua profiler
+
+The optional **Detailed Lua profiler** lives in **ESC → Mods → RoadMind → Performance** and is off by default. Enabling it adds high-resolution timer reads around existing work; it does not change sensor settings, ray counts, update intervals, planner limits, ADAS thresholds or controller cadence.
+
+The profiler keeps a fixed 15-second ring of one-second aggregates in memory. It reports:
+
+- Vehicle Lua sensor scheduler total time and separate LiDAR, radar, ultrasonic, pose and detection-zone jobs.
+- GE sensor-frame decode/merge and per-sensor post-processing.
+- Vehicle detection/tracking, World Model construction, route planner, NavGraph localization and route safety.
+- ADAS, render preparation, 3D Debug Draw and the complete RoadMind GE update callback.
+- Current Game Engine Lua heap estimate from `collectgarbage("count")`.
+
+Each stage shows average, peak and most recent execution time plus call frequency. The total GE callback includes nested stages; do not add the displayed stage times together. The heap estimate is for GE Lua, not total game RAM. These timings do not include other extensions such as `gameplayInterface`, other mods, the GPU or the game's renderer outside RoadMind's callback.
+
+The profiler uses no disk logging and clears its rolling history when toggled. Leave it disabled outside a measurement session to avoid timing overhead.
+
 ## Profiling procedure
 
 1. Record a baseline with RoadMind disabled.
