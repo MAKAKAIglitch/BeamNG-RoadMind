@@ -5037,7 +5037,6 @@ local function updateADAS(dt)
   end
 
   local speed = velocity:length()
-  local nearest = nearestForwardObstacle(data)
   local now = state.simulationTime
   local timestamps = data.sensorTimestamps or {}
   local function freshSensor(key, enabled)
@@ -5045,13 +5044,24 @@ local function updateADAS(dt)
     return enabled == true and timestamp ~= nil
       and timestamp <= now + 0.05 and now - timestamp <= MAX_FRAME_AGE
   end
-  local sensorAvailable = freshSensor("lidar", settings.lidarEnabled)
+
+  local forwardSensorAvailable = freshSensor("lidar", settings.lidarEnabled)
     or freshSensor("radar", settings.radarEnabled)
     or freshSensor("ultrasonic", settings.ultrasonicEnabled)
-  local fcw = settings.adasFCWEnabled == true and sensorAvailable
+  local ultrasonicAvailable = freshSensor("ultrasonic", settings.ultrasonicEnabled)
+  local registryAvailable = state.vehicleRegistrySnapshotValid
+    and now - (state.vehicleRegistryTimestamp or -math.huge) <= WORLD_MODEL_REGISTRY_MAX_AGE
+  local roadAvailable = type(state.roadState) == "table" and state.roadState.valid == true
+    and (state.roadState.quality == "high" or state.roadState.quality == "medium")
+    and now - (tonumber(state.roadState.timestamp) or -math.huge) <= PLANNER_MAX_DATA_AGE
+
+  local needsForward = settings.adasFCWEnabled == true or settings.adasAEBEnabled == true
+  local nearest = needsForward and forwardSensorAvailable
+    and nearestForwardObstacle(data) or math.huge
+  local fcw = settings.adasFCWEnabled == true and forwardSensorAvailable
     and nearest <= math.max(14, speed * 2.5 + 6)
   local aebThreshold = 3.5 + speed * 0.65 + speed * speed / 13.0
-  local aeb = settings.adasAEBEnabled == true and sensorAvailable
+  local aeb = settings.adasAEBEnabled == true and forwardSensorAvailable
     and speed >= 1.5 and nearest <= aebThreshold
   local brakeLevel = 0
   if aeb then
@@ -5060,8 +5070,7 @@ local function updateADAS(dt)
   end
 
   local leftBlindSpot, rightBlindSpot = false, false
-  if settings.adasBSMEnabled == true and state.vehicleRegistrySnapshotValid
-      and state.simulationTime - (state.vehicleRegistryTimestamp or -math.huge) <= WORLD_MODEL_REGISTRY_MAX_AGE then
+  if settings.adasBSMEnabled == true and registryAvailable then
     local ownWidth = state.vehicleGeometry and tonumber(state.vehicleGeometry.width) or 2.0
     for i = 1, #(data.tracks or {}) do
       local track = data.tracks[i]
@@ -5083,17 +5092,13 @@ local function updateADAS(dt)
     end
   end
 
-  local parkingDistance = settings.adasParkingEnabled == true
-    and getADASParkingDistance(data, state.simulationTime) or nil
-  local laneDeparture = false
-  if settings.adasLDWEnabled == true and type(state.roadState) == "table"
-      and state.roadState.valid == true
-      and (state.roadState.quality == "high" or state.roadState.quality == "medium")
-      and speed >= 5 then
-    laneDeparture = math.abs(tonumber(state.roadState.lateralOffset) or 0) >= 1.65
-  end
+  local parkingDistance = settings.adasParkingEnabled == true and ultrasonicAvailable
+    and getADASParkingDistance(data, now) or nil
+  local laneDeparture = settings.adasLDWEnabled == true and roadAvailable and speed >= 5
+    and math.abs(tonumber(state.roadState.lateralOffset) or 0) >= 1.65 or false
 
-  local lead = getADASLeadVehicle(data, forward, right, position)
+  local lead = settings.adasACCEnabled == true and state.routePilotStarted and registryAvailable
+    and getADASLeadVehicle(data, forward, right, position) or nil
   local targetSpeed = ROUTE_MAX_SPEED_MPS
   if settings.adasACCEnabled == true and state.routePilotStarted and lead then
     local desiredGap = 5.0 + speed * 1.55
@@ -5108,22 +5113,34 @@ local function updateADAS(dt)
     end
   end
 
-  -- AEB can brake a manually driven car. In route mode the independent route
+  -- AEB can brake a manually driven car. In active route mode the route
   -- supervisor applies the stop, avoiding competing control sources.
   setADASBrakeOutput(not state.routePilotStarted and aeb and brakeLevel or 0)
 
-  local nextStatus = sensorAvailable and "active" or "waiting_for_sensors"
+  local anyFeatureEnabled = settings.adasFCWEnabled or settings.adasAEBEnabled
+    or settings.adasACCEnabled or settings.adasBSMEnabled
+    or settings.adasParkingEnabled or settings.adasLDWEnabled
+  local requiresSensors =
+    ((settings.adasFCWEnabled or settings.adasAEBEnabled) and not forwardSensorAvailable)
+    or (settings.adasParkingEnabled and not ultrasonicAvailable)
+    or (settings.adasBSMEnabled and not registryAvailable)
+    or (settings.adasACCEnabled and state.routePilotStarted and not registryAvailable)
+    or (settings.adasLDWEnabled and not roadAvailable)
+
+  local nextStatus = not anyFeatureEnabled and "standby"
+    or (requiresSensors and "waiting_for_sensors" or "active")
   if aeb then nextStatus = "aeb"
   elseif fcw then nextStatus = "fcw"
   elseif leftBlindSpot or rightBlindSpot then nextStatus = "blind_spot"
   elseif laneDeparture then nextStatus = "lane_departure" end
 
   state.adas = {
-    available = true,
+    available = anyFeatureEnabled and not requiresSensors,
+    requiresSensors = requiresSensors == true,
     fcw = fcw,
     aeb = aeb,
     aebDistance = aeb and round2(nearest) or nil,
-    aebThreshold = settings.adasAEBEnabled == true and sensorAvailable
+    aebThreshold = settings.adasAEBEnabled == true and forwardSensorAvailable
       and aebThreshold or ROUTE_STOP_DISTANCE,
     leftBlindSpot = leftBlindSpot,
     rightBlindSpot = rightBlindSpot,
@@ -5132,7 +5149,10 @@ local function updateADAS(dt)
     leadDistance = lead and round2(lead.distance) or nil,
     targetSpeedMps = targetSpeed,
     status = nextStatus,
-    sensorAvailable = sensorAvailable,
+    sensorAvailable = forwardSensorAvailable,
+    ultrasonicAvailable = ultrasonicAvailable,
+    registryAvailable = registryAvailable,
+    roadAvailable = roadAvailable,
     roadQuality = state.roadState and state.roadState.quality or "unavailable"
   }
 
