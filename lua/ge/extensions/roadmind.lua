@@ -3033,10 +3033,30 @@ local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
       if frame.lidar[field] then frame.lidar[field] = transformAttachedDirection(frame.lidar[field], sourcePose, currentPose) end
     end
   end
-  if type(frame.radar) == "table" then transformMounts(frame.radar.mounts) end
-  if type(frame.ultrasonic) == "table" then transformMounts(frame.ultrasonic.mounts) end
+  if type(frame.radar) == "table" then
+    transformMounts(frame.radar.mounts)
+    for i = 1, #(frame.radar.returns or {}) do
+      local hit = frame.radar.returns[i]
+      if hit.origin then hit.origin = transformAttachedPoint(hit.origin, sourcePose, currentPose) end
+    end
+  end
+  if type(frame.ultrasonic) == "table" then
+    transformMounts(frame.ultrasonic.mounts)
+    for i = 1, #(frame.ultrasonic.returns or {}) do
+      local hit = frame.ultrasonic.returns[i]
+      if hit.origin then hit.origin = transformAttachedPoint(hit.origin, sourcePose, currentPose) end
+    end
+  end
   transformMounts(frame.cameras)
   transformMounts(frame.mounts)
+  for _, collection in ipairs({frame.vehicles or {}, frame.tracks or {}}) do
+    for i = 1, #collection do
+      local item = collection[i]
+      if item.sensorOrigin then
+        item.sensorOrigin = transformAttachedPoint(item.sensorOrigin, sourcePose, currentPose)
+      end
+    end
+  end
 
   local zones = frame.detectionZones and frame.detectionZones.zones
   transformMounts(zones)
@@ -4989,14 +5009,15 @@ local function updateADAS(dt)
     roadQuality = state.roadState and state.roadState.quality or "unavailable"
   }
 
-  if state.routePilotEnabled and settings.adasACCEnabled == true
-      and math.abs(targetSpeed - (state.adasLastCruiseCommand or ROUTE_MAX_SPEED_MPS)) >= 0.25 then
+  local cruiseTarget = settings.adasACCEnabled == true and targetSpeed or ROUTE_MAX_SPEED_MPS
+  if state.routePilotEnabled
+      and math.abs(cruiseTarget - (state.adasLastCruiseCommand or ROUTE_MAX_SPEED_MPS)) >= 0.25 then
     local command = "extensions.load('roadmind_controller'); " ..
       "if roadmind_controller then roadmind_controller.setTargetSpeed(" ..
-      string.format("%.2f", targetSpeed) .. ") end"
+      string.format("%.2f", cruiseTarget) .. ") end"
     queueVehicleCommand(state.activeVehicle, command)
-    state.adasLastCruiseCommand = targetSpeed
-  elseif not settings.adasACCEnabled then
+    state.adasLastCruiseCommand = cruiseTarget
+  elseif not state.routePilotEnabled then
     state.adasLastCruiseCommand = nil
   end
 end
