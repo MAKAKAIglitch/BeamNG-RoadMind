@@ -3150,13 +3150,14 @@ state._roadmindHelpers.updateDetectedVehicleRenderStates = function(dt)
         livePosition = track and predictPosition(track) or candidate.position
         liveOrientation = track and track.orientation or candidate.orientation
       end
-      updatePosition(
+      if updatePosition(
         key,
         livePosition,
         liveOrientation,
         (track and track.dimensions) or candidate.dimensions
-      )
-      rendered = rendered + 1
+      ) then
+        rendered = rendered + 1
+      end
     end
   end
 
@@ -5935,6 +5936,7 @@ function M.onVehicleDestroyed(vehicleId)
   end
   state.vehicleRegistryById[key] = nil
   state.occlusionCache[key] = nil
+  state.vehicleRenderStates[key] = nil
   state.lidarTrackGrid = {}
 end
 
