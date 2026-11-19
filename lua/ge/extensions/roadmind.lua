@@ -173,6 +173,7 @@ local state = {
   routePilotStarted = false,
   routeSafetyStopped = false,
   routePilotVehicleId = nil,
+  controllerPathTimestamp = nil,
   routePilotError = nil,
   routeRetryCooldown = 0,
   routePath = {},
@@ -680,6 +681,32 @@ local function buildRoadRouteThroughPoints(vehicle, routePoints)
   return combinedIds, combinedPoints
 end
 
+local function sendControllerPath(vehicle, planner, force)
+  if not vehicle or type(planner) ~= "table" or planner.status ~= "ready"
+      or not planner.selectedIndex then
+    return false, "No safe trajectory is selected"
+  end
+  local candidate = planner.candidates and planner.candidates[planner.selectedIndex]
+  local path = candidate and candidate.path
+  if type(path) ~= "table" or #path < 2 or #path > 32 then
+    return false, "Selected trajectory is unavailable or exceeds the controller limit"
+  end
+  local timestamp = tonumber(planner.timestamp) or state.simulationTime
+  if not force and state.controllerPathTimestamp == timestamp then return true end
+  if type(jsonEncode) ~= "function" then return false, "JSON encoder is unavailable" end
+  local ok, encoded = pcall(jsonEncode, path)
+  if not ok or type(encoded) ~= "string" then return false, "Could not encode the selected trajectory" end
+  local command =
+    "extensions.load('roadmind_controller'); " ..
+    "if not roadmind_controller.setPath(" .. string.format("%q", encoded) .. ") then " ..
+    "error('RoadMind: controller rejected trajectory') end"
+  if not queueVehicleCommand(vehicle, command) then
+    return false, "Could not queue the controller trajectory"
+  end
+  state.controllerPathTimestamp = timestamp
+  return true
+end
+
 local function startNativeRouteAI(vehicle)
   if not vehicle then return false, "No active vehicle" end
 
@@ -690,24 +717,6 @@ local function startNativeRouteAI(vehicle)
     pathIds, pathPoints, pathError = buildForwardRoadPath(vehicle)
   end
   if not pathIds then return false, pathError end
-
-  local serializedNodes = {}
-  for i = 1, #pathIds do
-    serializedNodes[i] = string.format("%q", tostring(pathIds[i]))
-  end
-
-  local speed = string.format("%.2f", ROUTE_MAX_SPEED_MPS)
-  local command =
-    "if not ai then extensions.load('ai') end; " ..
-    "if ai and ai.driveUsingPath then " ..
-    "ai.driveUsingPath({wpTargetList={" .. table.concat(serializedNodes, ",") .. "}, " ..
-    "driveInLane='on', avoidCars='on', routeSpeedMode='limit', " ..
-    "routeSpeed=" .. speed .. ", aggression=0.35}) " ..
-    "else error('RoadMind: vehicle AI path API unavailable') end"
-
-  if not queueVehicleCommand(vehicle, command) then
-    return false, "Could not queue the vehicle AI route command"
-  end
 
   state.routePath = pathPoints
   state.routePathEnd = pathPoints[#pathPoints]
@@ -726,14 +735,35 @@ local function startNativeRouteAI(vehicle)
       state.routeDestinationSnapDistance = round2(math.sqrt(dx * dx + dy * dy + dz * dz))
     end
   end
+
+  local planner = updateLocalTrajectoryPlanner()
+  local queued, reason = sendControllerPath(vehicle, planner, true)
+  if not queued then return false, reason end
+  local command =
+    "extensions.load('roadmind_controller'); " ..
+    "roadmind_controller.setTargetSpeed(" .. string.format("%.2f", ROUTE_MAX_SPEED_MPS) .. "); " ..
+    "if not roadmind_controller.setEnabled(true) then error('RoadMind: controller could not arm') end"
+  if not queueVehicleCommand(vehicle, command) then
+    return false, "Could not queue the autonomous controller start command"
+  end
   return true
 end
 
 local function stopNativeRouteAI(vehicle)
+  state.controllerPathTimestamp = nil
   if not vehicle then return false end
   return queueVehicleCommand(vehicle,
-    "if not ai then extensions.load('ai') end; " ..
-    "if ai and ai.setMode then pcall(ai.setMode, 'stopping') end"
+    "extensions.load('roadmind_controller'); " ..
+    "if roadmind_controller then roadmind_controller.setSafetyStop('route_safety_supervisor') end"
+  )
+end
+
+local function disableNativeRouteController(vehicle)
+  state.controllerPathTimestamp = nil
+  if not vehicle then return false end
+  return queueVehicleCommand(vehicle,
+    "extensions.load('roadmind_controller'); " ..
+    "if roadmind_controller then roadmind_controller.setEnabled(false) end"
   )
 end
 
@@ -2037,6 +2067,7 @@ function M.setRoutePilotEnabled(enabled)
   if enabled ~= true then
     if state.routePilotEnabled and state.activeVehicle then
       stopNativeRouteAI(state.activeVehicle)
+      disableNativeRouteController(state.activeVehicle)
     end
     state.routePilotEnabled = false
     state.routePilotStarted = false
@@ -2163,7 +2194,10 @@ function M.setRoutePoints(encodedPoints)
 end
 
 function M.clearRoutePoints()
-  if state.routePilotEnabled and state.activeVehicle then stopNativeRouteAI(state.activeVehicle) end
+  if state.routePilotEnabled and state.activeVehicle then
+    stopNativeRouteAI(state.activeVehicle)
+    disableNativeRouteController(state.activeVehicle)
+  end
   state.routePilotEnabled = false
   state.routePilotStarted = false
   state.routeSafetyStopped = false
@@ -4736,6 +4770,19 @@ local function updateRoutePilotSafety(dt)
     state.routePilotError = nil
   end
 
+  -- Refresh the low-level controller only when the bounded planner publishes
+  -- a new safe trajectory. This keeps command traffic below the planner's 5 Hz cap.
+  if state.routePilotStarted then
+    local sent, sendError = sendControllerPath(state.activeVehicle, planner, false)
+    if not sent then
+      stopNativeRouteAI(state.activeVehicle)
+      state.routePilotStarted = false
+      state.routeSafetyStopped = true
+      state.routePilotError = sendError or "Could not refresh controller trajectory"
+      return
+    end
+  end
+
   local clearance = nearestForwardObstacle(state.latestData)
   if clearance <= ROUTE_STOP_DISTANCE then
     if state.routePilotStarted then
@@ -4755,6 +4802,7 @@ local function updateRoutePilotSafety(dt)
       local dx, dy, dz = endpoint.x - position.x, endpoint.y - position.y, endpoint.z - position.z
       if math.sqrt(dx * dx + dy * dy + dz * dz) <= ROUTE_DESTINATION_REACHED_M then
         stopNativeRouteAI(state.activeVehicle)
+        disableNativeRouteController(state.activeVehicle)
         state.routePilotEnabled = false
         state.routePilotStarted = false
         state.routeSafetyStopped = false
