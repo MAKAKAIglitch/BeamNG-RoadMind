@@ -10,8 +10,8 @@ RoadMind aims to become a lightweight, modular autonomous-driving system for Bea
 2. Validate detection zones, visibility checks, track identity and motion estimates in live traffic.
 3. Validate LiDAR point continuity, sensor freshness and world-model quality.
 4. Complete Phase 8 route behavior on intersections, splits and multiple maps.
-5. Implement the local trajectory planner and independent safety supervisor.
-6. Add vehicle control, parking, recording and optional learning only after the deterministic planner is validated.
+5. Validate and harden the native Lua trajectory controller and independent safety supervisor.
+6. Add parking, recording and optional learning only after deterministic route control is validated.
 
 Phase 9 is implemented as a bounded local planner. Phase 10 now has its first native Vehicle Lua controller prototype; the next milestone is in-game validation and controller hardening, not adding more complexity before basic tracking and braking are proven.
 
