@@ -228,6 +228,28 @@ local function makeMount(frame, forwardOffset, lateralOffset, upOffset, yawDegre
   }
 end
 
+local function makeLevelledLidarMount(frame, forwardOffset, lateralOffset, upOffset)
+  -- The LiDAR's primary layer is level with the world horizon, not the
+  -- vehicle body pitch/roll. BeamNG uses +Z as world up.
+  local worldUp = vec3(0, 0, 1)
+  local horizontalForward = normalize(vec3(frame.forward.x, frame.forward.y, 0))
+  if not horizontalForward then return nil end
+  local horizontalRight = normalize(horizontalForward:cross(worldUp))
+  if not horizontalRight then return nil end
+
+  local position = frame.position
+    + frame.forward * (forwardOffset or 0)
+    + frame.right * (lateralOffset or 0)
+    + frame.up * (upOffset or 0)
+
+  return {
+    position = position,
+    direction = horizontalForward,
+    right = horizontalRight,
+    up = worldUp
+  }
+end
+
 local function buildVehicleSensorLayout(geometry)
   if type(geometry) ~= "table" or geometry.valid ~= true then return nil end
 
@@ -348,7 +370,12 @@ local function buildDetectionZones(frame)
   local zones = {}
 
   local function add(name, sensor, config, horizontalFov, verticalFov, range, minRange)
-    local mount = makeMount(frame, config.forward, config.lateral, config.up or 0, config.yaw)
+    local mount
+    if sensor == "lidar" then
+      mount = makeLevelledLidarMount(frame, config.forward, config.lateral, config.up or 0)
+    else
+      mount = makeMount(frame, config.forward, config.lateral, config.up or 0, config.yaw)
+    end
     if not mount then return end
     zones[#zones + 1] = {
       name = name,
@@ -407,7 +434,12 @@ local function buildSensorMountDebug(frame)
   local mounts = {}
 
   local function add(name, kind, config)
-    local mount = makeMount(frame, config.forward, config.lateral, config.up, config.yaw)
+    local mount
+    if kind == "lidar" then
+      mount = makeLevelledLidarMount(frame, config.forward, config.lateral, config.up)
+    else
+      mount = makeMount(frame, config.forward, config.lateral, config.up, config.yaw)
+    end
     if mount then
       mounts[#mounts + 1] = {
         name = name,
@@ -449,7 +481,7 @@ end
 
 local function scanLidar(frame)
   local cfg = currentSensorLayout().lidar
-  local mount = makeMount(frame, cfg.forwardOffset, cfg.lateralOffset, cfg.upOffset, 0)
+  local mount = makeLevelledLidarMount(frame, cfg.forwardOffset, cfg.lateralOffset, cfg.upOffset)
   if not mount then
     return {origin = nil, rays = {}, rayCount = 0}
   end
@@ -738,7 +770,7 @@ end
 local function refreshAttachedVisuals(frame)
   if not state.frame then return end
   local lidar = currentSensorLayout().lidar
-  local lidarMount = makeMount(frame, lidar.forwardOffset, lidar.lateralOffset, lidar.upOffset, 0)
+  local lidarMount = makeLevelledLidarMount(frame, lidar.forwardOffset, lidar.lateralOffset, lidar.upOffset)
   if lidarMount then
     state.frame.lidar.origin = vectorToTable(lidarMount.position)
     state.frame.lidar.forward = vectorToPreciseTable(lidarMount.direction)
