@@ -135,7 +135,7 @@ The selected safe candidate is shown in green; rejected candidates are shown in 
 
 The road boundary is an explicit approximation: a 3.5 m half-width band around the NavGraph centerline, not a detected lane boundary or exact drivable polygon. The turning-radius estimate is derived from vehicle length rather than measured steering geometry. These assumptions require in-game validation and must not be treated as a collision guarantee.
 
-The active route is previewed in world space and passed as a waypoint list to the built-in Vehicle Lua ai.driveUsingPath. The base Drive-mode route pilot remains experimental: it uses the game's AI for lane following, and RoadMind runs a best-effort stop guard at up to 10 Hz using only enabled, fresh sensor returns plus recently confirmed vehicle OBBs. Vehicle obstacles are checked by their projected footprint, not only their center. This is not a collision guarantee or a replacement for the future swept-footprint trajectory planner. Camera frustums do not provide image measurements. Complex intersections, road splits, map compatibility, coordinate entry and progress still need live validation on several maps.
+The active route is previewed in world space and consumed by RoadMind's own Vehicle Lua trajectory controller. The planner and safety supervisor use enabled, fresh sensor returns plus recently confirmed vehicle OBBs. Vehicle obstacles are checked by their projected footprint, not only their center. The NavGraph corridor and geometric obstacle checks remain approximations, not a collision guarantee. Camera frustums do not provide image measurements. Complex intersections, road splits, map compatibility, coordinate entry and progress still need live validation on several maps.
 
 ## Input and settings
 
