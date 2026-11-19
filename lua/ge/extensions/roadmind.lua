@@ -897,7 +897,7 @@ local function startNativeRouteController(vehicle)
 
   local plannerStartedAt = state.performanceProfiler.start()
   local planner = updateLocalTrajectoryPlanner()
-  performanceProfiler.stop("planner", plannerStartedAt)
+  state.performanceProfiler.stop("planner", plannerStartedAt)
   local queued, reason = sendControllerPath(vehicle, planner, true)
   if not queued then return false, reason end
   local command =
@@ -2000,7 +2000,7 @@ local function settingsResult()
         and state.performanceFps ~= nil
         and state.performanceFps < (settings.targetFps or 60) * 0.92,
       speedAdaptiveRateEnabled = settings.speedAdaptiveRateEnabled ~= false,
-      profiler = performanceProfiler.snapshot(),
+      profiler = state.performanceProfiler.snapshot(),
       trafficUpdateHz = 1 / math.max(0.01,
         state.currentTrafficUpdateInterval or VEHICLE_DETECTION_INTERVAL),
       vehicleRegistryCount = #state.vehicleRegistry,
@@ -2158,7 +2158,7 @@ function M.setSetting(key, value)
     return {ok = false, error = "Target FPS must be 30–165 in steps of 5"}
   end
   state.settings = normalized
-  if key == "performanceProfilerEnabled" then performanceProfiler.reset() end
+  if key == "performanceProfilerEnabled" then state.performanceProfiler.reset() end
   if key == "adasEnabled" or key == "adasAEBEnabled" then
     if normalized.adasEnabled then
       state.adas = {
@@ -5048,9 +5048,9 @@ local function updateVehicleDetection(dt)
     state.latestData.vehicles = candidates
     state.latestData.tracks = tracks
     if buildWorldModel then
-      local worldModelStartedAt = performanceProfiler.start()
+      local worldModelStartedAt = state.performanceProfiler.start()
       state.worldModel = buildWorldModel()
-      performanceProfiler.stop("world_model", worldModelStartedAt)
+      state.performanceProfiler.stop("world_model", worldModelStartedAt)
     end
   end
 end
@@ -5510,9 +5510,9 @@ local function updateRoutePilotSafety(dt)
     return
   end
 
-  local plannerStartedAt = performanceProfiler.start()
+  local plannerStartedAt = state.performanceProfiler.start()
   local planner = updateLocalTrajectoryPlanner()
-  performanceProfiler.stop("planner", plannerStartedAt)
+  state.performanceProfiler.stop("planner", plannerStartedAt)
   if planner.status ~= "ready" or not planner.selectedIndex then
     if state.routePilotStarted then
       stopNativeRouteController(state.activeVehicle)
@@ -5637,7 +5637,7 @@ local function mergeSensorFrame(frame)
   latest.sequence = frame.sequence
 
   if updates.lidar == true then
-    local sensorStartedAt = performanceProfiler.start()
+    local sensorStartedAt = state.performanceProfiler.start()
     latest.lidar = processLidar(frame.lidar)
     latest.lidar.scanTimestamp = state.simulationTime
     latest.lidar.scanSequence = tonumber(frame.sequence) or 0
@@ -5647,10 +5647,10 @@ local function mergeSensorFrame(frame)
     latest.sensorTimestamps.lidar = state.simulationTime
     rememberLidarPoints(latest.lidar)
     buildLidarRenderPoints(latest.lidar)
-    performanceProfiler.stop("sensor_lidar", sensorStartedAt)
+    state.performanceProfiler.stop("sensor_lidar", sensorStartedAt)
   end
   if updates.radar == true then
-    local sensorStartedAt = performanceProfiler.start()
+    local sensorStartedAt = state.performanceProfiler.start()
     latest.radar = processRadar(frame.radar)
     attachTrackedVehicleReturns(latest.radar.returns)
     latest.radar.scanTimestamp = state.simulationTime
@@ -5659,10 +5659,10 @@ local function mergeSensorFrame(frame)
       latest.radar.returns[i].measurementTimestamp = state.simulationTime
     end
     latest.sensorTimestamps.radar = state.simulationTime
-    performanceProfiler.stop("sensor_radar", sensorStartedAt)
+    state.performanceProfiler.stop("sensor_radar", sensorStartedAt)
   end
   if updates.ultrasonic == true then
-    local sensorStartedAt = performanceProfiler.start()
+    local sensorStartedAt = state.performanceProfiler.start()
     latest.ultrasonic = processUltrasonic(frame.ultrasonic)
     attachTrackedVehicleReturns(latest.ultrasonic.returns)
     latest.ultrasonic.scanTimestamp = state.simulationTime
@@ -5671,7 +5671,7 @@ local function mergeSensorFrame(frame)
       latest.ultrasonic.returns[i].measurementTimestamp = state.simulationTime
     end
     latest.sensorTimestamps.ultrasonic = state.simulationTime
-    performanceProfiler.stop("sensor_ultrasonic", sensorStartedAt)
+    state.performanceProfiler.stop("sensor_ultrasonic", sensorStartedAt)
   end
   if updates.detectionZones == true then
     latest.detectionZones = type(frame.detectionZones) == "table"
@@ -5727,11 +5727,11 @@ function M.onSensorData(encodedFrame)
     return
   end
   if type(frame.performance) == "table" then
-    performanceProfiler.record("sensor_job", frame.performance.elapsedMs)
+    state.performanceProfiler.record("sensor_job", frame.performance.elapsedMs)
   end
-  local sensorFrameStartedAt = performanceProfiler.start()
+  local sensorFrameStartedAt = state.performanceProfiler.start()
   mergeSensorFrame(frame)
-  performanceProfiler.stop("sensor_frame", sensorFrameStartedAt)
+  state.performanceProfiler.stop("sensor_frame", sensorFrameStartedAt)
 end
 
 
@@ -5800,12 +5800,12 @@ function M.onUpdate(dt)
   if dt < 0 then dt = 0 end
   if not state.visualizationEnabled then return end
 
-  local geUpdateStartedAt = performanceProfiler.start()
+  local geUpdateStartedAt = state.performanceProfiler.start()
   updateAdaptivePerformance(dt)
   state.frameAge = state.frameAge + dt
-  local adasStartedAt = performanceProfiler.start()
+  local adasStartedAt = state.performanceProfiler.start()
   updateADAS(dt)
-  performanceProfiler.stop("adas", adasStartedAt)
+  state.performanceProfiler.stop("adas", adasStartedAt)
   local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
   local routePilotActive = state.routePilotEnabled
 
@@ -5821,36 +5821,36 @@ function M.onUpdate(dt)
     state.roadUpdateTimer = (state.roadUpdateTimer or 0) + dt
     if state.roadUpdateTimer >= 0.5 then
       state.roadUpdateTimer = state.roadUpdateTimer % 0.5
-      local roadStartedAt = performanceProfiler.start()
+      local roadStartedAt = state.performanceProfiler.start()
       updateRoadUnderstanding()
-      performanceProfiler.stop("road_graph", roadStartedAt)
+      state.performanceProfiler.stop("road_graph", roadStartedAt)
     end
-    local trackingStartedAt = performanceProfiler.start()
+    local trackingStartedAt = state.performanceProfiler.start()
     updateVehicleDetection(dt)
-    performanceProfiler.stop("vehicle_tracking", trackingStartedAt)
+    state.performanceProfiler.stop("vehicle_tracking", trackingStartedAt)
     if visualFrameFresh then
       updateLidarRenderPoints(dt)
       updateDetectedVehicleRenderStates(dt)
     end
     if routePilotActive then
-      local safetyStartedAt = performanceProfiler.start()
+      local safetyStartedAt = state.performanceProfiler.start()
       updateRoutePilotSafety(dt)
-      performanceProfiler.stop("route_safety", safetyStartedAt)
+      state.performanceProfiler.stop("route_safety", safetyStartedAt)
     end
   end
   -- Advance render-only inertia at display cadence. This covers own-vehicle
   -- bounds/axes/mounts, radar and ultrasonic returns, camera frustums,
   -- localization, traffic origins, route lines and planner candidates.
-  local visualizationStartedAt = performanceProfiler.start()
+  local visualizationStartedAt = state.performanceProfiler.start()
   updateVisualizationRenderState(dt)
-  performanceProfiler.stop("visualization", visualizationStartedAt)
+  state.performanceProfiler.stop("visualization", visualizationStartedAt)
 
   -- Keep redrawing the last valid snapshot while the simulation is paused.
-  local drawStartedAt = performanceProfiler.start()
+  local drawStartedAt = state.performanceProfiler.start()
   drawFrame()
-  performanceProfiler.stop("debug_draw", drawStartedAt)
-  performanceProfiler.stop("ge_update", geUpdateStartedAt)
-  performanceProfiler.advance(dt)
+  state.performanceProfiler.stop("debug_draw", drawStartedAt)
+  state.performanceProfiler.stop("ge_update", geUpdateStartedAt)
+  state.performanceProfiler.advance(dt)
 end
 
 function M.onVehicleDestroyed(vehicleId)
@@ -5918,9 +5918,9 @@ end
 
 function M.getWorldModel()
   if not state.worldModel and buildWorldModel then
-    local worldModelStartedAt = performanceProfiler.start()
+    local worldModelStartedAt = state.performanceProfiler.start()
     state.worldModel = buildWorldModel()
-    performanceProfiler.stop("world_model", worldModelStartedAt)
+    state.performanceProfiler.stop("world_model", worldModelStartedAt)
   end
   if not state.worldModel then
     return {
