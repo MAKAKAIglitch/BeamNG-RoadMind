@@ -102,7 +102,7 @@ local function handControlToDriver(reason)
 
   if obj and type(obj.queueGameEngineLua) == "function" then
     pcall(obj.queueGameEngineLua, obj,
-      "extensions.load('roadmind'); if roadmind then roadmind.onDriverTakeover() end")
+      "extensions.load('roadmind'); if extensions.roadmind then extensions.roadmind.onDriverTakeover() end")
   end
 end
 
