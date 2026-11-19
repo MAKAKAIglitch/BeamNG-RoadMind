@@ -43,6 +43,12 @@
         {{ t("targetFpsUnreachable") }}
       </p>
       <p class="roadmind-note">{{ t("detectionNote") }}</p>
+      <BngRow>
+        <template #label>{{ t("cameraVehicleDetection") }}</template>
+        <BngSwitch :modelValue="settings.cameraDetectionEnabled" :disabled="busy"
+          @update:modelValue="value => setSetting('cameraDetectionEnabled', value)" />
+      </BngRow>
+      <p class="roadmind-note">{{ t("cameraVehicleDetectionNote") }}</p>
       <div v-if="status.trackedObjects && status.trackedObjects.length" class="roadmind-track-list">
         <strong>{{ t("trackedObjects") }} ({{ status.trackedVehicleCount || 0 }})</strong>
         <div v-for="track in status.trackedObjects" :key="track.trackId" class="roadmind-track">
@@ -86,63 +92,6 @@
     </section>
 
     <section class="roadmind-section">
-      <BngCardHeading>{{ t("adas") }}</BngCardHeading>
-      <BngRow>
-        <template #label>{{ t("adasMaster") }}</template>
-        <BngSwitch :modelValue="settings.adasEnabled" :disabled="busy"
-          @update:modelValue="value => setSetting('adasEnabled', value)" />
-      </BngRow>
-      <p class="roadmind-note">{{ t("adasNote") }}</p>
-      <BngRow>
-        <template #label>{{ t("adasFCW") }}</template>
-        <BngSwitch :modelValue="settings.adasFCWEnabled" :disabled="busy || !settings.adasEnabled"
-          @update:modelValue="value => setSetting('adasFCWEnabled', value)" />
-      </BngRow>
-      <BngRow>
-        <template #label>{{ t("adasAEB") }}</template>
-        <BngSwitch :modelValue="settings.adasAEBEnabled" :disabled="busy || !settings.adasEnabled"
-          @update:modelValue="value => setSetting('adasAEBEnabled', value)" />
-      </BngRow>
-      <BngRow>
-        <template #label>{{ t("adasACC") }}</template>
-        <BngSwitch :modelValue="settings.adasACCEnabled" :disabled="busy || !settings.adasEnabled"
-          @update:modelValue="value => setSetting('adasACCEnabled', value)" />
-      </BngRow>
-      <BngRow>
-        <template #label>{{ t("adasBSM") }}</template>
-        <BngSwitch :modelValue="settings.adasBSMEnabled" :disabled="busy || !settings.adasEnabled"
-          @update:modelValue="value => setSetting('adasBSMEnabled', value)" />
-      </BngRow>
-      <BngRow>
-        <template #label>{{ t("adasParking") }}</template>
-        <BngSwitch :modelValue="settings.adasParkingEnabled" :disabled="busy || !settings.adasEnabled"
-          @update:modelValue="value => setSetting('adasParkingEnabled', value)" />
-      </BngRow>
-      <BngRow>
-        <template #label>{{ t("adasLDW") }}</template>
-        <BngSwitch :modelValue="settings.adasLDWEnabled" :disabled="busy || !settings.adasEnabled"
-          @update:modelValue="value => setSetting('adasLDWEnabled', value)" />
-      </BngRow>
-      <div v-if="settings.adasEnabled" class="roadmind-world-model">
-        <strong>{{ t("adasState") }}: {{ t("adasStatus_" + ((status.adasStatus && status.adasStatus.status) || "standby")) }}</strong>
-        <span v-if="status.adasStatus && status.adasStatus.fcw" class="roadmind-error">{{ t("adasAlertFCW") }}</span>
-        <span v-if="status.adasStatus && status.adasStatus.aeb" class="roadmind-error">{{ t("adasAlertAEB") }}</span>
-        <span v-if="status.adasStatus && status.adasStatus.leftBlindSpot" class="roadmind-note">{{ t("adasAlertLeft") }}</span>
-        <span v-if="status.adasStatus && status.adasStatus.rightBlindSpot" class="roadmind-note">{{ t("adasAlertRight") }}</span>
-        <span v-if="status.adasStatus && status.adasStatus.laneDeparture" class="roadmind-note">{{ t("adasAlertLane") }}</span>
-        <span v-if="status.adasStatus && status.adasStatus.parkingDistance !== undefined" class="roadmind-track-metrics">
-          {{ t("adasParkingDistance") }}: {{ status.adasStatus.parkingDistance.toFixed(1) }} m
-        </span>
-        <span v-if="status.adasStatus && status.adasStatus.leadDistance !== undefined" class="roadmind-track-metrics">
-          {{ t("adasLeadDistance") }}: {{ status.adasStatus.leadDistance.toFixed(1) }} m
-        </span>
-        <p v-if="status.adasStatus && status.adasStatus.requiresSensors" class="roadmind-note">
-          {{ t("adasRequiresSensors") }}
-        </p>
-      </div>
-    </section>
-
-    <section class="roadmind-section">
       <BngCardHeading>{{ t("vehicleGeometry") }}</BngCardHeading>
       <div class="roadmind-runtime">
         <div>
@@ -162,80 +111,6 @@
           @click="recalibrateVehicle">{{ t("recalibrate") }}</BngButton>
       </div>
       <p class="roadmind-note">{{ t("calibrationNote") }}</p>
-    </section>
-
-    <section class="roadmind-section">
-      <BngCardHeading>{{ t("routePilot") }}</BngCardHeading>
-      <p class="roadmind-note">{{ t("routeDescription") }}</p>
-      <label class="roadmind-route-points-label" for="roadmind-route-points">{{ t("routePoints") }}</label>
-      <textarea
-        id="roadmind-route-points"
-        v-model="routePointsText"
-        class="roadmind-route-points"
-        rows="3"
-        :placeholder="t('routePointsPlaceholder')"
-        :disabled="busy"
-      ></textarea>
-      <div class="roadmind-route-actions">
-        <BngButton :accent="ACCENTS.main" :disabled="busy" @click="applyRoutePoints">
-          {{ t("applyRoutePoints") }}
-        </BngButton>
-        <BngButton :accent="ACCENTS.outlined" :disabled="busy" @click="clearRoutePoints">
-          {{ t("clearRoutePoints") }}
-        </BngButton>
-      </div>
-      <p class="roadmind-note">
-        {{ t("routeInputCount") }}: {{ status.routeInputPointCount || 0 }}
-        · {{ t("routeProgress") }}: {{ status.routeProgressPercent || 0 }}%
-      </p>
-      <p class="roadmind-note">
-        {{ t("roadLocalization") }}: {{ t("roadQuality_" + (status.roadLocalizationQuality || "unavailable")) }}
-        <span v-if="status.roadDistanceToSegment !== undefined">
-          · {{ status.roadDistanceToSegment.toFixed(1) }} m
-        </span>
-        <span v-if="status.routeDistanceToPath !== undefined">
-          · {{ t("routePathOffset") }}: {{ status.routeDistanceToPath.toFixed(1) }} m
-        </span>
-        <span v-if="status.routeDestinationSnapDistance !== undefined">
-          · {{ t("destinationSnap") }}: {{ status.routeDestinationSnapDistance.toFixed(1) }} m
-        </span>
-      </p>
-      <p v-if="status.routeCompleted" class="roadmind-status active">{{ t("routeCompleted") }}</p>
-      <div class="roadmind-runtime">
-        <div>
-          <span class="roadmind-status" :class="{ active: status.routePilotEnabled && !status.routeSafetyStopped }">
-            {{ status.routePilotEnabled ? (status.routeSafetyStopped ? t("routePaused") : t("routeRunning")) : t("routeStopped") }}
-          </span>
-          <span class="roadmind-budget">{{ t("routeSpeed") }}: 29 km/h</span>
-          <span class="roadmind-budget">{{ t("routeWaypoints") }}: {{ status.routeWaypointCount || 0 }}</span>
-        </div>
-        <BngButton
-          :accent="status.routePilotEnabled ? ACCENTS.outlined : ACCENTS.main"
-          :disabled="busy"
-          @click="toggleRoutePilot"
-        >{{ status.routePilotEnabled ? t("stopRoute") : t("startRoute") }}</BngButton>
-      </div>
-      <p v-if="status.routeSafetyStopped && status.routePilotEnabled" class="roadmind-note">
-        {{ t("routeSafetyStop") }}
-      </p>
-      <p v-if="status.routePilotError && status.routePilotEnabled" class="roadmind-error">
-        {{ routeErrorText(status.routePilotError) }}
-      </p>
-      <div class="roadmind-world-model">
-        <strong>{{ t("localPlanner") }}: {{ t("plannerStatus_" + (status.plannerStatus || "idle")) }}</strong>
-        <span class="roadmind-track-metrics">
-          {{ t("plannerCandidates") }}: {{ status.plannerCandidateCount || 0 }}
-          · {{ t("plannerRejected") }}: {{ status.plannerRejectedCandidateCount || 0 }}
-        </span>
-        <span v-if="status.plannerSelectedScore !== undefined" class="roadmind-track-metrics">
-          {{ t("plannerOffset") }}: {{ Number(status.plannerSelectedOffset || 0).toFixed(2) }} m
-          · {{ t("plannerClearance") }}: {{ Number(status.plannerMinimumClearance || 0).toFixed(2) }} m
-          · {{ t("plannerRoadMargin") }}: {{ Number(status.plannerMinimumRoadMargin || 0).toFixed(2) }} m
-        </span>
-        <span class="roadmind-note">{{ t("plannerReason_" + (status.plannerReasonCode || "inactive")) }}</span>
-        <p class="roadmind-note">{{ t("plannerBoundaryNote") }}</p>
-        <p class="roadmind-note">{{ t("plannerControlNote") }}</p>
-      </div>
     </section>
 
     <section class="roadmind-section">
@@ -514,7 +389,9 @@ const EN = {
   trackConfidence: "Confidence",
   registrySize: "Cached vehicle registry",
   registryLimited: "limit reached",
-  detectionNote: "Vehicle presence is simulator-assisted. Green OBB outlines are confirmed visible; yellow outlines are candidates still waiting for the limited occlusion checks. This is not raw LiDAR/radar/camera recognition.",
+  detectionNote: "Vehicle candidates are filtered through each active sensor zone and a bounded line-of-sight check. Camera zones cover the front, sides and rear and work without LiDAR. Drive-mode detection is simulator-assisted geometry, not RGB image recognition.",
+  cameraVehicleDetection: "Detect vehicles with the seven cameras",
+  cameraVehicleDetectionNote: "Uses BeamNG vehicle bounds, calibrated camera fields of view and scene occlusion checks. It is not RGB/image recognition and does not require LiDAR.",
   vehicleGeometry: "Vehicle geometry and sensor calibration",
   calibrated: "Geometry calibrated",
   fallbackCalibration: "Using fallback sensor positions",
@@ -524,7 +401,7 @@ const EN = {
   calibrationOverlay: "Vehicle bounds, axes and all sensor mounts",
   routeWaypoints: "Road waypoints in active path",
   routePilot: "RoadMind autonomous pilot (experimental)",
-  routeDescription: "Uses the current map NavGraph. Enter ordered world coordinates as X,Y,Z (one point per line). RoadMind’s own Lua controller follows the planner-approved trajectory and controls steering, throttle and brake at up to 28.8 km/h. Sensor and road checks are experimental; camera frustums are view-only.",
+  routeDescription: "Uses the current map NavGraph. Enter ordered world coordinates as X,Y,Z (one point per line). RoadMind’s own Lua controller follows the planner-approved trajectory and controls steering, throttle and brake at up to 28.8 km/h.",
   routePoints: "Ordered route points (world coordinates, metres)",
   routePointsPlaceholder: "X, Y, Z\nX, Y, Z\nX, Y, Z",
   applyRoutePoints: "Set route points",
@@ -580,7 +457,7 @@ const EN = {
 
   scanRate: "Scan rate",
   range: "Maximum range",
-  lidarNote: "Horizontal density and range follow the selected performance profile. The separate point-cloud limit controls how many world-space returns are retained.",
+  lidarNote: "The first layer always points horizontally ahead. The second adds downward rays, and the third adds upward rays. The point-cloud limit controls retained world-space returns.",
   radar: "Automotive radar",
   rayDensity: "Ray density",
   ultrasonic: "Ultrasonic sensors",
@@ -596,9 +473,9 @@ const EN = {
   refresh: "Refresh status",
   error: "Could not contact RoadMind.",
   noVehicle: "Enter a vehicle before starting the sensors.",
-  lowResolution: "1 vertical layer",
-  balancedResolution: "2 vertical layers",
-  highResolution: "3 vertical layers",
+  lowResolution: "Horizontal only",
+  balancedResolution: "Horizontal + down",
+  highResolution: "Horizontal + down + up",
   lowDensity: "Low (1 ray per radar)",
   mediumDensity: "Balanced (up to 2 rays per radar)",
   highDensity: "High (full ray count)",
@@ -692,7 +569,9 @@ const RU = {
   trackConfidence: "Достоверность",
   registrySize: "Машин в общем реестре",
   registryLimited: "достигнут лимит",
-  detectionNote: "Обнаружение машин использует данные симулятора. Зелёный контур — видимая машина, жёлтый — кандидат, ожидающий проверки видимости. Это не распознавание по камере или физическому LiDAR.",
+  detectionNote: "Кандидаты проверяются по зонам датчиков и прямой видимости. Камеры охватывают переднюю, боковые и заднюю зоны и работают без LiDAR. В Drive это геометрическая модель видимости по данным симулятора, а не распознавание изображения.",
+  cameraVehicleDetection: "Обнаруживать машины семью камерами",
+  cameraVehicleDetectionNote: "Используются габариты машин BeamNG, поля обзора камер и проверка перекрытий объектами сцены. Это не распознавание RGB-изображений; LiDAR не требуется.",
   vehicleGeometry: "Геометрия автомобиля и калибровка датчиков",
   calibrated: "Геометрия определена",
   fallbackCalibration: "Используются резервные позиции датчиков",
@@ -702,7 +581,7 @@ const RU = {
   calibrationOverlay: "Габариты, оси и все крепления датчиков",
   routeWaypoints: "Точек дорожного маршрута",
   routePilot: "Автопилот RoadMind (эксперимент)",
-  routeDescription: "Использует дорожный граф текущей карты. Введи точки маршрута в мировых координатах X,Y,Z (одна точка на строку). Собственный Lua-контроллер RoadMind следует выбранной безопасной траектории и управляет рулём, газом и тормозом со скоростью до 28,8 км/ч. Проверки датчиков и дороги экспериментальные; камеры показывают только поля обзора.",
+  routeDescription: "Использует дорожный граф текущей карты. Введи точки X,Y,Z по одной на строку. Собственный Lua-контроллер RoadMind следует выбранной безопасной траектории со скоростью до 28,8 км/ч.",
   routePoints: "Точки маршрута по порядку (мировые координаты, метры)",
   routePointsPlaceholder: "X, Y, Z\nX, Y, Z\nX, Y, Z",
   applyRoutePoints: "Задать маршрут",
@@ -766,7 +645,7 @@ const RU = {
 
   scanRate: "Частота сканирования",
   range: "Максимальная дальность",
-  lidarNote: "Плотность и дальность LiDAR задаются выбранным профилем. Отдельный лимит определяет число точек, сохраняемых в облаке.",
+  lidarNote: "Первый слой всегда смотрит прямо вперёд. Второй добавляет лучи вниз, третий — вверх. Лимит определяет число точек в облаке.",
   radar: "Автомобильные радары",
   rayDensity: "Плотность лучей",
   ultrasonic: "Ультразвуковые датчики",
@@ -782,9 +661,9 @@ const RU = {
   refresh: "Обновить статус",
   error: "Не удалось связаться с RoadMind.",
   noVehicle: "Сначала сядь в автомобиль.",
-  lowResolution: "1 слой",
-  balancedResolution: "2 слоя",
-  highResolution: "3 слоя",
+  lowResolution: "Только горизонтально",
+  balancedResolution: "Горизонтально + вниз",
+  highResolution: "Горизонтально + вниз + вверх",
   lowDensity: "Низкая (1 луч на радар)",
   mediumDensity: "Средняя (до 2 лучей на радар)",
   highDensity: "Высокая (полное число лучей)",
@@ -800,9 +679,6 @@ const ROADMIND_METHODS = new Set([
   "setSetting",
   "setPreset",
   "setVisualizationEnabled",
-  "setRoutePilotEnabled",
-  "setRoutePoints",
-  "clearRoutePoints",
   "recalibrateVehicle",
   "clearLidarMap",
 ])
@@ -845,35 +721,10 @@ function t(key) {
   return dictionary[key] || EN[key] || key
 }
 
-function routeErrorText(message) {
-  const value = String(message || "")
-  if (!String(locale.value).toLowerCase().startsWith("ru")) return value
-
-  if (value.startsWith("Local planner:")) return t("plannerStopError")
-  if (value === "Waiting for fresh sensor data") return t("routeWaitingData")
-  if (value === "Could not find connected road nodes near the vehicle and forward target") return t("routeNoRoadNodes")
-  if (value === "No valid forward road path could be built from the current NavGraph") return t("routeNoPath")
-  if (value === "NavGraph route API is unavailable on this map") return t("routeApiMissing")
-  if (value === "Vehicle heading is invalid" || value === "Could not read vehicle position or heading") return t("routeHeadingInvalid")
-  if (value === "The active vehicle changed") return t("routeVehicleChanged")
-  if (value === "Route localization lost") return t("routeLocalizationLost")
-  if (value === "Route points must be supplied as JSON") return t("routePointsJson")
-  if (value === "Route requires 1-12 ordered XYZ points"
-      || value === "Route points must contain finite world X, Y and Z coordinates") return t("routePointsFormat")
-  if (value === "A route point is too far from the road network"
-      || value === "Could not find a road segment for a route point") return t("routePointOffRoad")
-  if (value === "No connected NavGraph path exists between route points"
-      || value === "The route does not contain enough connected road nodes") return t("routeNoConnectedPath")
-  if (value === "Route exceeds the NavGraph waypoint limit") return t("routePathLimit")
-
-  const obstacle = value.match(/^Obstacle inside ([0-9.]+) m safety distance$/)
-  if (obstacle) return t("routeObstacle").replace("{distance}", obstacle[1])
-  return t("routeGenericError")
-}
-
 const settings = ref({
   preset: "economy",
   lidarEnabled: true,
+  cameraDetectionEnabled: true,
   lidarQuality: "low",
   lidarHz: 1,
   radarEnabled: false,
@@ -959,7 +810,6 @@ const status = ref({
 })
 const error = ref("")
 const busy = ref(false)
-const routePointsText = ref("")
 const optionConfig = { value: option => option.value, label: option => option.label }
 const presets = [
   { id: "economy", label: "economy" },
@@ -988,7 +838,7 @@ const ultrasonicRateOptions = [1, 2].map(value => ({ value, label: value + " Hz"
 function acceptResult(result) {
   if (!result || result.ok === false) {
     const message = result && result.error
-    error.value = message === "No active player vehicle" ? t("noVehicle") : (message ? routeErrorText(message) : t("error"))
+    error.value = message === "No active player vehicle" ? t("noVehicle") : (message || t("error"))
     return false
   }
 
@@ -1089,60 +939,6 @@ async function toggleRuntime() {
   } catch (e) {
     error.value = t("error")
     console.error("RoadMind: could not toggle scanning", e)
-  } finally {
-    busy.value = false
-  }
-}
-
-async function toggleRoutePilot() {
-  busy.value = true
-  try {
-    acceptResult(await callRoadMind('setRoutePilotEnabled', [!status.value.routePilotEnabled]))
-  } catch (e) {
-    error.value = t("error")
-    console.error("RoadMind: could not toggle route pilot", e)
-  } finally {
-    busy.value = false
-  }
-}
-
-
-async function applyRoutePoints() {
-  const lines = routePointsText.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-  if (lines.length < 1 || lines.length > 12) {
-    error.value = t("routePointsFormat")
-    return
-  }
-
-  const points = []
-  for (const line of lines) {
-    const values = line.split(/[,\s;]+/).filter(Boolean).map(Number)
-    if (values.length !== 3 || values.some(value => !Number.isFinite(value))) {
-      error.value = t("routePointsFormat")
-      return
-    }
-    points.push({ x: values[0], y: values[1], z: values[2] })
-  }
-
-  busy.value = true
-  try {
-    acceptResult(await callRoadMind("setRoutePoints", [JSON.stringify(points)]))
-  } catch (e) {
-    error.value = t("error")
-    console.error("RoadMind: could not set route points", e)
-  } finally {
-    busy.value = false
-  }
-}
-
-async function clearRoutePoints() {
-  busy.value = true
-  try {
-    acceptResult(await callRoadMind("clearRoutePoints"))
-    routePointsText.value = ""
-  } catch (e) {
-    error.value = t("error")
-    console.error("RoadMind: could not clear route points", e)
   } finally {
     busy.value = false
   }
