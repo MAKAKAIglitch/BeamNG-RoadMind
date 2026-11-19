@@ -136,7 +136,7 @@
         <span v-if="status.adasStatus && status.adasStatus.leadDistance !== undefined" class="roadmind-track-metrics">
           {{ t("adasLeadDistance") }}: {{ status.adasStatus.leadDistance.toFixed(1) }} m
         </span>
-        <p v-if="status.adasStatus && status.adasStatus.sensorAvailable === false" class="roadmind-note">
+        <p v-if="status.adasStatus && status.adasStatus.requiresSensors" class="roadmind-note">
           {{ t("adasRequiresSensors") }}
         </p>
       </div>
