@@ -18,6 +18,10 @@
 - Bypass world-space easing for vehicle-mounted overlays and render LiDAR points on tracked vehicle surfaces directly from their OBB-local coordinates.
 - Reproject radar and ultrasonic hit points on tracked vehicles from OBB-local surface coordinates; expire attached returns when the target track is lost.
 - Deep-copy attached visual frames before render transforms so the source measurements and World Model remain immutable.
+- Reuse render snapshot, smoothing, spring-state and traffic-overlay tables to reduce per-frame Lua garbage without changing the displayed geometry.
+- Cache the vehicle pose transform basis once per render frame and reuse it for attached sensor geometry and localization.
+- Cache immutable persistent LiDAR cloud Point3F values and reuse OBB/deduplication scratch tables.
+- Keep sensor ray counts, scan rates, range, tracking/planner/controller cadence and ADAS thresholds unchanged during this optimization pass.
 
 
 
