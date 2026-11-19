@@ -153,11 +153,22 @@ BeamNG.tech provides a separate native suite with rendered camera, LiDAR, RADAR,
 
 Implemented code-level layers: vehicle registry/detection zones, session-scoped object tracking, timestamped sensor fusion/world model, NavGraph road context and route input/progress. These layers still need repeatable in-game validation.
 
-The current route pilot delegates path following to BeamNG's built-in Vehicle AI. RoadMind's sensor guard can request a stop and replan, but RoadMind does not yet own the trajectory or low-level control.
+The route pilot now uses the native `lua/vehicle/extensions/roadmind_controller.lua` Vehicle Lua extension rather than BeamNG's built-in route AI. The GE coordinator sends the selected planner path as a compact JSON snapshot. The vehicle controller parses it once, then performs bounded trajectory tracking at 20 Hz.
+
+### Phase 10 — native trajectory controller
+
+- **Lateral control:** Pure Pursuit-style geometric tracking against the selected local path, with a speed-dependent lookahead bounded to 4–14 m.
+- **Longitudinal control:** bounded PI speed control, a conservative 8 m/s target-speed ceiling and additional speed reduction for high steering demand.
+- **Actuation:** direct Vehicle Lua `input.event` calls for steering, throttle and brake.
+- **Supervisor behavior:** path-feed timeout (0.75 s), missing vehicle state, unavailable path and route-tracking loss latch a full-brake stop. A new approved planner path is required before motion resumes.
+- **Bounded work:** at most 32 path points are accepted; the current planner sends at most 13 samples. The controller computes at 20 Hz and receives a new path only when the planner publishes a new result (maximum 5 Hz). No new scene raycasts are added by the controller.
+- **Vehicle assumptions:** the first prototype uses a nominal 2.7 m wheelbase and conservative steering scaling. Per-vehicle geometry calibration and dynamic steering limits remain future tuning work.
+
+The controller is an initial code-level implementation, not a validated autonomous-driving system. BeamNG input polarity, vehicle-specific steering response, braking performance, route tracking, manual takeover and reset/recovery behavior still require in-game tests. The NavGraph corridor is still a 3.5 m half-width heuristic, not a detected lane polygon. The supervisor is best-effort and cannot guarantee collision avoidance.
 
 Next implementation phases:
 
-1. **Vehicle controller:** trajectory tracking, steering, throttle, braking and gear management.
-2. **Independent safety supervisor:** manual takeover, stale-sensor handling, route-loss handling and controller-fault stops.
-3. **Parking:** parking-space estimation, reverse/multi-point maneuvers and swept-footprint validation.
-4. **Recording and learning:** local, bounded data recording and deterministic replay before optional offline learning.
+1. Validate and tune the native controller across stock vehicle classes and road conditions.
+2. Verify manual takeover, route loss, stale sensors, resets, pause/resume and fault recovery.
+3. Add robust intersection negotiation, lane changes and parking only after baseline control is repeatable.
+4. Add bounded local recording and deterministic replay before optional offline learning.
