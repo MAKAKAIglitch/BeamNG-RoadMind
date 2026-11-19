@@ -169,7 +169,7 @@ BeamNG.tech provides a separate native suite with rendered camera, LiDAR, RADAR,
 
 Implemented code-level layers: vehicle registry/detection zones, session-scoped object tracking, timestamped sensor fusion/world model, NavGraph road context and route input/progress. These layers still need repeatable in-game validation.
 
-The route pilot now uses the native `lua/vehicle/extensions/roadmind_controller.lua` Vehicle Lua extension rather than BeamNG's built-in route AI. The GE coordinator sends the selected planner path as a compact JSON snapshot. The vehicle controller parses it once, then performs bounded trajectory tracking at 20 Hz.
+The route pilot now uses the native `lua/vehicle/extensions/roadmind/controller.lua` Vehicle Lua extension rather than BeamNG's built-in route AI. The GE coordinator sends the selected planner path as a compact JSON snapshot. The vehicle controller parses it once, then performs bounded trajectory tracking at 20 Hz.
 
 ### Phase 10 — native trajectory controller
 
