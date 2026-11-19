@@ -19,6 +19,13 @@ local DEFAULT_SETTINGS = {
   adaptiveFpsEnabled = false,
   targetFps = 60,
   speedAdaptiveRateEnabled = true,
+  adasEnabled = false,
+  adasFCWEnabled = true,
+  adasAEBEnabled = true,
+  adasACCEnabled = false,
+  adasBSMEnabled = true,
+  adasParkingEnabled = true,
+  adasLDWEnabled = true,
   showLidar = true, showRadar = false, showUltrasonic = false,
   showCameras = false, showLocalization = false, showDetectedVehicles = true,
   showCalibration = false
@@ -198,7 +205,16 @@ local state = {
   performanceDecisionTimer = 0,
   performanceLowFpsTimer = 0,
   performanceHighFpsTimer = 0,
-  adaptiveQualityTier = 4
+  adaptiveQualityTier = 4,
+  adasTimer = 0,
+  adas = {
+    available = false, fcw = false, aeb = false, leftBlindSpot = false,
+    rightBlindSpot = false, parkingDistance = nil, laneDeparture = false,
+    leadDistance = nil, targetSpeedMps = ROUTE_MAX_SPEED_MPS,
+    status = "disabled"
+  },
+  adasLastBrakeCommand = 0,
+  adasLastCruiseCommand = nil
 }
 
 local checkTimer = 0
@@ -1653,7 +1669,9 @@ local function normalizeSettings(source)
     "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
     "lidarPersistenceEnabled", "visualizationInertiaEnabled",
     "showLidar", "showRadar", "showUltrasonic", "showCameras",
-    "showLocalization", "showDetectedVehicles", "showCalibration"
+    "showLocalization", "showDetectedVehicles", "showCalibration",
+    "adasEnabled", "adasFCWEnabled", "adasAEBEnabled", "adasACCEnabled",
+    "adasBSMEnabled", "adasParkingEnabled", "adasLDWEnabled"
   }
   for i = 1, #booleanKeys do
     local key = booleanKeys[i]
@@ -1825,6 +1843,8 @@ local function settingsResult()
       routePilotEnabled = state.routePilotEnabled,
       routePilotStarted = state.routePilotStarted,
       routeSafetyStopped = state.routeSafetyStopped,
+      adasStatus = cloneWorldModelValue(state.adas or {}),
+      adasEnabled = settings.adasEnabled == true,
       routePilotError = state.routePilotError,
       routeWaypointCount = #state.routePath,
       routeInputPointCount = #state.routeInputPoints,
@@ -1955,6 +1975,23 @@ function M.setSetting(key, value)
     return {ok = false, error = "Target FPS must be 30–165 in steps of 5"}
   end
   state.settings = normalized
+  if key == "adasEnabled" or key == "adasAEBEnabled" then
+    if not normalized.adasEnabled or not normalized.adasAEBEnabled then
+      if state.activeVehicle and (state.adasLastBrakeCommand or 0) > 0 then
+        queueVehicleCommand(state.activeVehicle,
+          "extensions.load('roadmind_controller'); " ..
+          "if roadmind_controller then roadmind_controller.setAebBrake(0) end")
+      end
+      state.adasLastBrakeCommand = 0
+      state.adas = {
+        available = state.visualizationEnabled and state.frameAge <= MAX_FRAME_AGE,
+        fcw = false, aeb = false, leftBlindSpot = false, rightBlindSpot = false,
+        parkingDistance = nil, laneDeparture = false, leadDistance = nil,
+        targetSpeedMps = ROUTE_MAX_SPEED_MPS,
+        status = normalized.adasEnabled and "standby" or "disabled"
+      }
+    end
+  end
   if key == "adaptiveFpsEnabled" and value == true then
     state.adaptiveQualityTier = 4
     state.performanceLowFpsTimer = 0
@@ -4750,6 +4787,208 @@ local function nearestForwardObstacle(data)
 end
 
 
+local function setADASBrakeOutput(brake)
+  brake = math.max(0, math.min(1, tonumber(brake) or 0))
+  local previous = state.adasLastBrakeCommand or 0
+  if math.abs(brake - previous) < 0.08 and (brake > 0) == (previous > 0) then return end
+  state.adasLastBrakeCommand = brake
+  if not state.activeVehicle then return end
+  local command = "extensions.load('roadmind_controller'); " ..
+    "if roadmind_controller then roadmind_controller.setAebBrake(" ..
+    string.format("%.3f", brake) .. ") end"
+  queueVehicleCommand(state.activeVehicle, command)
+end
+
+local function getADASLeadVehicle(data, forward, right, origin)
+  local ownLength = state.vehicleGeometry and tonumber(state.vehicleGeometry.length) or 4.5
+  local ownWidth = state.vehicleGeometry and tonumber(state.vehicleGeometry.width) or 2.0
+  local best = nil
+  for i = 1, #(data.tracks or {}) do
+    local track = data.tracks[i]
+    local age = tonumber(track.dataAge) or math.huge
+    local position = vectorFromTable(track.predictedPosition or track.position)
+    local dimensions = track.dimensions
+    if position and (track.status == "confirmed" or track.status == "coasting")
+        and age >= 0 and age <= TRACK_OBSERVATION_MAX_AGE
+        and type(dimensions) == "table" then
+      local delta = position - origin
+      local longitudinal = delta:dot(forward)
+      local lateral = math.abs(delta:dot(right))
+      local halfLength = math.max(0.5, (tonumber(dimensions.length) or 4.5) * 0.5)
+      local halfWidth = math.max(0.25, (tonumber(dimensions.width) or 2.0) * 0.5)
+      local gap = longitudinal - ownLength * 0.5 - halfLength
+      if gap > 0 and gap <= 90 and lateral <= ownWidth * 0.5 + halfWidth + 1.0 then
+        if not best or gap < best.distance then
+          best = {
+            distance = gap,
+            targetVelocity = vectorFromTable(track.estimatedVelocity),
+            trackId = track.trackId
+          }
+        end
+      end
+    end
+  end
+  return best
+end
+
+local function getADASParkingDistance(data, now)
+  local timestamp = tonumber((data.sensorTimestamps or {}).ultrasonic)
+  if not state.settings.ultrasonicEnabled or not timestamp
+      or timestamp > now + 0.05 or now - timestamp > MAX_FRAME_AGE then
+    return nil
+  end
+  local nearest = math.huge
+  for i = 1, #((data.ultrasonic and data.ultrasonic.returns) or {}) do
+    local hit = data.ultrasonic.returns[i]
+    local point = vectorFromTable(hit)
+    local origin = vectorFromTable(hit.origin)
+    if point and origin then nearest = math.min(nearest, (point - origin):length()) end
+  end
+  return nearest < math.huge and nearest or nil
+end
+
+local function updateADAS(dt)
+  local settings = state.settings or DEFAULT_SETTINGS
+  if settings.adasEnabled ~= true then
+    if (state.adasLastBrakeCommand or 0) > 0 then setADASBrakeOutput(0) end
+    state.adas = {
+      available = false, fcw = false, aeb = false, leftBlindSpot = false,
+      rightBlindSpot = false, parkingDistance = nil, laneDeparture = false,
+      leadDistance = nil, targetSpeedMps = ROUTE_MAX_SPEED_MPS, status = "disabled"
+    }
+    state.adasTimer = 0
+    return
+  end
+
+  state.adasTimer = (state.adasTimer or 0) + math.max(0, tonumber(dt) or 0)
+  if state.adasTimer < 0.10 then return end
+  state.adasTimer = state.adasTimer % 0.10
+
+  local data = state.latestData
+  if not state.visualizationEnabled or state.frameAge > MAX_FRAME_AGE or type(data) ~= "table"
+      or not state.activeVehicle then
+    if (state.adasLastBrakeCommand or 0) > 0 then setADASBrakeOutput(0) end
+    state.adas = {
+      available = false, fcw = false, aeb = false, leftBlindSpot = false,
+      rightBlindSpot = false, parkingDistance = nil, laneDeparture = false,
+      leadDistance = nil, targetSpeedMps = ROUTE_MAX_SPEED_MPS, status = "waiting_for_sensors"
+    }
+    return
+  end
+
+  local position = asVec3(safeCall(state.activeVehicle, "getPosition"))
+  local forward = normalizedVec3(safeCall(state.activeVehicle, "getDirectionVector"))
+  local up = normalizedVec3(safeCall(state.activeVehicle, "getDirectionVectorUp"))
+  local right = forward and up and normalizedVec3(forward:cross(up)) or nil
+  local velocity = asVec3(safeCall(state.activeVehicle, "getVelocity"))
+  if not position or not forward or not right or not up or not velocity then
+    if (state.adasLastBrakeCommand or 0) > 0 then setADASBrakeOutput(0) end
+    state.adas = {available = false, status = "vehicle_state_unavailable"}
+    return
+  end
+
+  local speed = velocity:length()
+  local nearest = nearestForwardObstacle(data)
+  local sensorAvailable = nearest < math.huge
+  local fcw = settings.adasFCWEnabled == true and sensorAvailable
+    and nearest <= math.max(14, speed * 2.5 + 6)
+  local aebThreshold = 3.5 + speed * 0.65 + speed * speed / 13.0
+  local aeb = settings.adasAEBEnabled == true and sensorAvailable
+    and speed >= 1.5 and nearest <= aebThreshold
+  local brakeLevel = 0
+  if aeb then
+    brakeLevel = math.max(0.35, math.min(1.0,
+      0.35 + (aebThreshold - nearest) / math.max(1, aebThreshold) * 0.65))
+  end
+
+  local leftBlindSpot, rightBlindSpot = false, false
+  if settings.adasBSMEnabled == true and state.vehicleRegistrySnapshotValid
+      and state.simulationTime - (state.vehicleRegistryTimestamp or -math.huge) <= WORLD_MODEL_REGISTRY_MAX_AGE then
+    local ownWidth = state.vehicleGeometry and tonumber(state.vehicleGeometry.width) or 2.0
+    for i = 1, #(data.tracks or {}) do
+      local track = data.tracks[i]
+      local age = tonumber(track.dataAge) or math.huge
+      local target = vectorFromTable(track.predictedPosition or track.position)
+      local dimensions = track.dimensions
+      if target and type(dimensions) == "table" and age >= 0 and age <= TRACK_OBSERVATION_MAX_AGE
+          and (track.status == "confirmed" or track.status == "coasting") then
+        local delta = target - position
+        local longitudinal = delta:dot(forward)
+        local lateral = delta:dot(right)
+        local halfWidth = math.max(0.25, (tonumber(dimensions.width) or 2) * 0.5)
+        local sideDistance = math.abs(lateral) - ownWidth * 0.5
+        if sideDistance <= halfWidth + 3.0 and sideDistance >= -0.5
+            and longitudinal >= -9 and longitudinal <= 4 then
+          if lateral < 0 then leftBlindSpot = true else rightBlindSpot = true end
+        end
+      end
+    end
+  end
+
+  local parkingDistance = settings.adasParkingEnabled == true
+    and getADASParkingDistance(data, state.simulationTime) or nil
+  local laneDeparture = false
+  if settings.adasLDWEnabled == true and type(state.roadState) == "table"
+      and state.roadState.valid == true
+      and (state.roadState.quality == "high" or state.roadState.quality == "medium")
+      and speed >= 5 then
+    laneDeparture = math.abs(tonumber(state.roadState.lateralOffset) or 0) >= 1.65
+  end
+
+  local lead = getADASLeadVehicle(data, forward, right, position)
+  local targetSpeed = ROUTE_MAX_SPEED_MPS
+  if settings.adasACCEnabled == true and state.routePilotEnabled and lead then
+    local desiredGap = 5.0 + speed * 1.55
+    local gapFactor = math.max(0, math.min(1, (lead.distance - 3.0) / math.max(1, desiredGap - 3.0)))
+    targetSpeed = math.min(targetSpeed, math.max(0, speed * gapFactor))
+    if lead.targetVelocity then
+      local closingSpeed = (velocity - lead.targetVelocity):dot(forward)
+      if closingSpeed > 0.5 then
+        local ttc = lead.distance / closingSpeed
+        if ttc < 3.0 then targetSpeed = math.min(targetSpeed, math.max(0, speed * ttc / 3.0)) end
+      end
+    end
+  end
+
+  -- AEB can brake a manually driven car. In route mode the independent route
+  -- supervisor applies the stop, avoiding competing control sources.
+  setADASBrakeOutput(not state.routePilotEnabled and aeb and brakeLevel or 0)
+
+  local nextStatus = "active"
+  if aeb then nextStatus = "aeb"
+  elseif fcw then nextStatus = "fcw"
+  elseif leftBlindSpot or rightBlindSpot then nextStatus = "blind_spot"
+  elseif laneDeparture then nextStatus = "lane_departure" end
+
+  state.adas = {
+    available = true,
+    fcw = fcw,
+    aeb = aeb,
+    aebDistance = aeb and round2(nearest) or nil,
+    aebThreshold = settings.adasAEBEnabled == true and aebThreshold or ROUTE_STOP_DISTANCE,
+    leftBlindSpot = leftBlindSpot,
+    rightBlindSpot = rightBlindSpot,
+    parkingDistance = parkingDistance and round2(parkingDistance) or nil,
+    laneDeparture = laneDeparture,
+    leadDistance = lead and round2(lead.distance) or nil,
+    targetSpeedMps = targetSpeed,
+    status = nextStatus,
+    sensorAvailable = sensorAvailable,
+    roadQuality = state.roadState and state.roadState.quality or "unavailable"
+  }
+
+  if state.routePilotEnabled and settings.adasACCEnabled == true
+      and math.abs(targetSpeed - (state.adasLastCruiseCommand or ROUTE_MAX_SPEED_MPS)) >= 0.25 then
+    local command = "extensions.load('roadmind_controller'); " ..
+      "if roadmind_controller then roadmind_controller.setTargetSpeed(" ..
+      string.format("%.2f", targetSpeed) .. ") end"
+    queueVehicleCommand(state.activeVehicle, command)
+    state.adasLastCruiseCommand = targetSpeed
+  elseif not settings.adasACCEnabled then
+    state.adasLastCruiseCommand = nil
+  end
+end
+
 local function updateRouteProgress(dt)
   if not state.routePilotStarted or not state.activeVehicle or #state.routePath < 2 then return end
   state.routeProgressTimer = (state.routeProgressTimer or 0) + math.max(0, tonumber(dt) or 0)
@@ -4866,7 +5105,12 @@ local function updateRoutePilotSafety(dt)
   end
 
   local clearance = nearestForwardObstacle(state.latestData)
-  if clearance <= ROUTE_STOP_DISTANCE then
+  local routeStopDistance = ROUTE_STOP_DISTANCE
+  if state.settings and state.settings.adasEnabled == true
+      and state.settings.adasAEBEnabled == true then
+    routeStopDistance = math.max(routeStopDistance, tonumber(state.adas and state.adas.aebThreshold) or ROUTE_STOP_DISTANCE)
+  end
+  if clearance <= routeStopDistance then
     if state.routePilotStarted then
       stopNativeRouteController(state.activeVehicle)
       state.routePilotStarted = false
@@ -5085,6 +5329,7 @@ function M.onUpdate(dt)
 
   updateAdaptivePerformance(dt)
   state.frameAge = state.frameAge + dt
+  updateADAS(dt)
   local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
   local routePilotActive = state.routePilotEnabled
 
