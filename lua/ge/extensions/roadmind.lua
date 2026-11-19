@@ -5711,25 +5711,36 @@ local function mergeSensorFrame(frame)
   latest.vehicles = state.vehicleCandidates
   state.latestData = latest
   state.frameAge = 0
-  state.worldModel = buildWorldModel and buildWorldModel() or state.worldModel
+  if buildWorldModel then
+    local worldModelStartedAt = state.performanceProfiler.start()
+    state.worldModel = buildWorldModel()
+    state.performanceProfiler.stop("world_model", worldModelStartedAt)
+  end
   updateRoutePilotSafety()
 end
 
 function M.onSensorData(encodedFrame)
   if not state.visualizationEnabled or type(encodedFrame) ~= "string"
       or type(jsonDecode) ~= "function" then return end
+  local sensorFrameStartedAt = state.performanceProfiler.start()
   local ok, frame = pcall(jsonDecode, encodedFrame)
-  if not ok or type(frame) ~= "table" then return end
+  if not ok or type(frame) ~= "table" then
+    state.performanceProfiler.stop("sensor_frame", sensorFrameStartedAt)
+    return
+  end
   -- Drop late messages from a vehicle that is no longer the active player car.
-  if frame.sourceVehicleId ~= state.activeVehicleId then return end
+  if frame.sourceVehicleId ~= state.activeVehicleId then
+    state.performanceProfiler.stop("sensor_frame", sensorFrameStartedAt)
+    return
+  end
   if frame.enabled == false then
     resetFrame()
+    state.performanceProfiler.stop("sensor_frame", sensorFrameStartedAt)
     return
   end
   if type(frame.performance) == "table" then
     state.performanceProfiler.record("sensor_job", frame.performance.elapsedMs)
   end
-  local sensorFrameStartedAt = state.performanceProfiler.start()
   mergeSensorFrame(frame)
   state.performanceProfiler.stop("sensor_frame", sensorFrameStartedAt)
 end
