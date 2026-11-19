@@ -227,7 +227,7 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 
 ---
 
-## Phase 10 — native Lua trajectory control
+### Phase 10 implementation detail — native Lua trajectory control
 
 - [x] Add a Vehicle Lua controller that consumes a bounded, timestamped local trajectory from the GE planner.
 - [x] Track the selected trajectory with a Pure Pursuit-style lateral controller.
