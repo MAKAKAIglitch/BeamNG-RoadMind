@@ -204,7 +204,7 @@ local state = {
 local checkTimer = 0
 
 -- Forward declarations used by the sensor-frame and world-model pipeline.
-local buildLidarRenderPoints, buildWorldModel, trimPersistentLidarPoints
+local buildLidarRenderPoints, buildWorldModel, trimPersistentLidarPoints, updateLocalTrajectoryPlanner
 
 local function boolString(value)
   return value and "true" or "false"
@@ -3896,7 +3896,7 @@ local function evaluatePlannerCandidate(candidate, footprint, obstacles, targets
   end
 end
 
-local function updateLocalTrajectoryPlanner()
+updateLocalTrajectoryPlanner = function()
   local previous = state.localPlanner or {}
   if previous.timestamp and state.simulationTime - previous.timestamp < PLANNER_INTERVAL then
     return previous
