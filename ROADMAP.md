@@ -2,11 +2,11 @@
 
 RoadMind aims to become a lightweight, modular autonomous-driving system for BeamNG.drive. Development is organized around a reliable perception foundation first, followed by road understanding, route planning and vehicle control.
 
-**Current status:** RoadMind has a virtual sensor suite, simulator-assisted vehicle tracking, NavGraph route input, a bounded local trajectory planner, an experimental native Lua trajectory controller and an initial configurable ADAS layer. Existing ADAS prototypes include FCW, AEB, route-pilot ACC, blind-spot monitoring, parking-distance warnings and NavGraph-centreline lane-departure warnings. Sensor accuracy, controller tuning, ADAS thresholds, driver handover, visual alignment and performance still require repeatable in-game validation. The next roadmap extensions separate the ADAS interface, make vehicle perception camera-frustum-based around the whole vehicle (including rear cameras, without requiring LiDAR), add traffic-sign/signal awareness, trailer-aware sensor availability and a lightweight perception display. These are planned features, not implemented capabilities.
+**Current status:** RoadMind has a virtual sensor suite, simulator-assisted vehicle tracking, NavGraph route input, a bounded local trajectory planner, an experimental native Lua trajectory controller and an initial configurable ADAS layer. Existing ADAS prototypes include FCW, AEB, route-pilot ACC, blind-spot monitoring, parking-distance warnings and NavGraph-centreline lane-departure warnings. Sensor accuracy, controller tuning, ADAS thresholds, driver handover, visual alignment and performance still require repeatable in-game validation. The next roadmap extensions separate the ADAS interface, make vehicle perception camera-frustum-based around the whole vehicle (including rear cameras, without requiring LiDAR), add traffic-sign/signal awareness, trailer-aware sensor availability, vehicle-specific OEM-style sensor layouts and a lightweight perception display. Realistic mounting profiles must describe where each fitted sensor belongs on each vehicle, its orientation and effective field of view; generic placements remain clearly identified fallbacks. These are planned features, not implemented capabilities.
 
 ## Development priorities
 
-1. Validate vehicle geometry, sensor mounting and trailer-aware coverage across vehicle classes.
+1. Validate vehicle geometry, realistic per-vehicle sensor mounting profiles and trailer-aware coverage across vehicle classes.
 2. Validate camera-frustum vehicle visibility around the full vehicle, occlusion, track identity and motion estimates in live traffic.
 3. Validate LiDAR direction, point continuity, sensor freshness and world-model quality.
 4. Complete Phase 8 route behavior on intersections, splits and multiple maps.
@@ -53,7 +53,25 @@ Phase 9 is implemented as a bounded local planner. Phase 10 now has its first na
 
 ## Phase 3 — Vehicle geometry and automatic sensor calibration
 
-**Goal:** place sensors relative to each vehicle's actual dimensions instead of relying on universal fixed offsets.
+**Goal:** place sensors relative to each vehicle's actual dimensions and realistic equipment layout instead of relying on universal fixed offsets.
+
+### Vehicle-specific OEM-style sensor placement
+
+- [ ] Add a versioned per-vehicle sensor-layout profile, separate from the vehicle geometry profile. Record which sensor types are fitted, each mount's vehicle-local position, yaw/pitch/roll, field of view, range, role and calibration source/status.
+- [ ] Prefer a vehicle-model/configuration-specific layout when one is available; support shared body-class defaults only as a fallback, and clearly label inferred or manually calibrated placements as estimates.
+- [ ] Keep sensor inventory vehicle-specific: do not silently equip every car with roof LiDAR, surround-view cameras, corner radars or parking sensors when that equipment is not present in its selected profile. Allow optional virtual equipment only through an explicit configuration.
+- [ ] Place the primary forward ADAS camera behind the upper windshield, typically near the rear-view mirror, using the actual vehicle profile rather than a universal roof/front offset.
+- [ ] Place front/rear parking and surround-view cameras at the vehicle-specific factory locations: for example, in the grille/emblem, bumper, tailgate or at/above the license-plate area. A plate-area camera is a parking/rear-view camera where fitted, not a substitute for the main windshield ADAS camera.
+- [ ] Place front radar behind the grille, emblem or front bumper cover according to the vehicle profile; place side/rear corner radars behind the appropriate bumper corners or rear-quarter areas where fitted.
+- [ ] Support LiDAR at realistic vehicle-specific locations: roof/roofline units where the vehicle uses an external roof sensor, or integrated front/windshield/bumper locations where the design calls for concealed installation. Do not force every LiDAR onto the roof.
+- [ ] Place side/surround cameras in mirror housings, fenders or other factory mounting points; place the rear camera near the tailgate or license-plate area and rear-corner cameras only where the vehicle actually has them.
+- [ ] Place ultrasonic sensors flush with the appropriate front/rear bumper surfaces and corners, matching the count and locations in the vehicle's equipment profile.
+- [ ] Keep GNSS antenna placement near the roof where appropriate, the IMU near the vehicle's structural center, and wheel-odometry sources tied to available wheel/electrics data rather than arbitrary exterior mounts.
+- [ ] Apply each mount's actual orientation and calibrated camera/radar/LiDAR/ultrasonic coverage; mounting position alone must not imply that the sensor can see through body panels, glass, bumpers or other occluders.
+- [ ] Account for self-occlusion from the vehicle body, attachments, roof racks and trailers when calculating effective sensor visibility and coverage.
+- [ ] Provide a clear profile provenance state (vehicle-specific, manually overridden, body-class fallback or generic estimate) so the UI/debug overlay never presents an inferred mount as verified factory equipment.
+- [ ] Preserve a conservative generic fallback for unsupported vehicles, but keep it visibly marked as estimated and avoid presenting it as an exact real-world installation.
+- [ ] Validate that changing vehicle/configuration switches the active sensor inventory and mount profile without stale sensors or transforms.
 
 - [x] Read the vehicle's oriented bounding geometry once when attached; provide manual recalibration and reset/configuration callback entry points.
 - [x] Determine vehicle-local center, forward/rear extents, left/right extents, height and coordinate basis from the OBB and live vehicle basis.
@@ -72,7 +90,7 @@ Phase 9 is implemented as a bounded local planner. Phase 10 now has its first na
 - [x] Add optional debug visualization for vehicle bounds, local axes and all sensor mounts.
 - [ ] Validate placement on small cars, sedans, vans, pickups, SUVs and large vehicles.
 
-**Acceptance criteria:** sensor mounts remain outside the relevant body surfaces with sensible coverage; vehicle dimensions are not queried during every scan; switching vehicles produces a fresh calibration without stale mounts.
+**Acceptance criteria:** sensor mounts remain outside the relevant body surfaces with sensible coverage; supported vehicles use their own fitted-sensor inventory and realistic model-specific mounting points/orientations; inferred fallback positions are identified as estimates; bodywork and attachments correctly limit visibility; vehicle dimensions are not queried during every scan; switching vehicles produces a fresh calibration without stale mounts.
 
 ## Phase 4 — Optimized vehicle detection zones
 
