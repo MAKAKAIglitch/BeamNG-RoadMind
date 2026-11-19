@@ -5314,6 +5314,10 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       candidate.visibilityTimestamp = cached.timestamp
       candidate.visibleFrom = cached.sensorName
       candidate.visibilityAge = math.max(0, state.simulationTime - cached.timestamp)
+      local cachedZone = zonesByName[cached.sensorName]
+      if cachedZone then
+        candidate.sensorOrigin = vectorToPlainTable(cachedZone.origin)
+      end
     end
   end
 
@@ -5361,6 +5365,7 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
           if visibility == "visible" then
             candidate.visibility = "visible"
             candidate.visibleFrom = zone.name
+            candidate.sensorOrigin = vectorToPlainTable(zone.origin)
             candidate.sourceKind = zone.sensor == "camera"
               and "simulator-assisted-camera-visibility" or "simulator-assisted"
             candidate.measurementKind = zone.sensor == "camera"
