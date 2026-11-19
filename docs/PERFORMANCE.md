@@ -81,8 +81,8 @@ The combined stop guard, planner and controller are bounded geometric/control lo
 - ADAS evaluates cached world-model/tracking and sensor-freshness data at up to 10 Hz. Its calculations add no independent scene raycasts.
 - AEB sends an input update only when its requested brake level changes materially; it does not queue a brake command on every graphics frame.
 - Vehicle-local sensor mounts, camera frustums, calibration geometry and detection-zone origins are refreshed with the existing pose/detection-zone jobs. The detection-zone cadence is 6.7–13.3 Hz depending on speed; this adds transform/table work and a small pose payload, not raycast work.
-- Game Engine Lua re-anchors the mounted debug geometry to the current vehicle pose during rendering. Dynamic traffic OBBs use tracker-predicted vehicle poses rather than their own damped world-space interpolation.
-- World-space LiDAR returns and the accumulated static point cloud are intentionally not re-anchored; they represent scene measurements, not vehicle-mounted geometry.
+- Game Engine Lua re-anchors mounted debug geometry to the current vehicle pose during rendering. Dynamic traffic OBBs and tracked LiDAR/radar/ultrasonic surface returns use predicted vehicle-local positions rather than damped world-space interpolation.
+- Static-scene returns and the accumulated point cloud remain fixed in world coordinates. Bounded visual-frame tables are copied before transforms so the source observations are not mutated.
 
 The extra Lua/table and payload cost has not yet been measured in-game. The existing scene-raycast estimates do not represent total CPU, serialization or rendering cost.
 
