@@ -417,7 +417,7 @@
 
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref } from "vue"
-import { useBridge } from "@/bridge"
+import { runRaw, serialize } from "@/bridge/libs/Lua.js"
 import {
   BngButton,
   BngSwitch,
@@ -794,26 +794,28 @@ const RU = {
 
 const locale = ref("en-US")
 
-function luaLiteral(value) {
-  if (typeof value === "string") return JSON.stringify(value)
-  if (typeof value === "boolean") return value ? "true" : "false"
-  if (typeof value === "number" && Number.isFinite(value)) return String(value)
-  throw new TypeError("Unsupported RoadMind setting value")
-}
-
-const { api } = useBridge()
 const ROADMIND_LUA_TIMEOUT_MS = 12000
+const ROADMIND_METHODS = new Set([
+  "getSettings",
+  "setSetting",
+  "setPreset",
+  "setVisualizationEnabled",
+  "setRoutePilotEnabled",
+  "setRoutePoints",
+  "clearRoutePoints",
+  "recalibrateVehicle",
+  "clearLidarMap",
+])
 
 function callRoadMind(method, args = []) {
+  if (!ROADMIND_METHODS.has(method)) {
+    return Promise.reject(new Error("Unsupported RoadMind method: " + method))
+  }
+
+  const command = "extensions.load('roadmind'); return extensions.roadmind."
+    + method + "(" + args.map(value => serialize(value)).join(", ") + ")"
+
   return new Promise((resolve, reject) => {
-    if (!api || typeof api.engineLua !== "function") {
-      reject(new Error("BeamNG Vue bridge is unavailable"))
-      return
-    }
-
-    const command = "(function() extensions.load('roadmind'); return extensions.roadmind."
-      + method + "(" + args.map(luaLiteral).join(", ") + ") end)()"
-
     let settled = false
     const timeout = setTimeout(() => {
       if (settled) return
@@ -821,23 +823,20 @@ function callRoadMind(method, args = []) {
       reject(new Error("RoadMind did not answer the Lua bridge request"))
     }, ROADMIND_LUA_TIMEOUT_MS)
 
-    const finish = callback => value => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      callback(value)
-    }
-
-    try {
-      // Keep the bridge API receiver intact: engineLua uses its own callback registry.
-      api.engineLua(command, finish(resolve))
-    } catch (error) {
-      if (!settled) {
+    Promise.resolve()
+      .then(() => runRaw(command))
+      .then(value => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        resolve(value)
+      })
+      .catch(error => {
+        if (settled) return
         settled = true
         clearTimeout(timeout)
         reject(error)
-      }
-    }
+      })
   })
 }
 
