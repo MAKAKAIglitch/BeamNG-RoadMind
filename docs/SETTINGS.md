@@ -1,8 +1,12 @@
 # RoadMind settings
 
-Open the in-game page at **ESC → Mods → RoadMind** in BeamNG.drive 0.39+.
+Open the three in-game pages under **ESC → Mods** in BeamNG.drive 0.39+:
 
-The page reads the selected game language and displays Russian or English. Changes are saved to `/settings/roadmind.json` and applied to the active vehicle while scanning is enabled.
+- **RoadMind** — sensor acquisition, calibration, 3D overlays and performance.
+- **RoadMind ADAS** — driver-assistance switches, ADAS status, route pilot and manual takeover.
+- **RoadMind Perception** — lightweight top-down/rear-follow-style 2D view of the cached world model.
+
+The pages read the selected game language and display Russian or English. Changes are saved to `/settings/roadmind.json` and applied while the relevant feature is active.
 
 ## Performance profiles
 
@@ -27,6 +31,7 @@ These are calculated query budgets, not measured FPS or CPU percentages. Actual 
 - **LiDAR:** enable/disable, profile-controlled density and frequency (1/2/4 Hz). Range and horizontal sample count are kept inside the performance profiles rather than exposed as manual sliders.
 - **Radar:** enable/disable, 1/2 Hz, low (one ray per radar), medium (up to two per radar) or high (all configured rays).
 - **Ultrasonic:** enable/disable, 1/2 Hz, single-ray or three-ray beam.
+- **Camera vehicle detection:** enabled by default; includes front, side and rear camera frustums and bounded scene-occlusion checks. It works independently of LiDAR but is a simulator-assisted OBB visibility model, not RGB image recognition.
 - **Point-cloud accumulation:** optional session-only world-space map, with a configurable 500–10,000 point cap (500-point steps), including hits on other vehicles; clear it at any time.
 - **Visualization inertia:** an independent switch for eligible world-space LiDAR returns and route/planner overlays. Vehicle-mounted origins and geometry, traffic OBBs, and tracked LiDAR/radar/ultrasonic points on moving cars remain body-locked.
 - **3D display:** independently show or hide LiDAR, radar, ultrasonic, detected vehicle OBBs, camera frustums and IMU/GNSS markers. The last valid overlays remain frozen while the simulation is paused.
@@ -35,7 +40,7 @@ Hiding a 3D overlay does not stop its sensor scans. Turn off the sensor group it
 
 ## ADAS driver assistance
 
-ADAS is **off by default**. Enable the master switch to expose the individual feature switches. Every feature can be disabled independently; changes are saved in `/settings/roadmind.json`.
+Open **ESC → Mods → RoadMind ADAS**. ADAS is **off by default**. Enable the master switch to expose the individual feature switches. Every feature can be disabled independently; changes are saved in `/settings/roadmind.json`. The page also hosts the route-point editor and route-pilot controls.
 
 | Setting | Behavior | Requirements / limits |
 |---|---|---|
@@ -50,10 +55,15 @@ The ADAS status panel reports whether measurements are fresh and shows active wa
 
 ## Experimental road route pilot
 
-The route section uses the current map's NavGraph. Enter 1–12 ordered world-coordinate points in metres, one per line as `X, Y, Z`. The route builder snaps each point to a nearby road segment and shows the final-node snap distance. RoadMind's own Vehicle Lua controller tracks the selected safe local trajectory and controls steering, throttle and brake, with a conservative 8 m/s (28.8 km/h) speed cap.
+The route controls are in **RoadMind ADAS**. Enter 1–12 ordered world-coordinate points in metres, one per line as `X, Y, Z`. The route builder snaps each point to a nearby road segment and shows route progress. RoadMind's own Vehicle Lua controller tracks the selected safe local trajectory and controls steering, throttle and brake, with a conservative 8 m/s (28.8 km/h) speed cap. Manual takeover is enabled by default and returns control when a steering, throttle or brake input is detected.
 
 When the pilot starts, RoadMind switches to the Balanced sensor profile. Enabled sensor streams are checked for freshness; recent confirmed vehicle OBB footprints and scene-raycast obstacle clusters feed the bounded local planner. The controller stops with full brake if the planner cannot approve a path, the route is lost, vehicle state is unavailable or the trajectory feed is stale for 0.75 s. This is an experimental first controller: NavGraph road width is still a heuristic, and behavior on traffic, intersections, different vehicles and different road surfaces requires in-game validation. Test in a controlled, clear area.
 
 ## Defaults
 
 RoadMind starts with scanning off. When started, the default Economy profile runs only the forward LiDAR (about 9 scene queries/s). Radar and ultrasonic are disabled until enabled manually or by switching to Balanced/High. Only the LiDAR overlay is visible initially; radar, ultrasonic, camera and localization overlays are hidden to keep debug drawing light.
+
+
+## RoadMind Perception
+
+Open **ESC → Mods → RoadMind Perception**. The page displays the current cached World Model in a lightweight dark 2D view, with a top-down mode and a rear-follow-style projection. It reads tracked vehicle OBBs, raycast obstacle clusters, the NavGraph road centreline and the active route. It does not run scene queries or render a live RGB camera feed. The NavGraph line is not lane marking.
