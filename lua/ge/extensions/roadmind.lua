@@ -5613,6 +5613,7 @@ state._roadmindHelpers.updateADAS = function(dt)
     targetSpeedMps = targetSpeed,
     status = nextStatus,
     sensorAvailable = forwardSensorAvailable,
+    cameraAvailable = cameraAvailable == true,
     ultrasonicAvailable = ultrasonicAvailable,
     registryAvailable = registryAvailable,
     roadAvailable = roadAvailable,
