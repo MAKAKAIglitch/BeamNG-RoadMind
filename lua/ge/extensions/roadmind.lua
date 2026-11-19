@@ -220,6 +220,7 @@ local state = {
 
 local checkTimer = 0
 
+local performanceProfiler = (function()
 local PROFILE_HISTORY_SECONDS = 15
 local PROFILE_STAGES = {
   {key = "sensor_job"}, {key = "sensor_frame"},
@@ -254,12 +255,12 @@ local function isProfilerEnabled()
     and (state.settings or DEFAULT_SETTINGS).performanceProfilerEnabled == true
 end
 
-local function profileStart()
+local function performanceProfiler.start()
   if not isProfilerEnabled() then return nil end
   return performanceClock()
 end
 
-local function profileRecord(key, elapsedMs)
+local function performanceProfiler.record(key, elapsedMs)
   if not isProfilerEnabled() then return end
   local bucket = profiler.current[key]
   elapsedMs = tonumber(elapsedMs)
@@ -270,12 +271,12 @@ local function profileRecord(key, elapsedMs)
   if elapsedMs > bucket.peakMs then bucket.peakMs = elapsedMs end
 end
 
-local function profileStop(key, startedAt)
+local function performanceProfiler.stop(key, startedAt)
   if startedAt == nil or not isProfilerEnabled() then return end
-  profileRecord(key, math.max(0, (performanceClock() - startedAt) * 1000))
+  performanceProfiler.record(key, math.max(0, (performanceClock() - startedAt) * 1000))
 end
 
-local function resetProfilerHistory()
+local function performanceProfiler.reset()
   profiler.historyCount, profiler.historyCursor = 0, 1
   profiler.elapsed, profiler.memoryKb, profiler.lastSampleDuration = 0, nil, 0
   for i = 1, #PROFILE_STAGES do
@@ -292,7 +293,7 @@ local function resetProfilerHistory()
   end
 end
 
-local function advanceProfiler(dt)
+local function performanceProfiler.advance(dt)
   if not isProfilerEnabled() then return end
   profiler.elapsed = profiler.elapsed + math.max(0, tonumber(dt) or 0)
   if profiler.elapsed < 1.0 then return end
@@ -317,12 +318,12 @@ local function advanceProfiler(dt)
   end
 end
 
-local function getProfilerSnapshot()
+local function performanceProfiler.snapshot()
   local enabled = isProfilerEnabled()
   local result = {
     enabled = enabled, available = performanceClock ~= nil,
     historySeconds = profiler.historyCount,
-    memoryKb = profiler.memoryKb and round2(profiler.memoryKb) or nil,
+    memoryKb = profiler.memoryKb and math.floor(profiler.memoryKb * 100 + 0.5) / 100 or nil,
     stages = {}
   }
   if not enabled then return result end
@@ -341,13 +342,23 @@ local function getProfilerSnapshot()
     end
     result.stages[#result.stages + 1] = {
       key = key, calls = calls,
-      callsPerSecond = duration > 0 and round2(calls / duration) or 0,
-      avgMs = calls > 0 and round2(totalMs / calls) or 0,
-      peakMs = round2(peakMs), lastMs = lastMs and round2(lastMs) or nil
+      callsPerSecond = duration > 0 and math.floor(calls / duration * 100 + 0.5) / 100 or 0,
+      avgMs = calls > 0 and math.floor(totalMs / calls * 100 + 0.5) / 100 or 0,
+      peakMs = math.floor(peakMs * 100 + 0.5) / 100, lastMs = lastMs and math.floor(lastMs * 100 + 0.5) / 100 or nil
     }
   end
   return result
 end
+
+return {
+  start = profileStart,
+  stop = profileStop,
+  record = profileRecord,
+  reset = resetProfilerHistory,
+  advance = advanceProfiler,
+  snapshot = getProfilerSnapshot
+}
+end)()
 
 -- Forward declarations used by the sensor-frame and world-model pipeline.
 local buildLidarRenderPoints, buildWorldModel, trimPersistentLidarPoints, updateLocalTrajectoryPlanner
@@ -1987,7 +1998,7 @@ local function settingsResult()
         and state.performanceFps ~= nil
         and state.performanceFps < (settings.targetFps or 60) * 0.92,
       speedAdaptiveRateEnabled = settings.speedAdaptiveRateEnabled ~= false,
-      profiler = getProfilerSnapshot(),
+      profiler = performanceProfiler.snapshot(),
       trafficUpdateHz = 1 / math.max(0.01,
         state.currentTrafficUpdateInterval or VEHICLE_DETECTION_INTERVAL),
       vehicleRegistryCount = #state.vehicleRegistry,
@@ -2145,7 +2156,7 @@ function M.setSetting(key, value)
     return {ok = false, error = "Target FPS must be 30–165 in steps of 5"}
   end
   state.settings = normalized
-  if key == "performanceProfilerEnabled" then resetProfilerHistory() end
+  if key == "performanceProfilerEnabled" then performanceProfiler.reset() end
   if key == "adasEnabled" or key == "adasAEBEnabled" then
     if normalized.adasEnabled then
       state.adas = {
@@ -3514,9 +3525,9 @@ end
 local function buildTimedWorldModel()
   local builder = buildWorldModel
   if type(builder) ~= "function" then return nil end
-  local startedAt = profileStart()
+  local startedAt = performanceProfiler.start()
   local result = builder()
-  profileStop("world_model", startedAt)
+  performanceProfiler.stop("world_model", startedAt)
   return result
 end
 
@@ -4596,9 +4607,9 @@ end
 
 local updateLocalTrajectoryPlannerImpl = updateLocalTrajectoryPlanner
 updateLocalTrajectoryPlanner = function()
-  local startedAt = profileStart()
+  local startedAt = performanceProfiler.start()
   local result = updateLocalTrajectoryPlannerImpl()
-  profileStop("planner", startedAt)
+  performanceProfiler.stop("planner", startedAt)
   return result
 end
 local function refreshVehicleRegistry()
@@ -5635,7 +5646,7 @@ local function mergeSensorFrame(frame)
   latest.sequence = frame.sequence
 
   if updates.lidar == true then
-    local sensorStartedAt = profileStart()
+    local sensorStartedAt = performanceProfiler.start()
     latest.lidar = processLidar(frame.lidar)
     latest.lidar.scanTimestamp = state.simulationTime
     latest.lidar.scanSequence = tonumber(frame.sequence) or 0
@@ -5645,10 +5656,10 @@ local function mergeSensorFrame(frame)
     latest.sensorTimestamps.lidar = state.simulationTime
     rememberLidarPoints(latest.lidar)
     buildLidarRenderPoints(latest.lidar)
-    profileStop("sensor_lidar", sensorStartedAt)
+    performanceProfiler.stop("sensor_lidar", sensorStartedAt)
   end
   if updates.radar == true then
-    local sensorStartedAt = profileStart()
+    local sensorStartedAt = performanceProfiler.start()
     latest.radar = processRadar(frame.radar)
     attachTrackedVehicleReturns(latest.radar.returns)
     latest.radar.scanTimestamp = state.simulationTime
@@ -5657,10 +5668,10 @@ local function mergeSensorFrame(frame)
       latest.radar.returns[i].measurementTimestamp = state.simulationTime
     end
     latest.sensorTimestamps.radar = state.simulationTime
-    profileStop("sensor_radar", sensorStartedAt)
+    performanceProfiler.stop("sensor_radar", sensorStartedAt)
   end
   if updates.ultrasonic == true then
-    local sensorStartedAt = profileStart()
+    local sensorStartedAt = performanceProfiler.start()
     latest.ultrasonic = processUltrasonic(frame.ultrasonic)
     attachTrackedVehicleReturns(latest.ultrasonic.returns)
     latest.ultrasonic.scanTimestamp = state.simulationTime
@@ -5669,7 +5680,7 @@ local function mergeSensorFrame(frame)
       latest.ultrasonic.returns[i].measurementTimestamp = state.simulationTime
     end
     latest.sensorTimestamps.ultrasonic = state.simulationTime
-    profileStop("sensor_ultrasonic", sensorStartedAt)
+    performanceProfiler.stop("sensor_ultrasonic", sensorStartedAt)
   end
   if updates.detectionZones == true then
     latest.detectionZones = type(frame.detectionZones) == "table"
@@ -5725,11 +5736,11 @@ function M.onSensorData(encodedFrame)
     return
   end
   if type(frame.performance) == "table" then
-    profileRecord("sensor_job", frame.performance.elapsedMs)
+    performanceProfiler.record("sensor_job", frame.performance.elapsedMs)
   end
-  local sensorFrameStartedAt = profileStart()
+  local sensorFrameStartedAt = performanceProfiler.start()
   mergeSensorFrame(frame)
-  profileStop("sensor_frame", sensorFrameStartedAt)
+  performanceProfiler.stop("sensor_frame", sensorFrameStartedAt)
 end
 
 
@@ -5798,12 +5809,12 @@ function M.onUpdate(dt)
   if dt < 0 then dt = 0 end
   if not state.visualizationEnabled then return end
 
-  local geUpdateStartedAt = profileStart()
+  local geUpdateStartedAt = performanceProfiler.start()
   updateAdaptivePerformance(dt)
   state.frameAge = state.frameAge + dt
-  local adasStartedAt = profileStart()
+  local adasStartedAt = performanceProfiler.start()
   updateADAS(dt)
-  profileStop("adas", adasStartedAt)
+  performanceProfiler.stop("adas", adasStartedAt)
   local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
   local routePilotActive = state.routePilotEnabled
 
@@ -5819,36 +5830,36 @@ function M.onUpdate(dt)
     state.roadUpdateTimer = (state.roadUpdateTimer or 0) + dt
     if state.roadUpdateTimer >= 0.5 then
       state.roadUpdateTimer = state.roadUpdateTimer % 0.5
-      local roadStartedAt = profileStart()
+      local roadStartedAt = performanceProfiler.start()
       updateRoadUnderstanding()
-      profileStop("road_graph", roadStartedAt)
+      performanceProfiler.stop("road_graph", roadStartedAt)
     end
-    local trackingStartedAt = profileStart()
+    local trackingStartedAt = performanceProfiler.start()
     updateVehicleDetection(dt)
-    profileStop("vehicle_tracking", trackingStartedAt)
+    performanceProfiler.stop("vehicle_tracking", trackingStartedAt)
     if visualFrameFresh then
       updateLidarRenderPoints(dt)
       updateDetectedVehicleRenderStates(dt)
     end
     if routePilotActive then
-      local safetyStartedAt = profileStart()
+      local safetyStartedAt = performanceProfiler.start()
       updateRoutePilotSafety(dt)
-      profileStop("route_safety", safetyStartedAt)
+      performanceProfiler.stop("route_safety", safetyStartedAt)
     end
   end
   -- Advance render-only inertia at display cadence. This covers own-vehicle
   -- bounds/axes/mounts, radar and ultrasonic returns, camera frustums,
   -- localization, traffic origins, route lines and planner candidates.
-  local visualizationStartedAt = profileStart()
+  local visualizationStartedAt = performanceProfiler.start()
   updateVisualizationRenderState(dt)
-  profileStop("visualization", visualizationStartedAt)
+  performanceProfiler.stop("visualization", visualizationStartedAt)
 
   -- Keep redrawing the last valid snapshot while the simulation is paused.
-  local drawStartedAt = profileStart()
+  local drawStartedAt = performanceProfiler.start()
   drawFrame()
-  profileStop("debug_draw", drawStartedAt)
-  profileStop("ge_update", geUpdateStartedAt)
-  advanceProfiler(dt)
+  performanceProfiler.stop("debug_draw", drawStartedAt)
+  performanceProfiler.stop("ge_update", geUpdateStartedAt)
+  performanceProfiler.advance(dt)
 end
 
 function M.onVehicleDestroyed(vehicleId)
