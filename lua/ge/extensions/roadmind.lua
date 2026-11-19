@@ -3079,16 +3079,6 @@ local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
     end
   end
 
-  local localization = frame.localization
-  if type(localization) == "table" then
-    if localization.gnss then
-      if localization.gnss.position then localization.gnss.position = transformAttachedPoint(localization.gnss.position, sourcePose, currentPose) end
-      if localization.gnss.worldPosition then localization.gnss.worldPosition = transformAttachedPoint(localization.gnss.worldPosition, sourcePose, currentPose) end
-    end
-    if localization.imu and localization.imu.position then
-      localization.imu.position = transformAttachedPoint(localization.imu.position, sourcePose, currentPose)
-    end
-  end
 end
 
 local function updateVisualizationRenderState(dt)
@@ -3110,6 +3100,35 @@ local function updateVisualizationRenderState(dt)
     end
     local currentPose = captureRenderVehiclePose()
     reanchorAttachedVisuals(renderFrame, state.latestData.vehiclePose, currentPose)
+    if type(renderFrame.localization) == "table" then
+      local localizationFrame = {localization = renderFrame.localization}
+      reanchorAttachedVisuals(localizationFrame,
+        state.latestData.localizationVehiclePose or state.latestData.vehiclePose, currentPose)
+      local localization = localizationFrame.localization
+      if localization then
+        if localization.gnss then
+          if localization.gnss.position then
+            localization.gnss.position = transformAttachedPoint(
+              localization.gnss.position,
+              state.latestData.localizationVehiclePose or state.latestData.vehiclePose,
+              currentPose)
+          end
+          if localization.gnss.worldPosition then
+            localization.gnss.worldPosition = transformAttachedPoint(
+              localization.gnss.worldPosition,
+              state.latestData.localizationVehiclePose or state.latestData.vehiclePose,
+              currentPose)
+          end
+        end
+        if localization.imu and localization.imu.position then
+          localization.imu.position = transformAttachedPoint(
+            localization.imu.position,
+            state.latestData.localizationVehiclePose or state.latestData.vehiclePose,
+            currentPose)
+        end
+      end
+      renderFrame.localization = localization
+    end
     renderFrame.vehiclePose = currentPose
     state.visualizationRenderFrame = renderFrame
   else
@@ -5268,9 +5287,29 @@ local function mergeSensorFrame(frame)
   if updates.pose == true then
     latest.cameras = type(frame.cameras) == "table" and frame.cameras or {}
     latest.localization = type(frame.localization) == "table" and frame.localization or nil
+    latest.localizationVehiclePose = type(frame.vehiclePose) == "table"
+      and frame.vehiclePose or latest.vehiclePose
     latest.mounts = type(frame.mounts) == "table" and frame.mounts or {}
     latest.geometryDebug = type(frame.geometryDebug) == "table" and frame.geometryDebug or nil
   end
+  if type(frame.vehiclePose) == "table" then latest.vehiclePose = frame.vehiclePose end
+  if type(frame.attachedVisuals) == "table" then
+    local attached = frame.attachedVisuals
+    latest.lidar = latest.lidar or {rays = {}, pointCount = 0}
+    if attached.lidarOrigin then latest.lidar.origin = attached.lidarOrigin end
+    latest.radar = latest.radar or {mounts = {}, returns = {}}
+    latest.radar.mounts = type(attached.radarMounts) == "table" and attached.radarMounts or {}
+    latest.ultrasonic = latest.ultrasonic or {mounts = {}, returns = {}}
+    latest.ultrasonic.mounts = type(attached.ultrasonicMounts) == "table" and attached.ultrasonicMounts or {}
+    latest.cameras = type(attached.cameras) == "table" and attached.cameras or latest.cameras
+    latest.mounts = type(attached.mounts) == "table" and attached.mounts or latest.mounts
+    latest.geometryDebug = attached.geometryDebug
+    if type(attached.detectionZones) == "table" then
+      latest.detectionZones = attached.detectionZones
+      latest.sensorTimestamps.detectionZones = state.simulationTime
+    end
+  end
+
   if type(frame.vehicleVelocity) == "table" then latest.vehicleVelocity = frame.vehicleVelocity end
 
   latest.vehicles = state.vehicleCandidates
