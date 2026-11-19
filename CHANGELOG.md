@@ -10,6 +10,9 @@
 - Read driver takeover inputs from Vehicle Lua electrics input channels rather than treating the `input` API table as a numeric input table.
 - Add live camera-zone, in-frustum candidate and camera-visible vehicle counters to RoadMind settings.
 - Add cursor-ray hover picking for visible sensor geometry, with localized type/name tooltips for cameras, LiDAR, radar and ultrasonic mounts; UI mouse capture is respected and no scene raycasts are added.
+- Require camera visibility rays to hit the candidate vehicle itself before confirming it; treat other scene hits as occlusion and ambiguous hits as unverified.
+- Render camera-detected vehicles only while a matching camera candidate has a fresh confirmed line of sight; hide occluded, unverified and stale/coasting camera overlays.
+- Shorten camera visibility-cache lifetime to 0.36 s, aligned with RoadMind's 0.10–0.30 s traffic-detection cadence.
 
 ## Unreleased — surround-view perception and ADAS interface
 
