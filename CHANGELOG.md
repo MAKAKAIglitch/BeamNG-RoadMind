@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — surround-view perception and ADAS interface
+
+- Add seven-camera vehicle candidate zones spanning front, side, rear and rear-corner coverage, independent of LiDAR and camera debug overlays.
+- Pass camera candidates through the shared bounded, rotating scene-occlusion checks and preserve the actually visible camera source in the World Model.
+- Fix LiDAR elevation order: horizontal first, then downward, then upward.
+- Add dedicated **RoadMind ADAS** and **RoadMind Perception** pause-menu pages; move ADAS and route-pilot controls out of core sensor settings.
+- Add a lightweight dark 2D environment display backed by a bounded cached World Model snapshot, with top-down and rear-follow-style projection modes.
+- Add default-on route-controller driver takeover for detected steering, throttle or brake input; camera/view movement is ignored.
+- Document that regular BeamNG.drive uses simulator-assisted OBB/frustum visibility, not RGB image recognition, and that the NavGraph display is a road centreline rather than lane markings.
+
 ## Unreleased — native Lua autonomous controller
 
 - Add a native Vehicle Lua trajectory controller with Pure Pursuit-style steering and bounded PI speed control.
