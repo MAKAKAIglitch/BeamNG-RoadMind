@@ -895,7 +895,9 @@ local function startNativeRouteController(vehicle)
     end
   end
 
+  local plannerStartedAt = performanceProfiler.start()
   local planner = updateLocalTrajectoryPlanner()
+  performanceProfiler.stop("planner", plannerStartedAt)
   local queued, reason = sendControllerPath(vehicle, planner, true)
   if not queued then return false, reason end
   local command =
@@ -3522,15 +3524,6 @@ local function finiteWorldVector(value)
   return {x = x, y = y, z = z}
 end
 
-local function buildTimedWorldModel()
-  local builder = buildWorldModel
-  if type(builder) ~= "function" then return nil end
-  local startedAt = performanceProfiler.start()
-  local result = builder()
-  performanceProfiler.stop("world_model", startedAt)
-  return result
-end
-
 local function cloneWorldModelValue(value)
   if type(value) ~= "table" then return value end
   local result = {}
@@ -4604,14 +4597,6 @@ updateLocalTrajectoryPlanner = function()
       sampleCount = #centerlineSamples
     })
 end
-
-local updateLocalTrajectoryPlannerImpl = updateLocalTrajectoryPlanner
-updateLocalTrajectoryPlanner = function()
-  local startedAt = performanceProfiler.start()
-  local result = updateLocalTrajectoryPlannerImpl()
-  performanceProfiler.stop("planner", startedAt)
-  return result
-end
 local function refreshVehicleRegistry()
   local registry = {}
   local examined = 0
@@ -5062,7 +5047,11 @@ local function updateVehicleDetection(dt)
   if state.latestData then
     state.latestData.vehicles = candidates
     state.latestData.tracks = tracks
-    state.worldModel = buildWorldModel and buildTimedWorldModel() or state.worldModel
+    if buildWorldModel then
+      local worldModelStartedAt = performanceProfiler.start()
+      state.worldModel = buildWorldModel()
+      performanceProfiler.stop("world_model", worldModelStartedAt)
+    end
   end
 end
 
@@ -5521,7 +5510,9 @@ local function updateRoutePilotSafety(dt)
     return
   end
 
+  local plannerStartedAt = performanceProfiler.start()
   local planner = updateLocalTrajectoryPlanner()
+  performanceProfiler.stop("planner", plannerStartedAt)
   if planner.status ~= "ready" or not planner.selectedIndex then
     if state.routePilotStarted then
       stopNativeRouteController(state.activeVehicle)
@@ -5927,7 +5918,9 @@ end
 
 function M.getWorldModel()
   if not state.worldModel and buildWorldModel then
-    state.worldModel = buildTimedWorldModel()
+    local worldModelStartedAt = performanceProfiler.start()
+    state.worldModel = buildWorldModel()
+    performanceProfiler.stop("world_model", worldModelStartedAt)
   end
   if not state.worldModel then
     return {
