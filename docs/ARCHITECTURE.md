@@ -102,9 +102,9 @@ This is a code-level visualization implementation. Smoothness, object associatio
 
 Vehicle-mounted debug geometry is sampled in Vehicle Lua with a common vehicle pose (position and forward/right/up basis). Mounts and coverage geometry are published as a compact pose-only payload alongside the sensor sequence, separate from raycast return arrays. Game Engine Lua re-expresses those local offsets against the live vehicle pose on the render path.
 
-This keeps LiDAR/radar/ultrasonic origins, camera frustums, sensor mounts, calibration bounds and detection-zone origins attached to the vehicle without generating additional scene raycasts. Radar/ultrasonic hit points remain world-space measurements; only their sensor origins are re-anchored. Moving-vehicle OBB outlines use the track's latest predicted position and orientation rather than a separate damped world-space position that could visibly trail the vehicle.
+This keeps LiDAR/radar/ultrasonic origins, camera frustums, sensor mounts, calibration bounds and detection-zone origins attached to the ego vehicle without generating additional scene raycasts. Hits associated with a tracked moving vehicle store an OBB-local surface coordinate and are reconstructed from the latest predicted target pose for LiDAR, radar and ultrasonic display. A tracked surface return is removed when its target track expires instead of being left as a world-space ghost. Moving-vehicle OBB outlines use the track's predicted position and orientation rather than a separate damped world-space position.
 
-The accumulated LiDAR cloud and static-scene returns intentionally remain fixed in world coordinates. Render transforms are display-only and do not modify sensor observations or the fused world model.
+The accumulated LiDAR cloud and static-scene returns intentionally remain fixed in world coordinates. The renderer deep-copies the bounded visual frame before re-anchoring or target reprojection; raw sensor observations and the fused world model are not modified.
 
 ## Phase 7 — unified world model
 
