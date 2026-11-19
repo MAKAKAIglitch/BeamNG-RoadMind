@@ -842,7 +842,7 @@ state._roadmindHelpers.sendControllerPath = function(vehicle, planner, force)
   return true
 end
 
-local function startNativeRouteController(vehicle)
+state._roadmindHelpers.startNativeRouteController = function(vehicle)
   if not vehicle then return false, "No active vehicle" end
 
   local pathIds, pathPoints, pathError
@@ -895,7 +895,7 @@ local function stopNativeRouteController(vehicle)
   )
 end
 
-local function disableNativeRouteController(vehicle)
+state._roadmindHelpers.disableNativeRouteController = function(vehicle)
   state.controllerPathTimestamp = nil
   if not vehicle then return false end
   return queueVehicleCommand(vehicle,
@@ -924,7 +924,7 @@ state._roadmindHelpers.clearPersistentLidarPoints = function()
   state._roadmindHelpers.clearLidarRenderState()
 end
 
-local function resetTrackingState(resetClock)
+state._roadmindHelpers.resetTrackingState = function(resetClock)
   state.tracks = {}
   state.tracksBySourceId = {}
   state.lidarTrackGrid = {}
@@ -1013,7 +1013,7 @@ state._roadmindHelpers.estimateTrackVelocity = function(track, position, timesta
   track.velocitySource = "timestamped-position-difference"
 end
 
-local function updateObjectTracks(candidates)
+state._roadmindHelpers.updateObjectTracks = function(candidates)
   local now = state.simulationTime
   local seenTracks = {}
   local playerPosition = state.activeVehicle and asVec3(safeCall(state.activeVehicle, "getPosition")) or nil
@@ -1248,13 +1248,13 @@ state._roadmindHelpers.vehicleSettingsCommand = function()
   return "roadmind_sensors.setSettings(" .. string.format("%q", encoded) .. "); "
 end
 
-local function setVehicleSensorSettings(vehicle)
+state._roadmindHelpers.setVehicleSensorSettings = function(vehicle)
   if not vehicle then return end
   local command = "extensions.load('roadmind_sensors'); " .. state._roadmindHelpers.vehicleSettingsCommand()
   queueVehicleCommand(vehicle, command)
 end
 
-local function setVehicleSensorState(vehicle, enabled, vehicleId)
+state._roadmindHelpers.setVehicleSensorState = function(vehicle, enabled, vehicleId)
   if not vehicle then return end
   local idArgument = type(vehicleId) == "number" and string.format("%.0f", vehicleId) or "nil"
   local command = "extensions.load('roadmind_sensors'); "
@@ -1276,7 +1276,7 @@ state._roadmindHelpers.getPlayerVehicle = function()
   return nil
 end
 
-local function resetFrame()
+state._roadmindHelpers.resetFrame = function()
   state.latestData = nil
   state.frameAge = math.huge
   state.worldModel = nil
@@ -1298,7 +1298,7 @@ state._roadmindHelpers.detachPreviousVehicle = function()
     end
     if state.routePilotEnabled then
       stopNativeRouteController(state.activeVehicle)
-      disableNativeRouteController(state.activeVehicle)
+      state._roadmindHelpers.disableNativeRouteController(state.activeVehicle)
     end
     queueVehicleCommand(
       state.activeVehicle,
@@ -1331,7 +1331,7 @@ state._roadmindHelpers.detachPreviousVehicle = function()
   }
   state.vehicleGeometry = nil
   state.vehicleCalibrationError = nil
-  resetTrackingState(true)
+  state._roadmindHelpers.resetTrackingState(true)
   state.vehicleRegistry = {}
   state.vehicleRegistryById = {}
   state.vehicleRegistrySnapshotValid = false
@@ -1351,18 +1351,18 @@ state._roadmindHelpers.detachPreviousVehicle = function()
   state.occlusionRaycastsLastCycle = 0
   state.occlusionRaycastsPerSecond = 0
   state._roadmindHelpers.clearPersistentLidarPoints()
-  resetFrame()
+  state._roadmindHelpers.resetFrame()
 end
 
 state._roadmindHelpers.attachVehicle = function(vehicle, id)
   state.activeVehicle = vehicle
   state.activeVehicleId = id
-  resetFrame()
+  state._roadmindHelpers.resetFrame()
   state._roadmindHelpers.calibrateVehicleGeometry(vehicle)
-  setVehicleSensorState(vehicle, state.visualizationEnabled, id)
+  state._roadmindHelpers.setVehicleSensorState(vehicle, state.visualizationEnabled, id)
 end
 
-local function syncPlayerVehicle()
+state._roadmindHelpers.syncPlayerVehicle = function()
   local vehicle = state._roadmindHelpers.getPlayerVehicle()
   local id = getVehicleId(vehicle)
 
@@ -1804,22 +1804,22 @@ local function drawFrame()
   drawLocalPlanner(drawer, renderOverlays.planner)
 end
 
-local function copySettings(source)
+state._roadmindHelpers.copySettings = function(source)
   local result = {}
   for key, value in pairs(source or {}) do result[key] = value end
   return result
 end
 
-local function enumValue(value, allowed)
+state._roadmindHelpers.enumValue = function(value, allowed)
   for i = 1, #allowed do
     if value == allowed[i] then return true end
   end
   return false
 end
 
-local function normalizeSettings(source)
+state._roadmindHelpers.normalizeSettings = function(source)
   source = type(source) == "table" and source or {}
-  local result = copySettings(DEFAULT_SETTINGS)
+  local result = state._roadmindHelpers.copySettings(DEFAULT_SETTINGS)
 
   local booleanKeys = {
     "lidarEnabled", "radarEnabled", "ultrasonicEnabled",
@@ -1842,7 +1842,7 @@ local function normalizeSettings(source)
     ultrasonicDensity = {"single", "wide"}
   }
   for key, allowed in pairs(enums) do
-    if enumValue(source[key], allowed) then result[key] = source[key] end
+    if state._roadmindHelpers.enumValue(source[key], allowed) then result[key] = source[key] end
   end
 
   if type(source.lidarPointCount) == "number" and source.lidarPointCount >= 9
@@ -1869,17 +1869,17 @@ local function normalizeSettings(source)
   return result
 end
 
-local function loadSettings()
+state._roadmindHelpers.loadSettings = function()
   local loaded = nil
   if type(jsonReadFile) == "function" then
     local ok, data = pcall(jsonReadFile, SETTINGS_FILE)
     if ok and type(data) == "table" then loaded = data end
   end
-  state.settings = normalizeSettings(loaded or DEFAULT_SETTINGS)
+  state.settings = state._roadmindHelpers.normalizeSettings(loaded or DEFAULT_SETTINGS)
   if trimPersistentLidarPoints then trimPersistentLidarPoints() end
 end
 
-local function saveSettings()
+state._roadmindHelpers.saveSettings = function()
   if type(jsonWriteFile) ~= "function" then return false end
   local ok = pcall(jsonWriteFile, SETTINGS_FILE, state.settings, true)
   return ok
@@ -1958,7 +1958,7 @@ local function settingsResult()
   return {
     ok = true,
     language = state._roadmindHelpers.getGameLanguage(),
-    settings = copySettings(settings),
+    settings = state._roadmindHelpers.copySettings(settings),
     status = {
       visualizationEnabled = state.visualizationEnabled,
       activeVehicle = state.activeVehicleId ~= nil,
@@ -2001,7 +2001,7 @@ local function settingsResult()
       routePilotEnabled = state.routePilotEnabled,
       routePilotStarted = state.routePilotStarted,
       routeSafetyStopped = state.routeSafetyStopped,
-      adasStatus = copySettings(state.adas or {}),
+      adasStatus = state._roadmindHelpers.copySettings(state.adas or {}),
       adasEnabled = settings.adasEnabled == true,
       routePilotError = state.routePilotError,
       routeWaypointCount = #state.routePath,
@@ -2086,22 +2086,22 @@ local function settingsResult()
 end
 
 function M.getSettings()
-  if not state.settings then loadSettings() end
-  if not state.activeVehicle then syncPlayerVehicle() end
+  if not state.settings then state._roadmindHelpers.loadSettings() end
+  if not state.activeVehicle then state._roadmindHelpers.syncPlayerVehicle() end
   return settingsResult()
 end
 
 function M.setSetting(key, value)
-  if not state.settings then loadSettings() end
+  if not state.settings then state._roadmindHelpers.loadSettings() end
   if DEFAULT_SETTINGS[key] == nil then
     return {ok = false, error = "Unknown setting"}
   end
 
-  local candidate = copySettings(state.settings)
+  local candidate = state._roadmindHelpers.copySettings(state.settings)
   candidate[key] = value
   if key ~= "preset" and key ~= "performanceProfilerEnabled"
       and not tostring(key):match("^adas") then candidate.preset = "custom" end
-  local normalized = normalizeSettings(candidate)
+  local normalized = state._roadmindHelpers.normalizeSettings(candidate)
 
   if type(DEFAULT_SETTINGS[key]) == "boolean" and type(value) ~= "boolean" then
     return {ok = false, error = "Invalid boolean value"}
@@ -2181,42 +2181,42 @@ function M.setSetting(key, value)
     state.performanceHighFpsTimer = 0
   end
   if key == "lidarPointCloudLimit" and trimPersistentLidarPoints then trimPersistentLidarPoints() end
-  saveSettings()
+  state._roadmindHelpers.saveSettings()
 
   if state.visualizationEnabled and state.activeVehicle and SENSOR_SETTING_KEYS[key] then
-    setVehicleSensorSettings(state.activeVehicle)
+    state._roadmindHelpers.setVehicleSensorSettings(state.activeVehicle)
   end
   return settingsResult()
 end
 
 function M.setPreset(name)
-  if not state.settings then loadSettings() end
+  if not state.settings then state._roadmindHelpers.loadSettings() end
   local preset = PRESETS[name]
   if not preset then return {ok = false, error = "Unknown performance preset"} end
 
-  local candidate = copySettings(state.settings)
+  local candidate = state._roadmindHelpers.copySettings(state.settings)
   candidate.preset = name
   for key, value in pairs(preset) do candidate[key] = value end
-  state.settings = normalizeSettings(candidate)
+  state.settings = state._roadmindHelpers.normalizeSettings(candidate)
   state.adaptiveQualityTier = 4
   state.performanceLowFpsTimer = 0
   state.performanceHighFpsTimer = 0
-  saveSettings()
+  state._roadmindHelpers.saveSettings()
 
   if state.visualizationEnabled and state.activeVehicle then
-    setVehicleSensorSettings(state.activeVehicle)
+    state._roadmindHelpers.setVehicleSensorSettings(state.activeVehicle)
   end
   return settingsResult()
 end
 
 function M.setVisualizationEnabled(enabled)
-  if not state.settings then loadSettings() end
+  if not state.settings then state._roadmindHelpers.loadSettings() end
   local wanted = enabled == true
 
   if wanted then
     local previousId = state.activeVehicleId
     state.visualizationEnabled = true
-    resetTrackingState(true)
+    state._roadmindHelpers.resetTrackingState(true)
     state._roadmindHelpers.clearLidarRenderState()
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
@@ -2232,10 +2232,10 @@ function M.setVisualizationEnabled(enabled)
     state.performanceDecisionTimer = 0
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
-    resetFrame()
-    syncPlayerVehicle()
+    state._roadmindHelpers.resetFrame()
+    state._roadmindHelpers.syncPlayerVehicle()
     if state.activeVehicle and state.activeVehicleId == previousId then
-      setVehicleSensorState(state.activeVehicle, true, state.activeVehicleId)
+      state._roadmindHelpers.setVehicleSensorState(state.activeVehicle, true, state.activeVehicleId)
     end
     if not state.activeVehicle then
       state.visualizationEnabled = false
@@ -2250,7 +2250,7 @@ function M.setVisualizationEnabled(enabled)
     end
     if state.routePilotEnabled and state.activeVehicle then
       stopNativeRouteController(state.activeVehicle)
-      disableNativeRouteController(state.activeVehicle)
+      state._roadmindHelpers.disableNativeRouteController(state.activeVehicle)
     end
     state.adasTimer = 0
     state.adasLastCruiseCommand = nil
@@ -2268,7 +2268,7 @@ function M.setVisualizationEnabled(enabled)
     state.vehicleRegistryTruncated = false
     state.vehicleDetectionTimer = 0
     state.vehicleCandidates = {}
-    resetTrackingState(false)
+    state._roadmindHelpers.resetTrackingState(false)
     state._roadmindHelpers.clearLidarRenderState()
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
@@ -2287,21 +2287,21 @@ function M.setVisualizationEnabled(enabled)
     }
     state.visualizationEnabled = false
     if state.activeVehicle then
-      setVehicleSensorState(state.activeVehicle, false, state.activeVehicleId)
+      state._roadmindHelpers.setVehicleSensorState(state.activeVehicle, false, state.activeVehicleId)
     end
-    resetFrame()
+    state._roadmindHelpers.resetFrame()
   end
 
   return settingsResult()
 end
 
 function M.setRoutePilotEnabled(enabled)
-  if not state.settings then loadSettings() end
+  if not state.settings then state._roadmindHelpers.loadSettings() end
 
   if enabled ~= true then
     if state.routePilotEnabled and state.activeVehicle then
       stopNativeRouteController(state.activeVehicle)
-      disableNativeRouteController(state.activeVehicle)
+      state._roadmindHelpers.disableNativeRouteController(state.activeVehicle)
     end
     state.routePilotEnabled = false
     state.routePilotStarted = false
@@ -2329,7 +2329,7 @@ function M.setRoutePilotEnabled(enabled)
 
   -- The route pilot explicitly switches to a bounded Balanced sensor baseline.
   -- It enables LiDAR, all radars and ultrasonics, plus pose telemetry.
-  local candidate = copySettings(state.settings)
+  local candidate = state._roadmindHelpers.copySettings(state.settings)
   for key, value in pairs(PRESETS.balanced) do candidate[key] = value end
   candidate.preset = "balanced"
   candidate.showLidar = true
@@ -2338,9 +2338,9 @@ function M.setRoutePilotEnabled(enabled)
   candidate.showCameras = true
   candidate.showLocalization = true
   candidate.showDetectedVehicles = true
-  state.settings = normalizeSettings(candidate)
-  saveSettings()
-  setVehicleSensorSettings(state.activeVehicle)
+  state.settings = state._roadmindHelpers.normalizeSettings(candidate)
+  state._roadmindHelpers.saveSettings()
+  state._roadmindHelpers.setVehicleSensorSettings(state.activeVehicle)
 
   state.routePilotEnabled = true
   state.routePilotStarted = false
@@ -2360,7 +2360,7 @@ function M.setRoutePilotEnabled(enabled)
   state.routeProgressTimer = 0
   state.routeDistanceToPath = nil
   state.routeCompleted = false
-  resetFrame()
+  state._roadmindHelpers.resetFrame()
 
   log("I", "roadmind", "Experimental road-network route pilot armed; waiting for fresh sensor data")
   return settingsResult()
@@ -2391,7 +2391,7 @@ function M.setRoutePoints(encodedPoints)
     points[#points + 1] = {x = x, y = y, z = z}
   end
 
-  if not state.activeVehicle then syncPlayerVehicle() end
+  if not state.activeVehicle then state._roadmindHelpers.syncPlayerVehicle() end
   if not state.activeVehicle then return {ok = false, error = "No active player vehicle"} end
 
   local pathIds, pathPoints, reason = state._roadmindHelpers.buildRoadRouteThroughPoints(state.activeVehicle, points)
@@ -2430,7 +2430,7 @@ end
 function M.clearRoutePoints()
   if state.routePilotEnabled and state.activeVehicle then
     stopNativeRouteController(state.activeVehicle)
-    disableNativeRouteController(state.activeVehicle)
+    state._roadmindHelpers.disableNativeRouteController(state.activeVehicle)
   end
   state.routePilotEnabled = false
   state.routePilotStarted = false
@@ -2460,14 +2460,14 @@ function M.clearLidarMap()
 end
 
 function M.recalibrateVehicle()
-  if not state.activeVehicle then syncPlayerVehicle() end
+  if not state.activeVehicle then state._roadmindHelpers.syncPlayerVehicle() end
   if not state.activeVehicle then
     return {ok = false, error = "No active player vehicle"}
   end
 
   local calibrated = state._roadmindHelpers.calibrateVehicleGeometry(state.activeVehicle)
-  if state.visualizationEnabled then setVehicleSensorSettings(state.activeVehicle) end
-  resetFrame()
+  if state.visualizationEnabled then state._roadmindHelpers.setVehicleSensorSettings(state.activeVehicle) end
+  state._roadmindHelpers.resetFrame()
 
   local result = settingsResult()
   result.calibrationSucceeded = calibrated
@@ -2476,7 +2476,7 @@ end
 
 state._roadmindHelpers.invalidateVehicleGeometry = function(vehicleId)
   if vehicleId == nil or tostring(vehicleId) == tostring(state.activeVehicleId) then
-    resetTrackingState(false)
+    state._roadmindHelpers.resetTrackingState(false)
     state.vehicleRegistry = {}
     state.vehicleRegistryById = {}
     state.vehicleRegistrySnapshotValid = false
@@ -2505,7 +2505,7 @@ function M.onExtensionLoaded()
   if setExtensionUnloadMode then
     setExtensionUnloadMode(M, "manual")
   end
-  loadSettings()
+  state._roadmindHelpers.loadSettings()
 end
 
 function M.toggleVisualization()
@@ -2647,7 +2647,7 @@ local function processUltrasonic(ultrasonic)
   return {mounts = ultrasonic.mounts or {}, returns = returns, updateHz = ultrasonic.updateHz}
 end
 
-local function vectorFromTable(point)
+state._roadmindHelpers.vectorFromTable = function(point)
   if type(point) ~= "table" or type(point.x) ~= "number"
       or type(point.y) ~= "number" or type(point.z) ~= "number" then
     return nil
@@ -2741,7 +2741,7 @@ state._roadmindHelpers.localizeLidarPointOnTrack = function(point, track)
   }
 end
 
-local function findTrackForLidarPoint(point)
+state._roadmindHelpers.findTrackForLidarPoint = function(point)
   local sourceVehicleId = point and point.hitObjectId
   if sourceVehicleId ~= nil then
     local direct = state.tracksBySourceId[tostring(sourceVehicleId)]
@@ -2781,7 +2781,7 @@ local function isRegisteredVehicleHit(point)
     local key = tostring(sourceVehicleId)
     return state.vehicleRegistryById[key] == true or state.tracksBySourceId[key] ~= nil
   end
-  return findTrackForLidarPoint(point) ~= nil
+  return state._roadmindHelpers.findTrackForLidarPoint(point) ~= nil
 end
 
 state._roadmindHelpers.pushLidarFadePoint = function(point)
@@ -2808,7 +2808,7 @@ buildLidarRenderPoints = function(lidar)
     local rayIndex = tonumber(rawPoint.rayIndex)
     local worldPoint = asVec3(rawPoint)
     if rawPoint.hit == true and rayIndex and worldPoint and rayIndex >= 1 then
-      local track, localPosition = findTrackForLidarPoint(rawPoint)
+      local track, localPosition = state._roadmindHelpers.findTrackForLidarPoint(rawPoint)
       local objectId = rawPoint.hitObjectId
       local associationKey = track and ("track:" .. track.trackId)
         or (objectId ~= nil and ("object:" .. tostring(objectId)) or "static")
@@ -2904,10 +2904,10 @@ state._roadmindHelpers.getTrackedLidarWorldPosition = function(point)
   return position + forward * p.forward + right * p.right + up * p.up
 end
 
-local function attachTrackedVehicleReturns(returns)
+state._roadmindHelpers.attachTrackedVehicleReturns = function(returns)
   for i = 1, #(returns or {}) do
     local hit = returns[i]
-    local track, localPosition = findTrackForLidarPoint(hit)
+    local track, localPosition = state._roadmindHelpers.findTrackForLidarPoint(hit)
     if track and localPosition then
       hit.trackId = track.trackId
       hit.localPosition = localPosition
@@ -2933,7 +2933,7 @@ state._roadmindHelpers.updateTrackedVehicleReturns = function(returns)
   end
 end
 
-local function dampedSpringStep(currentPosition, currentVelocity, targetPosition, dt, smoothingSeconds, maxVelocity)
+state._roadmindHelpers.dampedSpringStep = function(currentPosition, currentVelocity, targetPosition, dt, smoothingSeconds, maxVelocity)
   if not currentPosition or not targetPosition then return targetPosition, vec3(0, 0, 0) end
   if dt <= 0 then return currentPosition, currentVelocity or vec3(0, 0, 0) end
   local omega = 2.0 / math.max(0.01, tonumber(smoothingSeconds) or LIDAR_RENDER_SMOOTHING_SECONDS)
@@ -2949,7 +2949,7 @@ local function dampedSpringStep(currentPosition, currentVelocity, targetPosition
   return nextPosition, nextVelocity
 end
 
-local function updateLidarRenderPoints(dt)
+state._roadmindHelpers.updateLidarRenderPoints = function(dt)
   dt = math.max(0, math.min(tonumber(dt) or 0, 0.1))
   local inertiaEnabled = (state.settings or DEFAULT_SETTINGS).visualizationInertiaEnabled ~= false
   for rayIndex, point in pairs(state.lidarRenderPoints) do
@@ -2973,7 +2973,7 @@ local function updateLidarRenderPoints(dt)
         point.renderVelocity = {x = 0, y = 0, z = 0}
       elseif inertiaEnabled then
         local velocity = asVec3(point.renderVelocity) or vec3(0, 0, 0)
-        local nextPosition, nextVelocity = dampedSpringStep(currentPosition, velocity, targetPosition, dt)
+        local nextPosition, nextVelocity = state._roadmindHelpers.dampedSpringStep(currentPosition, velocity, targetPosition, dt)
         point.renderPosition = vectorToPlainTable(nextPosition)
         point.renderVelocity = vectorToPlainTable(nextVelocity)
       else
@@ -2990,7 +2990,7 @@ local function updateLidarRenderPoints(dt)
       state.lidarRenderOriginVelocity = {x = 0, y = 0, z = 0}
     else
       local velocity = asVec3(state.lidarRenderOriginVelocity) or vec3(0, 0, 0)
-      local nextPosition, nextVelocity = dampedSpringStep(currentOrigin, velocity, originTarget, dt)
+      local nextPosition, nextVelocity = state._roadmindHelpers.dampedSpringStep(currentOrigin, velocity, originTarget, dt)
       state.lidarRenderOrigin = vectorToPlainTable(nextPosition)
       state.lidarRenderOriginVelocity = vectorToPlainTable(nextVelocity)
     end
@@ -3003,7 +3003,7 @@ local function updateLidarRenderPoints(dt)
   end
 end
 
-local function rememberLidarPoints(lidar)
+state._roadmindHelpers.rememberLidarPoints = function(lidar)
   if not state.settings or not state.settings.lidarPersistenceEnabled
       or type(lidar) ~= "table" or type(lidar.rays) ~= "table" then return end
   trimPersistentLidarPoints()
@@ -3043,7 +3043,7 @@ local function rememberLidarPoints(lidar)
   state.lidarPointCount = count
 end
 
-local function updateDetectedVehicleRenderStates(dt)
+state._roadmindHelpers.updateDetectedVehicleRenderStates = function(dt)
   -- Traffic boxes represent moving rigid bodies. Interpolating their world-space
   -- centers independently makes them visibly trail the actual vehicle. Use the
   -- tracker prediction directly and rebuild the OBB from one coherent pose.
@@ -3140,7 +3140,7 @@ state._roadmindHelpers.getRenderArrayIdentity = function(item, index)
   return "[" .. table.concat(parts, "|") .. "]"
 end
 
-local function smoothVisualizationValue(value, path, dt, now, inertiaEnabled, target)
+state._roadmindHelpers.smoothVisualizationValue = function(value, path, dt, now, inertiaEnabled, target)
   if type(value) ~= "table" then return value end
 
   -- Interpolate render-only world-space positions and directions.
@@ -3164,7 +3164,7 @@ local function smoothVisualizationValue(value, path, dt, now, inertiaEnabled, ta
       current = targetPosition
       velocity = vec3(0, 0, 0)
     else
-      current, velocity = dampedSpringStep(
+      current, velocity = state._roadmindHelpers.dampedSpringStep(
         current, velocity, targetPosition, dt, VISUALIZATION_RENDER_SMOOTHING_SECONDS, 250
       )
     end
@@ -3185,7 +3185,7 @@ local function smoothVisualizationValue(value, path, dt, now, inertiaEnabled, ta
     if type(key) == "number" and type(child) == "table" then
       childKey = state._roadmindHelpers.getRenderArrayIdentity(child, key)
     end
-    target[key] = smoothVisualizationValue(
+    target[key] = state._roadmindHelpers.smoothVisualizationValue(
       child, path .. "/" .. childKey, dt, now, inertiaEnabled, target[key]
     )
   end
@@ -3404,7 +3404,7 @@ state._roadmindHelpers.updateVisualizationRenderState = function(dt)
       if ATTACHED_VISUAL_FIELDS[key] then
         renderFrame[key] = state._roadmindHelpers.copyVisualizationValueInto(value, renderFrame[key])
       else
-        renderFrame[key] = smoothVisualizationValue(
+        renderFrame[key] = state._roadmindHelpers.smoothVisualizationValue(
           value, "frame/" .. tostring(key), dt, now, inertiaEnabled, renderFrame[key]
         )
       end
@@ -3449,7 +3449,7 @@ state._roadmindHelpers.updateVisualizationRenderState = function(dt)
 
   -- Route and planner coordinates are smoothed only in a separate display copy.
   local overlays = {routePath = state.routePath, planner = state.localPlanner}
-  state.visualizationRenderOverlays = smoothVisualizationValue(
+  state.visualizationRenderOverlays = state._roadmindHelpers.smoothVisualizationValue(
     overlays, "overlays", dt, now, inertiaEnabled, state.visualizationRenderOverlays
   )
 
@@ -3699,7 +3699,7 @@ buildWorldModel = function()
         elseif dataAge > WORLD_MODEL_OBSERVATION_MAX_AGE then
           model.quality.staleObservationCount = model.quality.staleObservationCount + 1
         else
-          local track = findTrackForLidarPoint(hit)
+          local track = state._roadmindHelpers.findTrackForLidarPoint(hit)
           local sourceVehicleId = hit.hitObjectId
           local knownVehicle = track ~= nil
           if sourceVehicleId ~= nil then
@@ -4991,7 +4991,7 @@ state._roadmindHelpers.updateVehicleDetection = function(dt)
     state.occlusionCursor = 1
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
-    resetTrackingState(false)
+    state._roadmindHelpers.resetTrackingState(false)
     return
   end
 
@@ -5019,7 +5019,7 @@ state._roadmindHelpers.updateVehicleDetection = function(dt)
     state.occlusionRaycastsPerSecond = 0
   end
 
-  local tracks = updateObjectTracks(candidates)
+  local tracks = state._roadmindHelpers.updateObjectTracks(candidates)
   if state.latestData then
     state.latestData.vehicles = candidates
     state.latestData.tracks = tracks
@@ -5054,8 +5054,8 @@ state._roadmindHelpers.nearestForwardObstacle = function(data)
 
   local minimum = math.huge
   local function inspect(point, originData)
-    local target = vectorFromTable(point)
-    local origin = vectorFromTable(originData) or originFallback
+    local target = state._roadmindHelpers.vectorFromTable(point)
+    local origin = state._roadmindHelpers.vectorFromTable(originData) or originFallback
     if not target or not origin then return end
     local delta = target - origin
     local longitudinal = delta:dot(forward)
@@ -5088,7 +5088,7 @@ state._roadmindHelpers.nearestForwardObstacle = function(data)
     and registryTimestamp <= now + 0.05
     and (now - registryTimestamp) <= WORLD_MODEL_REGISTRY_MAX_AGE
   local function inspectVehicleOBB(target)
-    local center = vectorFromTable(target.position)
+    local center = state._roadmindHelpers.vectorFromTable(target.position)
     local dimensions = target.dimensions
     local orientation = target.orientation
     if not center or type(dimensions) ~= "table" or type(orientation) ~= "table"
@@ -5169,7 +5169,7 @@ state._roadmindHelpers.getADASLeadVehicle = function(data, forward, right, origi
   for i = 1, #(data.tracks or {}) do
     local track = data.tracks[i]
     local age = tonumber(track.dataAge) or math.huge
-    local position = vectorFromTable(track.predictedPosition or track.position)
+    local position = state._roadmindHelpers.vectorFromTable(track.predictedPosition or track.position)
     local dimensions = track.dimensions
     if position and (track.status == "confirmed" or track.status == "coasting")
         and age >= 0 and age <= TRACK_OBSERVATION_MAX_AGE
@@ -5184,7 +5184,7 @@ state._roadmindHelpers.getADASLeadVehicle = function(data, forward, right, origi
         if not best or gap < best.distance then
           best = {
             distance = gap,
-            targetVelocity = vectorFromTable(track.estimatedVelocity),
+            targetVelocity = state._roadmindHelpers.vectorFromTable(track.estimatedVelocity),
             trackId = track.trackId
           }
         end
@@ -5203,8 +5203,8 @@ state._roadmindHelpers.getADASParkingDistance = function(data, now)
   local nearest = math.huge
   for i = 1, #((data.ultrasonic and data.ultrasonic.returns) or {}) do
     local hit = data.ultrasonic.returns[i]
-    local point = vectorFromTable(hit)
-    local origin = vectorFromTable(hit.origin)
+    local point = state._roadmindHelpers.vectorFromTable(hit)
+    local origin = state._roadmindHelpers.vectorFromTable(hit.origin)
     if point and origin then nearest = math.min(nearest, (point - origin):length()) end
   end
   return nearest < math.huge and nearest or nil
@@ -5297,7 +5297,7 @@ state._roadmindHelpers.updateADAS = function(dt)
     for i = 1, #(data.tracks or {}) do
       local track = data.tracks[i]
       local age = tonumber(track.dataAge) or math.huge
-      local target = vectorFromTable(track.predictedPosition or track.position)
+      local target = state._roadmindHelpers.vectorFromTable(track.predictedPosition or track.position)
       local dimensions = track.dimensions
       if target and type(dimensions) == "table" and age >= 0 and age <= TRACK_OBSERVATION_MAX_AGE
           and (track.status == "confirmed" or track.status == "coasting") then
@@ -5449,7 +5449,7 @@ state._roadmindHelpers.updateRoutePilotSafety = function(dt)
   if not state.activeVehicle or state.routePilotVehicleId ~= state.activeVehicleId then
     if state.activeVehicle then
       stopNativeRouteController(state.activeVehicle)
-      disableNativeRouteController(state.activeVehicle)
+      state._roadmindHelpers.disableNativeRouteController(state.activeVehicle)
     end
     state.routePilotEnabled = false
     state.routePilotStarted = false
@@ -5538,7 +5538,7 @@ state._roadmindHelpers.updateRoutePilotSafety = function(dt)
       local dx, dy, dz = endpoint.x - position.x, endpoint.y - position.y, endpoint.z - position.z
       if math.sqrt(dx * dx + dy * dy + dz * dz) <= ROUTE_DESTINATION_REACHED_M then
         stopNativeRouteController(state.activeVehicle)
-        disableNativeRouteController(state.activeVehicle)
+        state._roadmindHelpers.disableNativeRouteController(state.activeVehicle)
         state.routePilotEnabled = false
         state.routePilotStarted = false
         state.routeSafetyStopped = false
@@ -5562,7 +5562,7 @@ state._roadmindHelpers.updateRoutePilotSafety = function(dt)
       local dx, dy = endpoint.x - position.x, endpoint.y - position.y
       local distance = math.sqrt(dx * dx + dy * dy)
       if distance <= ROUTE_REPLAN_DISTANCE and state.routeRetryCooldown <= 0 then
-        local started, reason = startNativeRouteController(state.activeVehicle)
+        local started, reason = state._roadmindHelpers.startNativeRouteController(state.activeVehicle)
         state.routeRetryCooldown = ROUTE_REPLAN_COOLDOWN
         if started then
           state.routePilotError = nil
@@ -5576,7 +5576,7 @@ state._roadmindHelpers.updateRoutePilotSafety = function(dt)
 
   if state.routeSafetyStopped or not state.routePilotStarted then
     if clearance >= ROUTE_RESUME_DISTANCE and state.routeRetryCooldown <= 0 then
-      local started, reason = startNativeRouteController(state.activeVehicle)
+      local started, reason = state._roadmindHelpers.startNativeRouteController(state.activeVehicle)
       if started then
         state.routePilotStarted = true
         state.routeSafetyStopped = false
@@ -5617,14 +5617,14 @@ state._roadmindHelpers.mergeSensorFrame = function(frame)
       latest.lidar.rays[i].measurementTimestamp = state.simulationTime
     end
     latest.sensorTimestamps.lidar = state.simulationTime
-    rememberLidarPoints(latest.lidar)
+    state._roadmindHelpers.rememberLidarPoints(latest.lidar)
     buildLidarRenderPoints(latest.lidar)
     M.performanceProfiler.stop("sensor_lidar", profileStarted)
   end
   if updates.radar == true then
     local profileStarted = M.performanceProfiler.start()
     latest.radar = processRadar(frame.radar)
-    attachTrackedVehicleReturns(latest.radar.returns)
+    state._roadmindHelpers.attachTrackedVehicleReturns(latest.radar.returns)
     latest.radar.scanTimestamp = state.simulationTime
     latest.radar.scanSequence = tonumber(frame.sequence) or 0
     for i = 1, #(latest.radar.returns or {}) do
@@ -5636,7 +5636,7 @@ state._roadmindHelpers.mergeSensorFrame = function(frame)
   if updates.ultrasonic == true then
     local profileStarted = M.performanceProfiler.start()
     latest.ultrasonic = processUltrasonic(frame.ultrasonic)
-    attachTrackedVehicleReturns(latest.ultrasonic.returns)
+    state._roadmindHelpers.attachTrackedVehicleReturns(latest.ultrasonic.returns)
     latest.ultrasonic.scanTimestamp = state.simulationTime
     latest.ultrasonic.scanSequence = tonumber(frame.sequence) or 0
     for i = 1, #(latest.ultrasonic.returns or {}) do
@@ -5708,7 +5708,7 @@ function M.onSensorData(encodedFrame)
     return
   end
   if frame.enabled == false then
-    resetFrame()
+    state._roadmindHelpers.resetFrame()
     M.performanceProfiler.stop("sensor_frame", profileStarted)
     return
   end
@@ -5773,7 +5773,7 @@ state._roadmindHelpers.updateAdaptivePerformance = function(dt)
   if nextTier ~= oldTier then
     state.adaptiveQualityTier = nextTier
     if state.visualizationEnabled and state.activeVehicle then
-      setVehicleSensorSettings(state.activeVehicle)
+      state._roadmindHelpers.setVehicleSensorSettings(state.activeVehicle)
     end
     log("I", "roadmind", string.format(
       "Adaptive sensor quality changed to tier %d (FPS %.1f / target %d)",
@@ -5801,7 +5801,7 @@ function M.onUpdate(dt)
     checkTimer = checkTimer + dt
     if checkTimer >= CHECK_INTERVAL then
       checkTimer = 0
-      syncPlayerVehicle()
+      state._roadmindHelpers.syncPlayerVehicle()
     end
     -- The route-safety clock continues while sensors are stale, so stale data
     -- can trigger a stop. The visual clock freezes when scanning is paused.
@@ -5816,8 +5816,8 @@ function M.onUpdate(dt)
     state._roadmindHelpers.updateVehicleDetection(dt)
     M.performanceProfiler.stop("vehicle_tracking", trackingStarted)
     if visualFrameFresh then
-      updateLidarRenderPoints(dt)
-      updateDetectedVehicleRenderStates(dt)
+      state._roadmindHelpers.updateLidarRenderPoints(dt)
+      state._roadmindHelpers.updateDetectedVehicleRenderStates(dt)
     end
     if routePilotActive then
       local safetyStarted = M.performanceProfiler.start()
@@ -5843,7 +5843,7 @@ end
 function M.onVehicleDestroyed(vehicleId)
   if vehicleId == state.activeVehicleId then
     state._roadmindHelpers.detachPreviousVehicle()
-    resetFrame()
+    state._roadmindHelpers.resetFrame()
     return
   end
 
