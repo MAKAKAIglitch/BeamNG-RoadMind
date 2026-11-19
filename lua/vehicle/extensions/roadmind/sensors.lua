@@ -675,6 +675,73 @@ local function updateLocalization(frame, dt)
   }
 end
 
+local function buildVehiclePose(frame)
+  return {
+    position = vectorToPreciseTable(frame.position),
+    forward = vectorToPreciseTable(frame.forward),
+    right = vectorToPreciseTable(frame.right),
+    up = vectorToPreciseTable(frame.up),
+    timestamp = state.elapsed
+  }
+end
+
+local function buildAttachedRadarMounts(frame)
+  local mounts = {}
+  local radars = currentSensorLayout().radars
+  for i = 1, #radars do
+    local cfg = radars[i]
+    local mount = makeMount(frame, cfg.forward, cfg.lateral, cfg.up, cfg.yaw)
+    if mount then
+      mounts[#mounts + 1] = {
+        name = cfg.name,
+        position = vectorToTable(mount.position),
+        direction = vectorToPreciseTable(mount.direction),
+        right = vectorToPreciseTable(mount.right),
+        up = vectorToPreciseTable(mount.up)
+      }
+    end
+  end
+  return mounts
+end
+
+local function buildAttachedUltrasonicMounts(frame)
+  local mounts = {}
+  local ultrasonics = currentSensorLayout().ultrasonics
+  for i = 1, #ultrasonics do
+    local cfg = ultrasonics[i]
+    local mount = makeMount(frame, cfg.forward, cfg.lateral, cfg.up or 0.42, cfg.yaw)
+    if mount then
+      mounts[#mounts + 1] = {
+        name = cfg.name,
+        position = vectorToTable(mount.position),
+        direction = vectorToPreciseTable(mount.direction),
+        right = vectorToPreciseTable(mount.right),
+        up = vectorToPreciseTable(mount.up)
+      }
+    end
+  end
+  return mounts
+end
+
+local function refreshAttachedVisuals(frame)
+  if not state.frame then return end
+  local lidar = currentSensorLayout().lidar
+  local lidarMount = makeMount(frame, lidar.forwardOffset, lidar.lateralOffset, lidar.upOffset, 0)
+  if lidarMount then
+    state.frame.lidar.origin = vectorToTable(lidarMount.position)
+    state.frame.lidar.forward = vectorToPreciseTable(lidarMount.direction)
+    state.frame.lidar.right = vectorToPreciseTable(lidarMount.right)
+    state.frame.lidar.up = vectorToPreciseTable(lidarMount.up)
+  end
+  state.frame.radar.mounts = buildAttachedRadarMounts(frame)
+  state.frame.ultrasonic.mounts = buildAttachedUltrasonicMounts(frame)
+  state.frame.cameras = buildCameras(frame)
+  state.frame.mounts = buildSensorMountDebug(frame)
+  state.frame.geometryDebug = buildGeometryDebug(frame)
+  state.frame.detectionZones = buildDetectionZones(frame)
+  state.frame.vehiclePose = buildVehiclePose(frame)
+end
+
 local function buildEmptyFrame()
   return {
     enabled = false,
@@ -689,7 +756,8 @@ local function buildEmptyFrame()
     mounts = {},
     geometryDebug = nil,
     detectionZones = {},
-    vehicleVelocity = nil
+    vehicleVelocity = nil,
+    vehiclePose = nil
   }
 end
 
@@ -711,7 +779,8 @@ local function publish()
     enabled = true,
     sourceVehicleId = state.sourceVehicleId,
     sequence = state.sequence,
-    updatedSensors = updates
+    updatedSensors = updates,
+    vehiclePose = frame.vehiclePose
   }
 
   if updates.lidar then payload.lidar = frame.lidar end
@@ -1083,6 +1152,10 @@ function M.updateGFX(dt)
   end
 
   if changed and state.frame then
+    -- Sensor geometry and coverage volumes are cheap to refresh. Rebuild them
+    -- against the same vehicle pose sent with this payload; GE can then attach
+    -- them to the live car transform without increasing the raycast budget.
+    refreshAttachedVisuals(frame)
     state.frame.enabled = true
     state.frame.updatedSensors = updatedSensors
     publish()
