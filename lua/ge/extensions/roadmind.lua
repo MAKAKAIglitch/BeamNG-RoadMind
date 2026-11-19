@@ -223,9 +223,11 @@ local checkTimer = 0
 state.performanceProfiler = (function()
 local PROFILE_HISTORY_SECONDS = 15
 local PROFILE_STAGES = {
-  {key = "sensor_job"}, {key = "sensor_frame"},
-  {key = "sensor_lidar"}, {key = "sensor_radar"}, {key = "sensor_ultrasonic"},
-  {key = "vehicle_tracking"}, {key = "world_model"}, {key = "planner"},
+  {key = "sensor_job"}, {key = "vehicle_lidar"}, {key = "vehicle_radar"},
+  {key = "vehicle_ultrasonic"}, {key = "vehicle_pose"}, {key = "vehicle_detection_zones"},
+  {key = "sensor_frame"}, {key = "sensor_lidar"}, {key = "sensor_radar"},
+  {key = "sensor_ultrasonic"}, {key = "vehicle_tracking"}, {key = "world_model"},
+  {key = "planner"},
   {key = "road_graph"}, {key = "adas"}, {key = "visualization"},
   {key = "debug_draw"}, {key = "route_safety"}, {key = "ge_update"}
 }
@@ -5740,6 +5742,10 @@ function M.onSensorData(encodedFrame)
   end
   if type(frame.performance) == "table" then
     state.performanceProfiler.record("sensor_job", frame.performance.elapsedMs)
+    local jobName = type(frame.performance.job) == "string" and frame.performance.job or ""
+    if jobName ~= "" then
+      state.performanceProfiler.record("vehicle_" .. jobName, frame.performance.elapsedMs)
+    end
   end
   mergeSensorFrame(frame)
   state.performanceProfiler.stop("sensor_frame", sensorFrameStartedAt)
