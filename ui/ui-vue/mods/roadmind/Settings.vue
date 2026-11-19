@@ -812,8 +812,8 @@ function callRoadMind(method, args = []) {
     return Promise.reject(new Error("Unsupported RoadMind method: " + method))
   }
 
-  const command = "extensions.load('roadmind'); return extensions.roadmind."
-    + method + "(" + args.map(value => serialize(value)).join(", ") + ")"
+  const command = "(function() extensions.load('roadmind'); return extensions.roadmind."
+    + method + "(" + args.map(value => serialize(value)).join(", ") + ") end)()"
 
   return new Promise((resolve, reject) => {
     let settled = false
