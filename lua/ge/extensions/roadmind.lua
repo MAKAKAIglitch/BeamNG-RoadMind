@@ -6106,8 +6106,9 @@ function M.getPerceptionSnapshot()
     }
   end
 
+  local model = M.getWorldModel()
   local targets = {}
-  local tracks = latest.tracks or {}
+  local tracks = model and model.targets or latest.tracks or {}
   for i = 1, math.min(#tracks, 48) do
     local track = tracks[i]
     if type(track) == "table" and type(track.position) == "table" then
@@ -6129,7 +6130,6 @@ function M.getPerceptionSnapshot()
   end
 
   local obstacles = {}
-  local model = state.worldModel
   if model then
     for i = 1, math.min(#(model.obstacles or {}), 64) do
       local obstacle = model.obstacles[i]
