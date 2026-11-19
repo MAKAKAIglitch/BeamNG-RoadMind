@@ -4,7 +4,7 @@
 
 RoadMind models the sensor layout of a modern assisted/autonomous vehicle and visualizes its coverage directly in the game world. The long-term goal is a custom driving stack that plans routes, avoids obstacles and controls the vehicle without relying on a permanent neural-network runtime.
 
-> **Development status: perception foundation in progress.** The current build contains virtual LiDAR, radar and ultrasonic raycast proxies, camera coverage frustums, vehicle-state localization/odometry, OBB-based sensor calibration, scheduled simulator-assisted vehicle detection, and an initial timestamped object-tracking layer with RoadMind IDs and estimated motion. Stable tracking and occlusion behavior, plus world-model contents under real traffic and visual continuity of the time-consistent LiDAR point layer, still need in-game testing. The road-AI button is experimental and is not a completed custom planner/controller. RGB camera capture and physical RF radar simulation are not provided by the regular BeamNG.drive Lua API.
+> **Development status: experimental perception and autonomy prototype.** The current build includes virtual LiDAR/radar/ultrasonic raycast proxies, vehicle OBB tracking, a timestamped world model, NavGraph routing, a bounded local trajectory planner and the first native Lua controller for steering, throttle and braking. Sensor quality, controller behavior, traffic interaction and performance still need repeatable in-game testing. Regular BeamNG.drive Lua does not expose BeamNG.tech's rendered RGB camera stream or a physical RF radar simulation.
 
 ## Sensor suite
 
