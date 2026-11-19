@@ -9,6 +9,13 @@
 - Add latched full-brake handling for stale path feeds, missing vehicle state and lost route tracking.
 - Keep the controller's work independent from scene-raycast acquisition; no additional sensor queries are introduced.
 - Document the 8 m/s speed cap, nominal wheelbase assumption and outstanding in-game validation requirements.
+- Add configurable ADAS master and independent FCW, AEB, ACC, BSM, parking-distance and LDW switches with Russian/English status reporting.
+- Add forward-obstacle warning/braking, tracked-vehicle blind-spot checks, ultrasonic parking distance and NavGraph-based lane-departure warning.
+- Add route-pilot-only adaptive cruise speed targeting; keep AEB actuator ownership separate between manual and autonomous driving.
+- Publish vehicle pose and pose-only sensor-mount updates independently from raycast returns.
+- Re-anchor mounted sensors, camera frustums, calibration geometry and detection zones to the live vehicle pose during rendering.
+- Remove independent world-space smoothing from tracked traffic OBB centres so boxes follow their tracked/predicted vehicle poses.
+
 
 
 ## Unreleased
