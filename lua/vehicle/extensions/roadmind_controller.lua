@@ -47,7 +47,7 @@ end
 
 local function emit(name, value)
   if type(input) ~= "table" or type(input.event) ~= "function" then return false end
-  local filter = FILTER_DIRECT or 0
+  local filter = FILTER_DIRECT or 2
   local ok = pcall(input.event, name, value, filter)
   return ok
 end
@@ -187,7 +187,8 @@ local function controlStep(dt)
   local alpha = math.atan2(cross, dot)
   local curvature = 2 * math.sin(alpha) / math.max(1, distance)
   local steeringAngle = math.atan(WHEELBASE_M * curvature)
-  local steering = clamp(steeringAngle / MAX_STEER_ANGLE_RAD, -1, 1)
+  -- BeamNG positive steering input is right; the planar cross product above is positive to the left.
+  local steering = clamp(-steeringAngle / MAX_STEER_ANGLE_RAD, -1, 1)
 
   local targetSpeed = clamp(state.targetSpeed, 0, MAX_SPEED_MPS)
   local speedError = targetSpeed - speed
