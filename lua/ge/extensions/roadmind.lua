@@ -1950,6 +1950,31 @@ local function settingsResult()
   local speedRateScale = state._roadmindHelpers.getSensorSpeedRateScale(settings)
   local trackedObjects = {}
   local tracks = state.latestData and state.latestData.tracks or {}
+  local cameraZoneCount = 0
+  local cameraCandidateCount = 0
+  local cameraVisibleVehicleCount = 0
+  local detectionZones = state.latestData and state.latestData.detectionZones
+    and state.latestData.detectionZones.zones or {}
+  for i = 1, #detectionZones do
+    if detectionZones[i].sensor == "camera" then cameraZoneCount = cameraZoneCount + 1 end
+  end
+  local candidates = state.latestData and state.latestData.vehicles or {}
+  for i = 1, #candidates do
+    local candidate = candidates[i]
+    local cameraSource = false
+    for j = 1, #(candidate.sensorSources or {}) do
+      if candidate.sensorSources[j].sensor == "camera" then
+        cameraSource = true
+        break
+      end
+    end
+    if cameraSource then
+      cameraCandidateCount = cameraCandidateCount + 1
+      if candidate.visibility == "visible" then
+        cameraVisibleVehicleCount = cameraVisibleVehicleCount + 1
+      end
+    end
+  end
   for i = 1, math.min(#tracks, 8) do
     local track = tracks[i]
     local sensorNames = {}
@@ -1997,6 +2022,10 @@ local function settingsResult()
       vehicleRegistryGeneration = state.vehicleRegistryGeneration,
       vehicleRegistryTruncated = state.vehicleRegistryTruncated,
       vehicleCandidateCount = #state.vehicleCandidates,
+      cameraDetectionEnabled = settings.cameraDetectionEnabled == true,
+      cameraZoneCount = cameraZoneCount,
+      cameraCandidateCount = cameraCandidateCount,
+      cameraVisibleVehicleCount = cameraVisibleVehicleCount,
       visibleVehicleCount = state.latestData and (function()
         local count = 0
         for i = 1, #(state.latestData.vehicles or {}) do
