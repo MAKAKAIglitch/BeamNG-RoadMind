@@ -1413,6 +1413,163 @@ local function drawSphere(drawer, position, radius, color)
   pcall(drawer.drawSphere, drawer, position, radius, color)
 end
 
+local SENSOR_HOVER_KIND_LABELS = {
+  camera = {ru = "Камера", en = "Camera"},
+  lidar = {ru = "LiDAR", en = "LiDAR"},
+  radar = {ru = "Радар", en = "Radar"},
+  ultrasonic = {ru = "Ультразвуковой датчик", en = "Ultrasonic"}
+}
+
+local SENSOR_HOVER_NAME_RU = {
+  ["Forward LiDAR"] = "Передний LiDAR",
+  ["Front narrow"] = "Передняя узкоугольная",
+  ["Front wide"] = "Передняя широкоугольная",
+  ["Left side"] = "Левая боковая",
+  ["Right side"] = "Правая боковая",
+  ["Rear wide"] = "Задняя широкоугольная",
+  ["Rear left"] = "Задняя левая",
+  ["Rear right"] = "Задняя правая",
+  ["Front long-range"] = "Передний дальнобойный",
+  ["Front left corner"] = "Передний левый угловой",
+  ["Front right corner"] = "Передний правый угловой",
+  ["Rear left corner"] = "Задний левый угловой",
+  ["Rear right corner"] = "Задний правый угловой",
+  ["Front left outer"] = "Передний левый внешний",
+  ["Front left inner"] = "Передний левый внутренний",
+  ["Front right inner"] = "Передний правый внутренний",
+  ["Front right outer"] = "Передний правый внешний",
+  ["Rear left outer"] = "Задний левый внешний",
+  ["Rear left inner"] = "Задний левый внутренний",
+  ["Rear right inner"] = "Задний правый внутренний",
+  ["Rear right outer"] = "Задний правый внешний",
+  ["Front left side"] = "Передний левый боковой",
+  ["Front right side"] = "Передний правый боковой",
+  ["Rear left side"] = "Задний левый боковой",
+  ["Rear right side"] = "Задний правый боковой"
+}
+
+local function sensorHoverLabel(kind, name)
+  local language = state._roadmindHelpers.getGameLanguage()
+  local russian = type(language) == "string" and language:sub(1, 2) == "ru"
+  local kindLabels = SENSOR_HOVER_KIND_LABELS[kind] or {ru = "Датчик", en = "Sensor"}
+  local typeLabel = russian and kindLabels.ru or kindLabels.en
+  local nameLabel = tostring(name or "")
+  if russian then nameLabel = SENSOR_HOVER_NAME_RU[nameLabel] or nameLabel end
+  if nameLabel == "" then return typeLabel end
+  return typeLabel .. " · " .. nameLabel
+end
+
+local function addSensorHoverPoint(candidates, position, kind, name, radius)
+  local point = asVec3(position)
+  if not point then return end
+  candidates[#candidates + 1] = {
+    kind = kind, name = name, label = sensorHoverLabel(kind, name),
+    a = point, radius = radius or 0.10
+  }
+end
+
+local function addSensorHoverSegment(candidates, startPosition, endPosition, kind, name, radius)
+  local a = asVec3(startPosition)
+  local b = asVec3(endPosition)
+  if not a or not b then return end
+  candidates[#candidates + 1] = {
+    kind = kind, name = name, label = sensorHoverLabel(kind, name),
+    a = a, b = b, radius = radius or 0.075
+  }
+end
+
+local function sensorHoverDistance(rayOrigin, rayDirection, candidate)
+  if not candidate.b then
+    local depth = (candidate.a - rayOrigin):dot(rayDirection)
+    if depth <= 0 then return nil end
+    local nearestRayPoint = rayOrigin + rayDirection * depth
+    return (candidate.a - nearestRayPoint):length(), depth, candidate.a
+  end
+
+  local segment = candidate.b - candidate.a
+  local lengthSquared = segment:dot(segment)
+  if lengthSquared < 0.000001 then
+    local depth = (candidate.a - rayOrigin):dot(rayDirection)
+    if depth <= 0 then return nil end
+    local nearestRayPoint = rayOrigin + rayDirection * depth
+    return (candidate.a - nearestRayPoint):length(), depth, candidate.a
+  end
+
+  local relative = rayOrigin - candidate.a
+  local directionSegment = rayDirection:dot(segment)
+  local directionRelative = rayDirection:dot(relative)
+  local segmentRelative = segment:dot(relative)
+  local denominator = lengthSquared - directionSegment * directionSegment
+  local segmentT
+  if math.abs(denominator) > 0.000001 then
+    segmentT = (segmentRelative - directionSegment * directionRelative) / denominator
+  else
+    segmentT = segmentRelative / lengthSquared
+  end
+  segmentT = math.max(0, math.min(1, segmentT))
+
+  local nearestSegmentPoint = candidate.a + segment * segmentT
+  local depth = (nearestSegmentPoint - rayOrigin):dot(rayDirection)
+  if depth <= 0 then return nil end
+  local nearestRayPoint = rayOrigin + rayDirection * depth
+  return (nearestSegmentPoint - nearestRayPoint):length(), depth, nearestSegmentPoint
+end
+
+local function findHoveredSensor(candidates)
+  if state.mouseCursorVisible == false or state.mouseLocked == true then return nil end
+  if type(getCameraMouseRay) ~= "function" then return nil end
+
+  local imgui = rawget(_G, "ui_imgui")
+  if imgui and type(imgui.GetIO) == "function" then
+    local ok, io = pcall(imgui.GetIO)
+    if ok and io and io.WantCaptureMouse == true then return nil end
+  end
+
+  local ok, ray = pcall(getCameraMouseRay)
+  if not ok or type(ray) ~= "table" then return nil end
+  local origin = asVec3(ray.pos)
+  local direction = normalizedVec3(ray.dir)
+  if not origin or not direction then return nil end
+
+  local best = nil
+  local bestScore = math.huge
+  for i = 1, #candidates do
+    local candidate = candidates[i]
+    local distance, depth, position = sensorHoverDistance(origin, direction, candidate)
+    if distance and depth then
+      -- Scale the pick tolerance with distance so thin frustum edges remain
+      -- easy to hover without making the whole volume selectable.
+      local tolerance = math.max(candidate.radius or 0.075, depth * 0.0065)
+      if distance <= tolerance then
+        local score = distance / tolerance + depth * 0.000001
+        if score < bestScore then
+          bestScore = score
+          best = {label = candidate.label, kind = candidate.kind, name = candidate.name, position = position}
+        end
+      end
+    end
+  end
+  return best
+end
+
+local function drawSensorHoverTooltip(drawer, candidates)
+  state.sensorHover = findHoveredSensor(candidates)
+  local hover = state.sensorHover
+  if not hover or not drawer or type(drawer.drawTextAdvanced) ~= "function" then return end
+
+  local position = hover.position + vec3(0, 0, 0.12)
+  pcall(
+    drawer.drawTextAdvanced,
+    drawer,
+    position:toPoint3F(),
+    String(hover.label),
+    ColorF(1.0, 1.0, 1.0, 1.0),
+    true,
+    false,
+    ColorI(10, 17, 30, 225)
+  )
+end
+
 local function drawRayReturns(drawer, originTable, rays, color, pointColor, pointRadius)
   local origin = toPoint3F(originTable)
   if not origin or type(rays) ~= "table" then
@@ -1433,13 +1590,14 @@ local function drawRayReturns(drawer, originTable, rays, color, pointColor, poin
   end
 end
 
-local function drawLidar(drawer, lidar)
+local function drawLidar(drawer, lidar, hoverCandidates)
   if type(lidar) ~= "table" then return end
   local origin = toPoint3F(lidar.origin)
   if not origin or type(lidar.rays) ~= "table" then return end
 
   local beamColor = ColorF(0.10, 0.76, 1.0, 0.72)
   drawSphere(drawer, origin, 0.075, beamColor)
+  addSensorHoverPoint(hoverCandidates, origin, "lidar", "Forward LiDAR", 0.15)
   for i = 1, #lidar.rays do
     local ray = lidar.rays[i]
     if ray.hit == true then
@@ -1448,6 +1606,7 @@ local function drawLidar(drawer, lidar)
       if hitPoint then
         local measurementOrigin = toPoint3F(ray.origin) or origin
         drawLine(drawer, measurementOrigin, hitPoint, beamColor)
+        addSensorHoverSegment(hoverCandidates, measurementOrigin, hitPoint, "lidar", "Forward LiDAR")
       end
     end
   end
@@ -1472,15 +1631,17 @@ local function drawLidarRenderPoints(drawer)
   end
 end
 
-local function drawRadar(drawer, radar)
+local function drawRadar(drawer, radar, hoverCandidates)
   if type(radar) ~= "table" then
     return
   end
 
   local mounts = radar.mounts or {}
   for i = 1, #mounts do
-    local position = toPoint3F(mounts[i].position)
+    local mount = mounts[i]
+    local position = toPoint3F(mount.position)
     drawSphere(drawer, position, 0.09, ColorF(0.15, 1.0, 0.35, 1.0))
+    addSensorHoverPoint(hoverCandidates, position, "radar", mount.name or "Radar", 0.16)
   end
 
   local returns = radar.returns or {}
@@ -1500,19 +1661,22 @@ local function drawRadar(drawer, radar)
   end
 end
 
-local function drawUltrasonic(drawer, ultrasonic)
+local function drawUltrasonic(drawer, ultrasonic, hoverCandidates)
   if type(ultrasonic) ~= "table" then
     return
   end
 
   local mounts = ultrasonic.mounts or {}
   for i = 1, #mounts do
+    local mount = mounts[i]
+    local position = toPoint3F(mount.position)
     drawSphere(
       drawer,
-      toPoint3F(mounts[i].position),
+      position,
       0.065,
       ColorF(0.15, 0.95, 0.95, 1.0)
     )
+    addSensorHoverPoint(hoverCandidates, position, "ultrasonic", mount.name or "Ultrasonic", 0.14)
   end
 
   local returns = ultrasonic.returns or {}
@@ -1712,7 +1876,7 @@ local function drawCalibrationGeometry(drawer, geometry, mounts)
   end
 end
 
-local function drawCameraFrustum(drawer, camera)
+local function drawCameraFrustum(drawer, camera, hoverCandidates)
   local origin = toPoint3F(camera.position)
   local forward = camera.direction
   local up = camera.up
@@ -1746,6 +1910,18 @@ local function drawCameraFrustum(drawer, camera)
   local farRightUp = center + right * halfWidth + upVec * halfHeight
   local farLeftDown = center - right * halfWidth - upVec * halfHeight
   local farRightDown = center + right * halfWidth - upVec * halfHeight
+
+  local name = camera.name or "Camera"
+  local edges = {
+    {origin, farLeftUp}, {origin, farRightUp},
+    {origin, farLeftDown}, {origin, farRightDown},
+    {farLeftUp, farRightUp}, {farRightUp, farRightDown},
+    {farRightDown, farLeftDown}, {farLeftDown, farLeftUp}
+  }
+  addSensorHoverPoint(hoverCandidates, origin, "camera", name, 0.14)
+  for i = 1, #edges do
+    addSensorHoverSegment(hoverCandidates, edges[i][1], edges[i][2], "camera", name, 0.085)
+  end
 
   local color = ColorF(0.28, 0.52, 1.0, 0.58)
   drawLine(drawer, origin, farLeftUp:toPoint3F(), color)
@@ -1789,31 +1965,46 @@ local function drawFrame()
   local frame = state.visualizationRenderFrame or state.latestData
   local settings = state.settings or DEFAULT_SETTINGS
 
-  if not drawer or not frame or not frame.enabled then return end
+  if not drawer or not frame or not frame.enabled then
+    state.sensorHover = nil
+    return
+  end
 
+  local hoverCandidates = {}
   if settings.showLidar then
-    drawLidar(drawer, frame.lidar)
+    drawLidar(drawer, frame.lidar, hoverCandidates)
     drawLidarRenderPoints(drawer)
     drawPersistentLidarCloud(drawer)
   end
-  if settings.showRadar then drawRadar(drawer, frame.radar) end
-  if settings.showUltrasonic then drawUltrasonic(drawer, frame.ultrasonic) end
+  if settings.showRadar then drawRadar(drawer, frame.radar, hoverCandidates) end
+  if settings.showUltrasonic then drawUltrasonic(drawer, frame.ultrasonic, hoverCandidates) end
   if settings.showDetectedVehicles then
     drawDetectedVehicles(drawer, frame.vehicles or state.vehicleCandidates, frame.tracks or {})
   end
 
   if settings.showCameras then
     local cameras = frame.cameras or {}
-    for i = 1, #cameras do drawCameraFrustum(drawer, cameras[i]) end
+    for i = 1, #cameras do drawCameraFrustum(drawer, cameras[i], hoverCandidates) end
   end
 
   if settings.showLocalization then drawLocalization(drawer, frame.localization) end
   if settings.showCalibration then
     drawCalibrationGeometry(drawer, frame.geometryDebug, frame.mounts)
+    for i = 1, #(frame.mounts or {}) do
+      local mount = frame.mounts[i]
+      addSensorHoverPoint(
+        hoverCandidates,
+        mount.position,
+        mount.kind or "sensor",
+        mount.name or "Sensor",
+        0.15
+      )
+    end
   end
   local renderOverlays = state.visualizationRenderOverlays or {}
   drawRoutePath(drawer, renderOverlays.routePath)
   drawLocalPlanner(drawer, renderOverlays.planner)
+  drawSensorHoverTooltip(drawer, hoverCandidates)
 end
 
 state._roadmindHelpers.copySettings = function(source)
@@ -6082,6 +6273,14 @@ function M.onUpdate(dt)
   M.performanceProfiler.stop("debug_draw", drawStarted)
   M.performanceProfiler.stop("ge_update", geStarted)
   M.performanceProfiler.advance(dt)
+end
+
+function M.onCursorVisibilityChanged(visible)
+  state.mouseCursorVisible = visible == true
+end
+
+function M.onMouseLocked(locked)
+  state.mouseLocked = locked == true
 end
 
 function M.onVehicleDestroyed(vehicleId)
