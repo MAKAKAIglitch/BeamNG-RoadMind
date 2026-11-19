@@ -70,11 +70,22 @@ end
 local function detectDriverOverride()
   if not state.driverTakeoverEnabled or type(input) ~= "table" then return nil end
 
-  -- BeamNG's Vehicle Lua input module exposes raw control values. Compare
-  -- them with RoadMind's own last outputs, and ignore camera/view actions.
-  local steer = tonumber(input.steering)
-  local throttle = tonumber(input.throttle)
-  local brake = tonumber(input.brake)
+  -- Vehicle Lua's input module is an API table, not a table of numeric
+  -- control values. Read the standard effective driver-input electrics.
+  local values = type(electrics) == "table" and type(electrics.values) == "table"
+    and electrics.values or {}
+  local function readControl(name)
+    local value = tonumber(values[name .. "_input"] or values[name])
+    if value ~= nil then return value end
+    local entry = type(input.state) == "table" and input.state[name] or nil
+    if type(entry) == "table" then
+      return tonumber(entry.val or entry.value or entry.currentValue)
+    end
+    return tonumber(entry)
+  end
+  local steer = readControl("steering")
+  local throttle = readControl("throttle")
+  local brake = readControl("brake")
 
   if steer and math.abs(steer - (state.lastSteering or 0)) >= 0.18
       and math.abs(steer) >= 0.12 then
