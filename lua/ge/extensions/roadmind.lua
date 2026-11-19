@@ -720,6 +720,8 @@ local function startNativeRouteAI(vehicle)
 
   state.routePath = pathPoints
   state.routePathEnd = pathPoints[#pathPoints]
+  state.localPlanner.timestamp = nil
+  state.controllerPathTimestamp = nil
   state.routeProgressIndex = 1
   state.routeProgressPercent = 0
   state.routeProgressTimer = 0
@@ -1821,6 +1823,7 @@ local function settingsResult()
       end)() or 0,
       occlusionRaycastsPerSecond = state.occlusionRaycastsPerSecond,
       routePilotEnabled = state.routePilotEnabled,
+      routePilotStarted = state.routePilotStarted,
       routeSafetyStopped = state.routeSafetyStopped,
       routePilotError = state.routePilotError,
       routeWaypointCount = #state.routePath,
@@ -4722,6 +4725,10 @@ local function updateRoutePilotSafety(dt)
   state.routeRetryCooldown = math.max(0, (state.routeRetryCooldown or 0) - dt)
 
   if not state.activeVehicle or state.routePilotVehicleId ~= state.activeVehicleId then
+    if state.activeVehicle then
+      stopNativeRouteAI(state.activeVehicle)
+      disableNativeRouteController(state.activeVehicle)
+    end
     state.routePilotEnabled = false
     state.routePilotStarted = false
     state.routeSafetyStopped = false
