@@ -23,6 +23,10 @@
 - Cache immutable persistent LiDAR cloud Point3F values and reuse OBB/deduplication scratch tables.
 - Keep sensor ray counts, scan rates, range, tracking/planner/controller cadence and ADAS thresholds unchanged during this optimization pass.
 
+- Bind traffic OBB outlines to each source vehicle's live SceneObject position and orientation every graphics frame using a stored vehicle-local center offset; keep a bounded velocity-prediction fallback when an object transform cannot be read.
+- Keep traffic OBB render dimensions synchronized with the stored vehicle dimensions and remove destroyed objects' render states; no extra sensor raycasts or changes to detection cadence.
+- Route Vue settings calls through BeamNG's `runRaw` bridge with native Lua serialization, a method allowlist and a timeout so a missing callback releases the busy state and surfaces an error.
+
 
 
 ## Unreleased
