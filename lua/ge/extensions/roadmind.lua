@@ -2775,78 +2775,32 @@ local function rememberLidarPoints(lidar)
 end
 
 local function updateDetectedVehicleRenderStates(dt)
-  local settings = state.settings or DEFAULT_SETTINGS
-  local inertiaEnabled = settings.visualizationInertiaEnabled ~= false
+  -- Traffic boxes represent moving rigid bodies. Interpolating their world-space
+  -- centers independently makes them visibly trail the actual vehicle. Use the
+  -- tracker prediction directly and rebuild the OBB from one coherent pose.
   local updated = {}
 
-  local function updatePosition(key, targetValue, orientationValue)
-    local target = asVec3(targetValue)
-    if not target then return end
+  local function updatePosition(key, positionValue, orientationValue)
+    local position = asVec3(positionValue)
+    if not position then return end
 
-    local entry = state.vehicleRenderStates[key]
-    if type(entry) ~= "table" then
-      entry = {position = vectorToPlainTable(target), velocity = {x = 0, y = 0, z = 0}}
-    elseif not inertiaEnabled then
-      entry.position = vectorToPlainTable(target)
-      entry.velocity = {x = 0, y = 0, z = 0}
-    else
-      local current = asVec3(entry.position)
-      local velocity = asVec3(entry.velocity) or vec3(0, 0, 0)
-      if not current or (target - current):length() > 30 then
-        entry.position = vectorToPlainTable(target)
-        entry.velocity = {x = 0, y = 0, z = 0}
-      else
-        local nextPosition, nextVelocity = dampedSpringStep(current, velocity, target, dt)
-        entry.position = vectorToPlainTable(nextPosition)
-        entry.velocity = vectorToPlainTable(nextVelocity)
-      end
-    end
-
-    local targetForward = orientationValue and normalizedVec3(orientationValue.forward)
-    local targetUp = orientationValue and normalizedVec3(orientationValue.up)
-    if targetForward and targetUp then
-      local currentForward = asVec3(entry.forward)
-      local currentUp = asVec3(entry.up)
-      if inertiaEnabled and currentForward and currentUp then
-        local nextForward, forwardVelocity = dampedSpringStep(
-          currentForward,
-          asVec3(entry.forwardVelocity) or vec3(0, 0, 0),
-          targetForward,
-          dt
-        )
-        local nextUp, upVelocity = dampedSpringStep(
-          currentUp,
-          asVec3(entry.upVelocity) or vec3(0, 0, 0),
-          targetUp,
-          dt
-        )
-        entry.forward = vectorToPlainTable(normalizedVec3(nextForward) or targetForward)
-        entry.up = vectorToPlainTable(normalizedVec3(nextUp) or targetUp)
-        entry.forwardVelocity = vectorToPlainTable(forwardVelocity)
-        entry.upVelocity = vectorToPlainTable(upVelocity)
-      else
-        entry.forward = vectorToPlainTable(targetForward)
-        entry.up = vectorToPlainTable(targetUp)
-        entry.forwardVelocity = {x = 0, y = 0, z = 0}
-        entry.upVelocity = {x = 0, y = 0, z = 0}
-      end
-
-      local forward = normalizedVec3(entry.forward)
-      local up = normalizedVec3(entry.up)
-      local right = forward and up and normalizedVec3(forward:cross(up)) or nil
-      if right and forward then
+    local entry = {
+      position = vectorToPlainTable(position),
+      lastSeenAt = state.simulationTime
+    }
+    local forward = orientationValue and normalizedVec3(orientationValue.forward) or nil
+    local up = orientationValue and normalizedVec3(orientationValue.up) or nil
+    if forward and up then
+      local right = normalizedVec3(forward:cross(up))
+      if right then
         up = normalizedVec3(right:cross(forward)) or up
         entry.orientation = {
           forward = vectorToPlainTable(forward),
           right = vectorToPlainTable(right),
           up = vectorToPlainTable(up)
         }
-      else
-        entry.orientation = orientationValue
       end
     end
-
-    entry.lastSeenAt = state.simulationTime
     state.vehicleRenderStates[key] = entry
     updated[key] = true
   end
