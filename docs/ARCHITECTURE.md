@@ -59,7 +59,7 @@ The GE coordinator maintains one shared registry of nearby vehicle OBB snapshots
 - The shared registry and sensor-zone detection refresh at a speed-based 0.30 s / 0.15 s / 0.10 s cadence (below 5 m/s, 5–20 m/s, and at/above 20 m/s respectively), not once per sensor or LiDAR ray.
 - The player vehicle, invalid entries and entries reported as deleted/destroyed are excluded. Entries without usable world OBB data are not registered; each fresh snapshot replaces the previous one.
 - Each registered vehicle stores its ID, OBB center, three axes, half-extents, position and simulator velocity.
-- Detection runs on a separate 0.25 s schedule using the latest sensor frame.
+- Detection and tracker ageing use the same speed-based interval as the vehicle registry, gated by a fresh detection-zone frame; the registry is not rescanned per sensor.
 - Calibrated LiDAR, radar and ultrasonic mounts define their own horizontal/vertical coverage volumes, minimum range and maximum range.
 - A cheap range check precedes OBB projection tests against each sensor volume. One vehicle is emitted once with all sensor zones that contain its OBB.
 - At most two candidate-to-target occlusion raycasts run per detection cycle (up to 20/s at the fastest 10 Hz cadence). Candidates are classified as visible, occluded or unverified. Occluded candidates are hidden; visible and unverified candidates may be drawn with distinct states, while confirmed-visible tracks feed the route safety guard.
