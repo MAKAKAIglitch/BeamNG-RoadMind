@@ -17,7 +17,7 @@ local DEFAULT_SETTINGS = {
   lidarPointCloudLimit = 5000,
   visualizationInertiaEnabled = true,
   adaptiveFpsEnabled = false,
-  performanceProfilerEnabled = true,
+  performanceProfilerEnabled = false,
   targetFps = 60,
   speedAdaptiveRateEnabled = true,
   adasEnabled = false,
@@ -220,7 +220,7 @@ local state = {
 
 local checkTimer = 0
 
-local performanceProfiler = (function()
+state.performanceProfiler = (function()
 local PROFILE_HISTORY_SECONDS = 15
 local PROFILE_STAGES = {
   {key = "sensor_job"}, {key = "sensor_frame"},
@@ -895,7 +895,7 @@ local function startNativeRouteController(vehicle)
     end
   end
 
-  local plannerStartedAt = performanceProfiler.start()
+  local plannerStartedAt = state.performanceProfiler.start()
   local planner = updateLocalTrajectoryPlanner()
   performanceProfiler.stop("planner", plannerStartedAt)
   local queued, reason = sendControllerPath(vehicle, planner, true)
