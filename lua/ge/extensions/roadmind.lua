@@ -5693,15 +5693,6 @@ function M.onVehicleDestroyed(vehicleId)
   state.lidarTrackGrid = {}
 end
 
-local function state._roadmindHelpers.cloneWorldModelValue(value)
-  if type(value) ~= "table" then return value end
-  local result = {}
-  for key, item in pairs(value) do
-    result[key] = state._roadmindHelpers.cloneWorldModelValue(item)
-  end
-  return result
-end
-
 function M.getRouteState()
   return {
     schemaVersion = 1,
