@@ -23,6 +23,9 @@
 - Cache immutable persistent LiDAR cloud Point3F values and reuse OBB/deduplication scratch tables.
 - Keep sensor ray counts, scan rates, range, tracking/planner/controller cadence and ADAS thresholds unchanged during this optimization pass.
 
+- Add an opt-in 15-second rolling Lua profiler with per-sensor Vehicle Lua job timings and GE stages for frame processing, tracking, World Model, planner, road localization, ADAS, visualization, Debug Draw, route safety and total extension update.
+- Show average/peak/last milliseconds, call frequency and GE Lua heap estimate in the bilingual Performance panel; profiler is disabled by default and does not write logs to disk.
+
 
 
 ## Unreleased
