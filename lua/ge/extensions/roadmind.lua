@@ -176,6 +176,10 @@ local state = {
   visualizationRenderFrame = nil,
   visualizationRenderOverlays = nil,
   visualizationVectorStates = {},
+  sensorHoverCandidates = {},
+  sensorHover = nil,
+  mouseCursorVisible = nil,
+  mouseLocked = false,
   visualizationRenderClock = 0,
   visualizationRenderPruneTimer = 0,
   lidarRenderScanSequence = 0,
@@ -1459,23 +1463,38 @@ local function sensorHoverLabel(kind, name)
   return typeLabel .. " · " .. nameLabel
 end
 
+local function nextSensorHoverCandidate(candidates)
+  local index = (candidates.count or 0) + 1
+  candidates.count = index
+  local candidate = candidates[index]
+  if not candidate then
+    candidate = {}
+    candidates[index] = candidate
+  end
+  return candidate
+end
+
 local function addSensorHoverPoint(candidates, position, kind, name, radius)
   local point = asVec3(position)
   if not point then return end
-  candidates[#candidates + 1] = {
-    kind = kind, name = name,
-    a = point, radius = radius or 0.10
-  }
+  local candidate = nextSensorHoverCandidate(candidates)
+  candidate.kind = kind
+  candidate.name = name
+  candidate.a = point
+  candidate.b = nil
+  candidate.radius = radius or 0.10
 end
 
 local function addSensorHoverSegment(candidates, startPosition, endPosition, kind, name, radius)
   local a = asVec3(startPosition)
   local b = asVec3(endPosition)
   if not a or not b then return end
-  candidates[#candidates + 1] = {
-    kind = kind, name = name,
-    a = a, b = b, radius = radius or 0.075
-  }
+  local candidate = nextSensorHoverCandidate(candidates)
+  candidate.kind = kind
+  candidate.name = name
+  candidate.a = a
+  candidate.b = b
+  candidate.radius = radius or 0.075
 end
 
 local function sensorHoverDistance(rayOrigin, rayDirection, candidate)
@@ -1533,7 +1552,7 @@ local function findHoveredSensor(candidates)
 
   local best = nil
   local bestScore = math.huge
-  for i = 1, #candidates do
+  for i = 1, (candidates.count or #candidates) do
     local candidate = candidates[i]
     local distance, depth, position = sensorHoverDistance(origin, direction, candidate)
     if distance and depth then
@@ -1970,7 +1989,8 @@ local function drawFrame()
     return
   end
 
-  local hoverCandidates = {}
+  local hoverCandidates = state.sensorHoverCandidates
+  hoverCandidates.count = 0
   if settings.showLidar then
     drawLidar(drawer, frame.lidar, hoverCandidates)
     drawLidarRenderPoints(drawer)
