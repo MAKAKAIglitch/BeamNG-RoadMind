@@ -2747,7 +2747,10 @@ end
 local function getTrackedLidarWorldPosition(point)
   if not point.trackId or not point.localPosition then return asVec3(point.worldMeasurement) end
   local track = state.tracks[point.trackId]
-  if not track or not trackCanOwnLidarPoint(track) then return asVec3(point.worldMeasurement) end
+  -- Once a point has been attached to a moving body, never fall back to its
+  -- old world-space measurement when that body track expires. That would leave
+  -- a detached ghost behind the vehicle.
+  if not track or not trackCanOwnLidarPoint(track) then return nil end
   local position = asVec3(track.position)
   local velocity = asVec3(track.estimatedVelocity)
   if position and velocity then
@@ -2758,7 +2761,7 @@ local function getTrackedLidarWorldPosition(point)
   local forward = normalizedVec3(orientation.forward)
   local right = normalizedVec3(orientation.right)
   local up = normalizedVec3(orientation.up)
-  if not position or not forward or not right or not up then return asVec3(point.worldMeasurement) end
+  if not position or not forward or not right or not up then return nil end
   local p = point.localPosition
   return position + forward * p.forward + right * p.right + up * p.up
 end
