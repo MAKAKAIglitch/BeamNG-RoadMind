@@ -236,6 +236,12 @@ function M.setPath(encodedPath)
 end
 
 function M.setEnabled(enabled)
+  if enabled == true and state.adasBrakeActive then
+    emit("brake", clamp(state.adasDriverBrake or 0, 0, 1))
+    state.adasBrakeActive = false
+    state.adasDriverBrake = 0
+    state.adasLastOutput = 0
+  end
   state.enabled = enabled == true
   state.updateTimer = 0
   state.speedIntegral = 0
