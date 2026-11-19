@@ -9,6 +9,7 @@
 - Calculate vehicle-relative closing speed and time-to-collision for FCW/AEB; expose hazard distance, threshold, TTC and source in the ADAS status.
 - Read driver takeover inputs from Vehicle Lua electrics input channels rather than treating the `input` API table as a numeric input table.
 - Add live camera-zone, in-frustum candidate and camera-visible vehicle counters to RoadMind settings.
+- Add cursor-ray hover picking for visible sensor geometry, with localized type/name tooltips for cameras, LiDAR, radar and ultrasonic mounts; UI mouse capture is respected and no scene raycasts are added.
 
 ## Unreleased — surround-view perception and ADAS interface
 
