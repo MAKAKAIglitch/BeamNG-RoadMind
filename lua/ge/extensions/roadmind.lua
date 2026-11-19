@@ -1315,7 +1315,10 @@ local function drawLidar(drawer, lidar)
     if ray.hit == true then
       local renderPoint = state.lidarRenderPoints[tonumber(ray.rayIndex)]
       local hitPoint = toPoint3F(renderPoint and renderPoint.renderPosition or ray)
-      if hitPoint then drawLine(drawer, origin, hitPoint, beamColor) end
+      if hitPoint then
+        local measurementOrigin = toPoint3F(ray.origin) or origin
+        drawLine(drawer, measurementOrigin, hitPoint, beamColor)
+      end
     end
   end
 end
@@ -2760,6 +2763,30 @@ local function getTrackedLidarWorldPosition(point)
   return position + forward * p.forward + right * p.right + up * p.up
 end
 
+local function attachTrackedVehicleReturns(returns)
+  for i = 1, #(returns or {}) do
+    local hit = returns[i]
+    local track, localPosition = findTrackForLidarPoint(hit)
+    if track and localPosition then
+      hit.trackId = track.trackId
+      hit.localPosition = localPosition
+      hit.worldMeasurement = {x = hit.x, y = hit.y, z = hit.z}
+    end
+  end
+end
+
+local function updateTrackedVehicleReturns(returns)
+  for i = 1, #(returns or {}) do
+    local hit = returns[i]
+    if hit.trackId and hit.localPosition and hit.worldMeasurement then
+      local position = getTrackedLidarWorldPosition(hit)
+      if position then
+        hit.x, hit.y, hit.z = position.x, position.y, position.z
+      end
+    end
+  end
+end
+
 local function dampedSpringStep(currentPosition, currentVelocity, targetPosition, dt, smoothingSeconds, maxVelocity)
   if not currentPosition or not targetPosition then return targetPosition, vec3(0, 0, 0) end
   if dt <= 0 then return currentPosition, currentVelocity or vec3(0, 0, 0) end
@@ -3081,22 +3108,8 @@ local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
       if frame.lidar[field] then frame.lidar[field] = transformAttachedDirection(frame.lidar[field], sourcePose, currentPose) end
     end
   end
-  if type(frame.radar) == "table" then
-    transformMounts(frame.radar.mounts)
-    local scanPose = frame.radar.vehiclePose or sourcePose
-    for i = 1, #(frame.radar.returns or {}) do
-      local hit = frame.radar.returns[i]
-      if hit.origin then hit.origin = transformAttachedPoint(hit.origin, scanPose, currentPose) end
-    end
-  end
-  if type(frame.ultrasonic) == "table" then
-    transformMounts(frame.ultrasonic.mounts)
-    local scanPose = frame.ultrasonic.vehiclePose or sourcePose
-    for i = 1, #(frame.ultrasonic.returns or {}) do
-      local hit = frame.ultrasonic.returns[i]
-      if hit.origin then hit.origin = transformAttachedPoint(hit.origin, scanPose, currentPose) end
-    end
-  end
+  if type(frame.radar) == "table" then transformMounts(frame.radar.mounts) end
+  if type(frame.ultrasonic) == "table" then transformMounts(frame.ultrasonic.mounts) end
   transformMounts(frame.cameras)
   transformMounts(frame.mounts)
   local detectionPose = frame.detectionZonesVehiclePose or sourcePose
@@ -3132,6 +3145,15 @@ local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
 
 end
 
+local function copyVisualizationValue(value)
+  if type(value) ~= "table" then return value end
+  local result = {}
+  for key, item in pairs(value) do
+    result[key] = copyVisualizationValue(item)
+  end
+  return result
+end
+
 local function updateVisualizationRenderState(dt)
   dt = math.max(0, math.min(tonumber(dt) or 0, 0.10))
   state.visualizationRenderClock = (state.visualizationRenderClock or 0) + dt
@@ -3151,7 +3173,7 @@ local function updateVisualizationRenderState(dt)
       -- introduce a visible lag even after converting back to vehicle-local
       -- coordinates. LiDAR object returns have their own track-local renderer.
       if attachedFields[key] then
-        renderFrame[key] = value
+        renderFrame[key] = copyVisualizationValue(value)
       else
         renderFrame[key] = smoothVisualizationValue(
           value, "frame/" .. tostring(key), dt, now, inertiaEnabled
@@ -3160,6 +3182,12 @@ local function updateVisualizationRenderState(dt)
     end
     local currentPose = captureRenderVehiclePose()
     reanchorAttachedVisuals(renderFrame, state.latestData.vehiclePose, currentPose)
+    if type(renderFrame.radar) == "table" then
+      updateTrackedVehicleReturns(renderFrame.radar.returns)
+    end
+    if type(renderFrame.ultrasonic) == "table" then
+      updateTrackedVehicleReturns(renderFrame.ultrasonic.returns)
+    end
     if type(renderFrame.localization) == "table" then
       local localization = renderFrame.localization
       if localization then
@@ -5338,9 +5366,9 @@ local function mergeSensorFrame(frame)
   end
   if updates.radar == true then
     latest.radar = processRadar(frame.radar)
+    attachTrackedVehicleReturns(latest.radar.returns)
     latest.radar.scanTimestamp = state.simulationTime
     latest.radar.scanSequence = tonumber(frame.sequence) or 0
-    latest.radar.vehiclePose = type(frame.vehiclePose) == "table" and frame.vehiclePose or nil
     for i = 1, #(latest.radar.returns or {}) do
       latest.radar.returns[i].measurementTimestamp = state.simulationTime
     end
@@ -5348,9 +5376,9 @@ local function mergeSensorFrame(frame)
   end
   if updates.ultrasonic == true then
     latest.ultrasonic = processUltrasonic(frame.ultrasonic)
+    attachTrackedVehicleReturns(latest.ultrasonic.returns)
     latest.ultrasonic.scanTimestamp = state.simulationTime
     latest.ultrasonic.scanSequence = tonumber(frame.sequence) or 0
-    latest.ultrasonic.vehiclePose = type(frame.vehiclePose) == "table" and frame.vehiclePose or nil
     for i = 1, #(latest.ultrasonic.returns or {}) do
       latest.ultrasonic.returns[i].measurementTimestamp = state.simulationTime
     end
