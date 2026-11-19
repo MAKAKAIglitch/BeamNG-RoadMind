@@ -34,9 +34,9 @@ Hiding a 3D overlay does not stop its sensor scans. Turn off the sensor group it
 
 ## Experimental road route pilot
 
-The route section uses the current map's NavGraph. Enter 1–12 ordered world-coordinate points in metres, one per line as `X, Y, Z`. The route builder snaps each point to a nearby road segment and shows the final-node snap distance. The pilot sends NavGraph waypoint IDs to BeamNG's built-in Vehicle Lua AI, with a 29 km/h speed cap.
+The route section uses the current map's NavGraph. Enter 1–12 ordered world-coordinate points in metres, one per line as `X, Y, Z`. The route builder snaps each point to a nearby road segment and shows the final-node snap distance. RoadMind's own Vehicle Lua controller tracks the selected safe local trajectory and controls steering, throttle and brake, with a conservative 8 m/s (28.8 km/h) speed cap.
 
-When the pilot starts, RoadMind switches to the Balanced sensor profile. Enabled sensor streams are checked for freshness before their returns enter the stop guard; recently confirmed nearby vehicles are checked by their projected OBB footprint. The guard is best-effort, not a collision guarantee. This is not a custom trajectory planner: RoadMind does not yet steer around obstacles, calculate lane boundaries or provide its own throttle/brake/steering controller. Test only in a controlled, clear area; route following and map compatibility remain experimental.
+When the pilot starts, RoadMind switches to the Balanced sensor profile. Enabled sensor streams are checked for freshness; recent confirmed vehicle OBB footprints and scene-raycast obstacle clusters feed the bounded local planner. The controller stops with full brake if the planner cannot approve a path, the route is lost, vehicle state is unavailable or the trajectory feed is stale for 0.75 s. This is an experimental first controller: NavGraph road width is still a heuristic, and behavior on traffic, intersections, different vehicles and different road surfaces requires in-game validation. Test in a controlled, clear area.
 
 ## Defaults
 
