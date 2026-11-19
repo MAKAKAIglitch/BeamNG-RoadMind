@@ -2770,6 +2770,12 @@ local function updateLidarRenderPoints(dt)
       if distance > 18.0 then
         pushLidarFadePoint(point)
         state.lidarRenderPoints[rayIndex] = nil
+      elseif point.trackId then
+        -- A LiDAR return attached to a tracked vehicle is expressed in that
+        -- vehicle's local OBB frame. Never spring it through world space:
+        -- it must stay on the same body surface while the vehicle moves.
+        point.renderPosition = vectorToPlainTable(targetPosition)
+        point.renderVelocity = {x = 0, y = 0, z = 0}
       elseif inertiaEnabled then
         local velocity = asVec3(point.renderVelocity) or vec3(0, 0, 0)
         local nextPosition, nextVelocity = dampedSpringStep(currentPosition, velocity, targetPosition, dt)
