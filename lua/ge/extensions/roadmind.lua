@@ -1171,6 +1171,12 @@ end
 
 local function detachPreviousVehicle()
   if state.activeVehicle then
+    if (state.adasLastBrakeCommand or 0) > 0 then
+      queueVehicleCommand(state.activeVehicle,
+        "extensions.load('roadmind_controller'); " ..
+        "if roadmind_controller then roadmind_controller.setAebBrake(0) end")
+      state.adasLastBrakeCommand = 0
+    end
     if state.routePilotEnabled then stopNativeRouteController(state.activeVehicle) end
     queueVehicleCommand(
       state.activeVehicle,
@@ -1843,7 +1849,7 @@ local function settingsResult()
       routePilotEnabled = state.routePilotEnabled,
       routePilotStarted = state.routePilotStarted,
       routeSafetyStopped = state.routeSafetyStopped,
-      adasStatus = cloneWorldModelValue(state.adas or {}),
+      adasStatus = copySettings(state.adas or {}),
       adasEnabled = settings.adasEnabled == true,
       routePilotError = state.routePilotError,
       routeWaypointCount = #state.routePath,
@@ -2063,6 +2069,12 @@ function M.setVisualizationEnabled(enabled)
       return {ok = false, error = "No active player vehicle"}
     end
   else
+    if state.activeVehicle and (state.adasLastBrakeCommand or 0) > 0 then
+      queueVehicleCommand(state.activeVehicle,
+        "extensions.load('roadmind_controller'); " ..
+        "if roadmind_controller then roadmind_controller.setAebBrake(0) end")
+      state.adasLastBrakeCommand = 0
+    end
     if state.routePilotEnabled and state.activeVehicle then
       stopNativeRouteController(state.activeVehicle)
     end
