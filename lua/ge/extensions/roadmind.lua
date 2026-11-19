@@ -1270,7 +1270,7 @@ end
 
 local function drawLidar(drawer, lidar)
   if type(lidar) ~= "table" then return end
-  local origin = toPoint3F(state.lidarRenderOrigin or lidar.origin)
+  local origin = toPoint3F(lidar.origin)
   if not origin or type(lidar.rays) ~= "table" then return end
 
   local beamColor = ColorF(0.10, 0.76, 1.0, 0.72)
@@ -2950,6 +2950,124 @@ local function smoothVisualizationValue(value, path, dt, now, inertiaEnabled)
   return result
 end
 
+local function captureRenderVehiclePose()
+  local vehicle = state.activeVehicle
+  if not vehicle then return nil end
+  local position = asVec3(safeCall(vehicle, "getPosition"))
+  local forward = normalizedVec3(safeCall(vehicle, "getDirectionVector"))
+  local up = normalizedVec3(safeCall(vehicle, "getDirectionVectorUp"))
+  if not position or not forward or not up then return nil end
+  local right = normalizedVec3(forward:cross(up))
+  if not right then return nil end
+  return {
+    position = vectorToPlainTable(position),
+    forward = vectorToPlainTable(forward),
+    right = vectorToPlainTable(right),
+    up = vectorToPlainTable(up)
+  }
+end
+
+local function transformAttachedPoint(point, sourcePose, currentPose)
+  local world = asVec3(point)
+  local sourcePosition = asVec3(sourcePose and sourcePose.position)
+  local sourceForward = normalizedVec3(sourcePose and sourcePose.forward)
+  local sourceRight = normalizedVec3(sourcePose and sourcePose.right)
+  local sourceUp = normalizedVec3(sourcePose and sourcePose.up)
+  local targetPosition = asVec3(currentPose and currentPose.position)
+  local targetForward = normalizedVec3(currentPose and currentPose.forward)
+  local targetRight = normalizedVec3(currentPose and currentPose.right)
+  local targetUp = normalizedVec3(currentPose and currentPose.up)
+  if not world or not sourcePosition or not sourceForward or not sourceRight or not sourceUp
+      or not targetPosition or not targetForward or not targetRight or not targetUp then
+    return point
+  end
+  local delta = world - sourcePosition
+  local localForward = delta:dot(sourceForward)
+  local localRight = delta:dot(sourceRight)
+  local localUp = delta:dot(sourceUp)
+  local transformed = targetPosition
+    + targetForward * localForward
+    + targetRight * localRight
+    + targetUp * localUp
+  return vectorToPlainTable(transformed)
+end
+
+local function transformAttachedDirection(direction, sourcePose, currentPose)
+  local vector = asVec3(direction)
+  local sourceForward = normalizedVec3(sourcePose and sourcePose.forward)
+  local sourceRight = normalizedVec3(sourcePose and sourcePose.right)
+  local sourceUp = normalizedVec3(sourcePose and sourcePose.up)
+  local targetForward = normalizedVec3(currentPose and currentPose.forward)
+  local targetRight = normalizedVec3(currentPose and currentPose.right)
+  local targetUp = normalizedVec3(currentPose and currentPose.up)
+  if not vector or not sourceForward or not sourceRight or not sourceUp
+      or not targetForward or not targetRight or not targetUp then return direction end
+  local transformed = targetForward * vector:dot(sourceForward)
+    + targetRight * vector:dot(sourceRight)
+    + targetUp * vector:dot(sourceUp)
+  local normalized = normalizedVec3(transformed)
+  return normalized and vectorToPlainTable(normalized) or direction
+end
+
+local function reanchorAttachedVisuals(frame, sourcePose, currentPose)
+  if type(frame) ~= "table" or type(sourcePose) ~= "table" or type(currentPose) ~= "table" then return end
+
+  local function transformMounts(items)
+    for i = 1, #(items or {}) do
+      local item = items[i]
+      if type(item) == "table" then
+        if item.position then item.position = transformAttachedPoint(item.position, sourcePose, currentPose) end
+        for _, field in ipairs({"direction", "forward", "right", "up"}) do
+          if item[field] then item[field] = transformAttachedDirection(item[field], sourcePose, currentPose) end
+        end
+      end
+    end
+  end
+
+  if type(frame.lidar) == "table" and frame.lidar.origin then
+    frame.lidar.origin = transformAttachedPoint(frame.lidar.origin, sourcePose, currentPose)
+    for _, field in ipairs({"forward", "right", "up"}) do
+      if frame.lidar[field] then frame.lidar[field] = transformAttachedDirection(frame.lidar[field], sourcePose, currentPose) end
+    end
+  end
+  if type(frame.radar) == "table" then transformMounts(frame.radar.mounts) end
+  if type(frame.ultrasonic) == "table" then transformMounts(frame.ultrasonic.mounts) end
+  transformMounts(frame.cameras)
+  transformMounts(frame.mounts)
+
+  local zones = frame.detectionZones and frame.detectionZones.zones
+  transformMounts(zones)
+
+  local geometry = frame.geometryDebug
+  if type(geometry) == "table" then
+    for i = 1, #(geometry.corners or {}) do
+      geometry.corners[i] = transformAttachedPoint(geometry.corners[i], sourcePose, currentPose)
+    end
+    if type(geometry.axes) == "table" then
+      for _, field in ipairs({"origin", "forward", "right", "up"}) do
+        if geometry.axes[field] then
+          if field == "origin" then
+            geometry.axes[field] = transformAttachedPoint(geometry.axes[field], sourcePose, currentPose)
+          else
+            geometry.axes[field] = transformAttachedPoint(geometry.axes[field], sourcePose, currentPose)
+          end
+        end
+      end
+    end
+  end
+
+  local localization = frame.localization
+  if type(localization) == "table" then
+    if localization.gnss then
+      if localization.gnss.position then localization.gnss.position = transformAttachedPoint(localization.gnss.position, sourcePose, currentPose) end
+      if localization.gnss.worldPosition then localization.gnss.worldPosition = transformAttachedPoint(localization.gnss.worldPosition, sourcePose, currentPose) end
+    end
+    if localization.imu and localization.imu.position then
+      localization.imu.position = transformAttachedPoint(localization.imu.position, sourcePose, currentPose)
+    end
+  end
+end
+
 local function updateVisualizationRenderState(dt)
   dt = math.max(0, math.min(tonumber(dt) or 0, 0.10))
   state.visualizationRenderClock = (state.visualizationRenderClock or 0) + dt
@@ -2967,6 +3085,9 @@ local function updateVisualizationRenderState(dt)
         )
       end
     end
+    local currentPose = captureRenderVehiclePose()
+    reanchorAttachedVisuals(renderFrame, state.latestData.vehiclePose, currentPose)
+    renderFrame.vehiclePose = currentPose
     state.visualizationRenderFrame = renderFrame
   else
     state.visualizationRenderFrame = nil
