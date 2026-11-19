@@ -23,6 +23,7 @@ RoadMind models the sensor layout of a modern assisted/autonomous vehicle and vi
 Open **ESC → Mods → RoadMind** (BeamNG.drive 0.39+). The bilingual settings page follows the game's language and includes:
 
 - Economy, Balanced and High performance profiles.
+- An optional in-game Lua profiler with per-sensor, tracking, World Model, planner, ADAS and Debug Draw timings (off by default).
 - LiDAR enable, profile-controlled resolution, frequency and range.
 - Radar and ultrasonic enable, ray density and frequency.
 - Independent switches for 3D sensor overlays.
