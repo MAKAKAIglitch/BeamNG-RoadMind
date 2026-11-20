@@ -9410,7 +9410,9 @@ function M.getPerceptionSnapshot(worldModelOverride, snapshotOptions)
   local motion = buildMapMotionSnapshot(position, forward)
   if motion then
     motion.guidance = buildCurveGuidance(
-      position, motion.speedMps, (#route >= 3 and route or (road and road.corridor)) or {},
+      position, motion.speedMps,
+      (type(route) == "table" and #route >= 3 and route)
+        or (road and road.corridor) or {},
       road and road.quality or "unavailable"
     )
     local adas = state.adas or {}
