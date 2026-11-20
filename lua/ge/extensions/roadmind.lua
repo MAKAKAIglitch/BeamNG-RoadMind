@@ -7077,6 +7077,10 @@ state._roadmindHelpers.buildSensorZones = function(data, settings)
           and zone.range and zone.range > zone.minRange
           and zone.horizontalFov and zone.horizontalFov > 0
           and zone.verticalFov and zone.verticalFov > 0 then
+        -- Frustum slopes depend only on FOV. Precompute them once per zone
+        -- instead of evaluating tan/rad for every vehicle-zone pair.
+        zone.horizontalSlope = math.tan(math.rad(zone.horizontalFov * 0.5))
+        zone.verticalSlope = math.tan(math.rad(zone.verticalFov * 0.5))
         zones[#zones + 1] = zone
       end
     end
@@ -7104,8 +7108,8 @@ state._roadmindHelpers.targetInsideSensorZone = function(target, zone)
   if farDistance < zone.minRange or nearDistance > zone.range then return false end
 
   local usableDepth = math.max(0, math.min(zone.range, farDistance))
-  local horizontalHalfWidth = usableDepth * math.tan(math.rad(zone.horizontalFov * 0.5))
-  local verticalHalfHeight = usableDepth * math.tan(math.rad(zone.verticalFov * 0.5))
+  local horizontalHalfWidth = usableDepth * zone.horizontalSlope
+  local verticalHalfHeight = usableDepth * zone.verticalSlope
   if math.abs(lateral) > horizontalHalfWidth + radiusRight then return false end
   if math.abs(vertical) > verticalHalfHeight + radiusUp then return false end
 
