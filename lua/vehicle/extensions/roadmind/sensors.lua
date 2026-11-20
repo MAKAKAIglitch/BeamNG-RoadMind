@@ -767,22 +767,29 @@ local function buildAttachedUltrasonicMounts(frame)
   return mounts
 end
 
-local function refreshAttachedVisuals(frame)
+local function refreshAttachedVisuals(frame, selectedJob)
   if not state.frame then return end
-  local lidar = currentSensorLayout().lidar
-  local lidarMount = makeLevelledLidarMount(frame, lidar.forwardOffset, lidar.lateralOffset, lidar.upOffset)
-  if lidarMount then
-    state.frame.lidar.origin = vectorToTable(lidarMount.position)
-    state.frame.lidar.forward = vectorToPreciseTable(lidarMount.direction)
-    state.frame.lidar.right = vectorToPreciseTable(lidarMount.right)
-    state.frame.lidar.up = vectorToPreciseTable(lidarMount.up)
+
+  -- Scan/pose/zone jobs already build their own geometry. Rebuilding every
+  -- mount, camera frustum and detection zone after every job duplicated most
+  -- of that work. Refresh only the live mount transforms on the existing
+  -- pose/zone cadence; sensor measurements and their ray counts are untouched.
+  if selectedJob == 4 or selectedJob == 5 then
+    local lidar = currentSensorLayout().lidar
+    local lidarMount = makeLevelledLidarMount(
+      frame, lidar.forwardOffset, lidar.lateralOffset, lidar.upOffset
+    )
+    if lidarMount then
+      state.frame.lidar.origin = vectorToTable(lidarMount.position)
+      state.frame.lidar.forward = vectorToPreciseTable(lidarMount.direction)
+      state.frame.lidar.right = vectorToPreciseTable(lidarMount.right)
+      state.frame.lidar.up = vectorToPreciseTable(lidarMount.up)
+    end
+    state.frame.radar.mounts = buildAttachedRadarMounts(frame)
+    state.frame.ultrasonic.mounts = buildAttachedUltrasonicMounts(frame)
   end
-  state.frame.radar.mounts = buildAttachedRadarMounts(frame)
-  state.frame.ultrasonic.mounts = buildAttachedUltrasonicMounts(frame)
-  state.frame.cameras = buildCameras(frame)
-  state.frame.mounts = buildSensorMountDebug(frame)
-  state.frame.geometryDebug = buildGeometryDebug(frame)
-  state.frame.detectionZones = buildDetectionZones(frame)
+
+  -- This compact pose is needed by GE for every published sensor update.
   state.frame.vehiclePose = buildVehiclePose(frame)
 end
 
@@ -1214,7 +1221,7 @@ function M.updateGFX(dt)
     -- Sensor geometry and coverage volumes are cheap to refresh. Rebuild them
     -- against the same vehicle pose sent with this payload; GE can then attach
     -- them to the live car transform without increasing the raycast budget.
-    refreshAttachedVisuals(frame)
+    refreshAttachedVisuals(frame, selectedJob)
     state.frame.enabled = true
     state.frame.updatedSensors = updatedSensors
     publish()
