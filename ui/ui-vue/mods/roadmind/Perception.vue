@@ -50,15 +50,24 @@
           />
         </g>
 
-        <g class="vehicle-boxes">
+        <g class="vehicle-models">
           <g v-for="vehicle in vehicles" :key="vehicle.id">
-            <line
-              v-for="(edge, index) in vehicle.edges"
-              :key="vehicle.id + '-' + index"
-              :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2"
-              :class="vehicle.edgeClass"
+            <polygon
+              v-for="(face, index) in vehicle.faces"
+              :key="vehicle.id + '-face-' + index"
+              :points="face.points"
+              :class="face.className"
             />
-            <polygon v-if="vehicle.top" :points="vehicle.top" :class="vehicle.topClass" />
+            <polyline
+              v-if="vehicle.outline"
+              :points="vehicle.outline"
+              :class="vehicle.outlineClass"
+            />
+            <polyline
+              v-if="vehicle.heading"
+              :points="vehicle.heading"
+              :class="vehicle.headingClass"
+            />
           </g>
         </g>
 
@@ -582,39 +591,139 @@ function worldVectorToLocalBasis(vector) {
   return { r: dot3(vector, right), f: dot3(vector, forward), u: dot3(vector, up) }
 }
 
-function buildBox(centerWorld, dimensions, orientation) {
+function buildCarModel(centerWorld, dimensions, orientation, status) {
   const vehicle = snapshot.value.vehicle
   if (!vehicle || !centerWorld) return null
+
   const basis = orientation || {}
   const forward = worldVectorToLocalBasis(basis.forward || vehicle.forward)
   const right = worldVectorToLocalBasis(basis.right || vehicle.right)
   const up = worldVectorToLocalBasis(basis.up || vehicle.up)
-  const width = Math.max(0.8, Number(dimensions && dimensions.width) || 1.8)
-  const length = Math.max(1.4, Number(dimensions && dimensions.length) || 4.4)
-  const height = Math.max(0.6, Number(dimensions && dimensions.height) || 1.5)
+  const width = Math.max(0.9, Number(dimensions && dimensions.width) || 1.8)
+  const length = Math.max(1.6, Number(dimensions && dimensions.length) || 4.4)
+  const height = Math.max(0.75, Number(dimensions && dimensions.height) || 1.5)
+  const halfW = width * 0.5
+  const halfL = length * 0.5
+  const halfH = height * 0.5
   const center = worldToLocal(centerWorld)
   if (!center) return null
-  const signs = [
-    [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
-    [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]
+
+  const point = (r, f, u) => ({
+    r: center.r + right.r * r + forward.r * f + up.r * u,
+    f: center.f + right.f * r + forward.f * f + up.f * u,
+    u: center.u + right.u * r + forward.u * f + up.u * u
+  })
+
+  const suffix = status === "visible" ? ""
+    : status === "unverified" ? "-unverified"
+      : status === "stale" ? "-stale" : "-predicted"
+  const faces = []
+  const addFace = (vertices, material) => {
+    const projected = vertices.map(v => projectLocal(point(v[0], v[1], v[2])))
+    if (!projected.every(Boolean)) return
+    const depth = projected.reduce((sum, p) => sum + p.depth, 0) / projected.length
+    faces.push({
+      points: projected.map(p => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" "),
+      className: "vehicle-" + material + suffix,
+      depth
+    })
+  }
+
+  const bodyBottom = -halfH * 0.78
+  const bodyTop = -halfH * 0.02
+  const bodyHalfW = halfW * 0.94
+  const bodyHalfL = halfL * 0.94
+  const cabinBottom = bodyTop + height * 0.08
+  const cabinTop = halfH * 0.78
+  const cabinHalfW = halfW * 0.70
+  const cabinFront = halfL * 0.38
+  const cabinRear = -halfL * 0.42
+  const roofFront = halfL * 0.20
+  const roofRear = -halfL * 0.29
+
+  // Main body shell.
+  addFace([
+    [-bodyHalfW, -bodyHalfL, bodyTop], [bodyHalfW, -bodyHalfL, bodyTop],
+    [bodyHalfW, bodyHalfL, bodyTop], [-bodyHalfW, bodyHalfL, bodyTop]
+  ], "body")
+  addFace([
+    [-bodyHalfW, -bodyHalfL, bodyBottom], [-bodyHalfW, bodyHalfL, bodyBottom],
+    [-bodyHalfW, bodyHalfL, bodyTop], [-bodyHalfW, -bodyHalfL, bodyTop]
+  ], "body")
+  addFace([
+    [bodyHalfW, -bodyHalfL, bodyBottom], [bodyHalfW, bodyHalfL, bodyBottom],
+    [bodyHalfW, bodyHalfL, bodyTop], [bodyHalfW, -bodyHalfL, bodyTop]
+  ], "body")
+  addFace([
+    [-bodyHalfW, bodyHalfL, bodyBottom], [bodyHalfW, bodyHalfL, bodyBottom],
+    [bodyHalfW, bodyHalfL, bodyTop], [-bodyHalfW, bodyHalfL, bodyTop]
+  ], "body")
+  addFace([
+    [-bodyHalfW, -bodyHalfL, bodyBottom], [bodyHalfW, -bodyHalfL, bodyBottom],
+    [bodyHalfW, -bodyHalfL, bodyTop], [-bodyHalfW, -bodyHalfL, bodyTop]
+  ], "body")
+
+  // Raised cabin with sloped front/rear glass and a roof plane.
+  addFace([
+    [-cabinHalfW, cabinRear, cabinBottom], [-cabinHalfW, cabinFront, cabinBottom],
+    [-cabinHalfW * 0.82, roofFront, cabinTop], [-cabinHalfW * 0.82, roofRear, cabinTop]
+  ], "cabin")
+  addFace([
+    [cabinHalfW, cabinRear, cabinBottom], [cabinHalfW, cabinFront, cabinBottom],
+    [cabinHalfW * 0.82, roofFront, cabinTop], [cabinHalfW * 0.82, roofRear, cabinTop]
+  ], "cabin")
+  addFace([
+    [-cabinHalfW, cabinFront, cabinBottom], [cabinHalfW, cabinFront, cabinBottom],
+    [cabinHalfW * 0.82, roofFront, cabinTop], [-cabinHalfW * 0.82, roofFront, cabinTop]
+  ], "glass")
+  addFace([
+    [-cabinHalfW, cabinRear, cabinBottom], [cabinHalfW, cabinRear, cabinBottom],
+    [cabinHalfW * 0.82, roofRear, cabinTop], [-cabinHalfW * 0.82, roofRear, cabinTop]
+  ], "glass")
+  const roofVertices = [
+    [-cabinHalfW * 0.82, roofRear, cabinTop],
+    [cabinHalfW * 0.82, roofRear, cabinTop],
+    [cabinHalfW * 0.82, roofFront, cabinTop],
+    [-cabinHalfW * 0.82, roofFront, cabinTop]
   ]
-  const corners = signs.map(sign => ({
-    r: center.r + right.r * sign[0] * width * 0.5 + forward.r * sign[1] * length * 0.5 + up.r * sign[2] * height * 0.5,
-    f: center.f + right.f * sign[0] * width * 0.5 + forward.f * sign[1] * length * 0.5 + up.f * sign[2] * height * 0.5,
-    u: center.u + right.u * sign[0] * width * 0.5 + forward.u * sign[1] * length * 0.5 + up.u * sign[2] * height * 0.5
-  }))
-  const projected = corners.map(projectLocal)
-  const edges = BOX_EDGES.map(pair => {
-    const a = projected[pair[0]]
-    const b = projected[pair[1]]
-    if (!a || !b) return null
-    return { x1: a.x, y1: a.y, x2: b.x, y2: b.y }
-  }).filter(Boolean)
-  const top = [projected[4], projected[5], projected[6], projected[7]]
-  const topPoints = top.every(Boolean) ? top.map(p => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ") : ""
-  const side = [projected[0], projected[1], projected[5], projected[4]]
-  const sidePoints = side.every(Boolean) ? side.map(p => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ") : ""
-  return { edges, top: topPoints, side: sidePoints }
+  addFace(roofVertices, "roof")
+
+  // Compact wheel blocks give the silhouette depth at the road plane.
+  const wheelHalfWidth = Math.max(0.07, width * 0.055)
+  const wheelHalfLength = Math.max(0.14, length * 0.075)
+  const wheelU = bodyBottom + height * 0.14
+  for (const side of [-1, 1]) {
+    for (const axle of [-1, 1]) {
+      const wheelR = side * (halfW - wheelHalfWidth * 0.45)
+      const wheelF = axle * halfL * 0.62
+      addFace([
+        [wheelR - wheelHalfWidth, wheelF - wheelHalfLength, wheelU - 0.04],
+        [wheelR + wheelHalfWidth, wheelF - wheelHalfLength, wheelU - 0.04],
+        [wheelR + wheelHalfWidth, wheelF + wheelHalfLength, wheelU + 0.12],
+        [wheelR - wheelHalfWidth, wheelF + wheelHalfLength, wheelU + 0.12]
+      ], "wheel")
+    }
+  }
+
+  const roofPoints = roofVertices.map(v => projectLocal(point(v[0], v[1], v[2])))
+  const outline = roofPoints.every(Boolean)
+    ? [...roofPoints, roofPoints[0]].map(p => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ")
+    : ""
+  const headingStart = projectLocal(point(0, halfL * 0.68, bodyTop + 0.02))
+  const headingEnd = projectLocal(point(0, halfL * 0.98, bodyTop + 0.02))
+  const heading = headingStart && headingEnd
+    ? headingStart.x.toFixed(1) + "," + headingStart.y.toFixed(1)
+      + " " + headingEnd.x.toFixed(1) + "," + headingEnd.y.toFixed(1)
+    : ""
+
+  faces.sort((a, b) => b.depth - a.depth)
+  return {
+    faces,
+    outline,
+    heading,
+    outlineClass: "vehicle-outline" + suffix,
+    headingClass: "vehicle-heading" + suffix
+  }
 }
 
 const vehicles = computed(() => {
@@ -642,27 +751,25 @@ const vehicles = computed(() => {
         : (track.status === "stale" || age > 1 ? "stale" : "predicted"))
     const sources = track.sourceSensors || []
     const source = sources.some(s => s.sensor === "camera") ? t("carCamera") : t("carSim")
-    const box = buildBox(center, track.dimensions, track.orientation)
+    const model = buildCarModel(center, track.dimensions, track.orientation, status)
+    if (!model) continue
+
     const delta = worldToLocal(center)
     const distance = delta ? Math.sqrt(delta.f * delta.f + delta.r * delta.r) : 0
-
     result.push({
-      id: track.trackId || track.candidateId || key,
-      edges: box ? box.edges : [],
-      top: box ? box.top : "",
+      id: key,
+      faces: model.faces,
+      outline: model.outline,
+      heading: model.heading,
+      outlineClass: model.outlineClass,
+      headingClass: model.headingClass,
       state: status === "unverified" ? t("unverified") : t(status),
       source,
-      edgeClass: status === "visible" ? "vehicle-edge-visible"
-        : status === "unverified" ? "vehicle-edge-unverified"
-          : status === "stale" ? "vehicle-edge-stale" : "vehicle-edge-predicted",
-      topClass: status === "unverified" ? "vehicle-top-unverified"
-        : status === "visible" ? "vehicle-top-visible" : "vehicle-top-predicted",
       distance: distance.toFixed(1)
     })
   }
-  return result.sort((a, b) => Number(a.distance) - Number(b.distance))
+  return result.sort((a, b) => Number(b.distance) - Number(a.distance))
 })
-
 const obstacles = computed(() => (snapshot.value.obstacles || []).map(obstacle => {
   const p = projectWorld(obstacle.position)
   if (!p || p.x < -30 || p.x > 510 || p.y < -30 || p.y > 550) return null
@@ -780,13 +887,27 @@ onBeforeUnmount(() => {
 .cloud-points circle { fill: #d5f2ee; stroke: #78cfc5; stroke-width: 0.35; }
 .obstacle-markers circle { fill: #d9e3e9; fill-opacity: 0.12; stroke: #d2dee7; stroke-width: 1.1; }
 .obstacle-markers path { fill: none; stroke: #d2dee7; stroke-width: 0.8; stroke-opacity: 0.75; }
-.vehicle-edge-visible { stroke: #70d7c3; stroke-width: 1.5; }
-.vehicle-edge-unverified { stroke: #e6c36b; stroke-width: 1.25; stroke-dasharray: 3 2; }
-.vehicle-edge-predicted { stroke: #e6c36b; stroke-width: 1.15; stroke-dasharray: 3 2; }
-.vehicle-edge-stale { stroke: #8795a2; stroke-width: 1; stroke-dasharray: 2 3; }
-.vehicle-top-visible { fill: #24645e; fill-opacity: 0.30; stroke: none; }
-.vehicle-top-unverified { fill: #80682e; fill-opacity: 0.24; stroke: none; }
-.vehicle-top-predicted { fill: #80682e; fill-opacity: 0.24; stroke: none; }
+.vehicle-body { fill: #278176; fill-opacity: 0.92; stroke: #9aeee0; stroke-width: 0.9; stroke-linejoin: round; }
+.vehicle-cabin { fill: #3a9b90; fill-opacity: 0.96; stroke: #b6f5ea; stroke-width: 0.8; stroke-linejoin: round; }
+.vehicle-glass { fill: #173b48; fill-opacity: 0.96; stroke: #75c7c5; stroke-width: 0.65; stroke-linejoin: round; }
+.vehicle-roof { fill: #4baea2; fill-opacity: 0.96; stroke: #c1fff3; stroke-width: 0.8; stroke-linejoin: round; }
+.vehicle-wheel { fill: #111a22; fill-opacity: 0.98; stroke: #70818e; stroke-width: 0.45; }
+.vehicle-body-unverified { fill: #9c7834; fill-opacity: 0.52; stroke: #e6c36b; stroke-width: 0.9; stroke-dasharray: 2.5 1.8; stroke-linejoin: round; }
+.vehicle-cabin-unverified { fill: #9a793e; fill-opacity: 0.58; stroke: #f0d38a; stroke-width: 0.8; stroke-dasharray: 2.5 1.8; }
+.vehicle-glass-unverified { fill: #51452b; fill-opacity: 0.72; stroke: #dfbd70; stroke-width: 0.65; }
+.vehicle-roof-unverified { fill: #c29b4e; fill-opacity: 0.62; stroke: #ffe3a0; stroke-width: 0.8; stroke-dasharray: 2.5 1.8; }
+.vehicle-wheel-unverified { fill: #261f15; fill-opacity: 0.88; stroke: #d8b86f; stroke-width: 0.45; }
+.vehicle-body-predicted, .vehicle-body-stale { fill: #5c6872; fill-opacity: 0.60; stroke: #a6b0b8; stroke-width: 0.8; stroke-dasharray: 2 2; }
+.vehicle-cabin-predicted, .vehicle-cabin-stale { fill: #687987; fill-opacity: 0.68; stroke: #b1c0ca; stroke-width: 0.7; stroke-dasharray: 2 2; }
+.vehicle-glass-predicted, .vehicle-glass-stale { fill: #263642; fill-opacity: 0.82; stroke: #8295a3; stroke-width: 0.6; }
+.vehicle-roof-predicted, .vehicle-roof-stale { fill: #8495a2; fill-opacity: 0.64; stroke: #c1cbd1; stroke-width: 0.7; stroke-dasharray: 2 2; }
+.vehicle-wheel-predicted, .vehicle-wheel-stale { fill: #111a22; stroke: #8795a2; stroke-width: 0.45; }
+.vehicle-outline { fill: none; stroke: #d4fff5; stroke-width: 0.85; stroke-linejoin: round; }
+.vehicle-outline-unverified { fill: none; stroke: #f5dda0; stroke-width: 0.8; stroke-dasharray: 2 2; }
+.vehicle-outline-predicted, .vehicle-outline-stale { fill: none; stroke: #aab7c0; stroke-width: 0.8; stroke-dasharray: 2 2; }
+.vehicle-heading { fill: none; stroke: #f4fff9; stroke-width: 1.25; stroke-linecap: round; }
+.vehicle-heading-unverified { fill: none; stroke: #ffe8ae; stroke-width: 1.1; stroke-dasharray: 2 1.5; }
+.vehicle-heading-predicted, .vehicle-heading-stale { fill: none; stroke: #b2c0c8; stroke-width: 1; stroke-dasharray: 2 1.5; }
 .ego-side { fill: #30404d; fill-opacity: 0.92; stroke: #d7e5ee; stroke-width: 1.2; }
 .ego-top { fill: #d5e0e8; fill-opacity: 0.92; stroke: #f5fbff; stroke-width: 1.5; }
 .ego-outline { fill: none; stroke: #f5fbff; stroke-width: 1.6; }
