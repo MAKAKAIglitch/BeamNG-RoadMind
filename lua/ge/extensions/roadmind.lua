@@ -7120,7 +7120,14 @@ updateLocalTrajectoryPlanner = function()
     })
 end
 state._roadmindHelpers.refreshVehicleRegistry = function()
-  local registry = {}
+  -- Reuse the registry tables across updates. The previous snapshot is only
+  -- consumed synchronously by this extension, so clearing in place avoids
+  -- allocating two new tables for every traffic refresh.
+  local registry = state.vehicleRegistry or {}
+  for i = #registry, 1, -1 do registry[i] = nil end
+  local registryById = state.vehicleRegistryById or {}
+  for key in pairs(registryById) do registryById[key] = nil end
+
   local examined = 0
   local truncated = false
   local iteratorAvailable = false
@@ -7191,8 +7198,8 @@ state._roadmindHelpers.refreshVehicleRegistry = function()
   end
 
   if not iteratorAvailable then
-    state.vehicleRegistry = {}
-    state.vehicleRegistryById = {}
+    state.vehicleRegistry = registry
+    state.vehicleRegistryById = registryById
     state.vehicleRegistrySnapshotValid = false
     state.vehicleRegistryTimestamp = nil
     state.vehicleRegistryTruncated = false
@@ -7200,7 +7207,6 @@ state._roadmindHelpers.refreshVehicleRegistry = function()
     return false
   end
 
-  local registryById = {}
   for i = 1, #registry do
     registryById[tostring(registry[i].id)] = true
   end
