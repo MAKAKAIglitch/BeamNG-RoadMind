@@ -142,6 +142,7 @@ local SESSION_STATIC_MAP_MAX_CELLS = 20000
 local SESSION_STATIC_MAP_MAX_IDS = 8192
 local SESSION_STATIC_MAP_PRUNE_STEP_M = 12
 local SESSION_STATIC_MAP_MAX_OUTPUT = 4000
+local WORLD_MODEL_UPDATE_INTERVAL = 0.20
 
 local state = {
   activeVehicleId = nil,
@@ -237,6 +238,8 @@ local state = {
   lidarRenderScanSequence = 0,
   worldModel = nil,
   worldModelGeneration = 0,
+  worldModelDirty = true,
+  worldModelUpdateTimer = 0,
   routePilotEnabled = false,
   routePilotStarted = false,
   routeSafetyStopped = false,
@@ -999,6 +1002,8 @@ state._roadmindHelpers.resetTrackingState = function(resetClock)
   state.trackCount = 0
   state.vehicleRenderStates = {}
   state.worldModel = nil
+  state.worldModelDirty = true
+  state.worldModelUpdateTimer = 0
   state.occlusionCache = {}
   state.occlusionSourceCursor = {}
   state.occlusionCursor = 1
@@ -1353,6 +1358,8 @@ state._roadmindHelpers.resetFrame = function()
   state.latestData = nil
   state.frameAge = math.huge
   state.worldModel = nil
+  state.worldModelDirty = true
+  state.worldModelUpdateTimer = 0
   state.visualizationRenderFrame = nil
   state.visualizationRenderOverlays = nil
   state.visualizationVectorStates = {}
@@ -7396,7 +7403,7 @@ state._roadmindHelpers.updateVehicleDetection = function(dt)
   if state.latestData then
     state.latestData.vehicles = candidates
     state.latestData.tracks = tracks
-    state.worldModel = buildWorldModel and buildWorldModel() or state.worldModel
+    state.worldModelDirty = true
   end
 end
 
@@ -8108,10 +8115,8 @@ state._roadmindHelpers.mergeSensorFrame = function(frame)
   latest.vehicles = state.vehicleCandidates
   state.latestData = latest
   state.frameAge = 0
-  if buildWorldModel then
-    local profileStarted = M.performanceProfiler.start()
-    state.worldModel = buildWorldModel()
-    M.performanceProfiler.stop("world_model", profileStarted)
+  if updates.lidar == true or updates.radar == true or updates.ultrasonic == true then
+    state.worldModelDirty = true
   end
   local routeStarted = M.performanceProfiler.start()
   state._roadmindHelpers.updateRoutePilotSafety()
@@ -8242,6 +8247,18 @@ function M.onUpdate(dt)
     local trackingStarted = M.performanceProfiler.start()
     state._roadmindHelpers.updateVehicleDetection(dt)
     M.performanceProfiler.stop("vehicle_tracking", trackingStarted)
+    if state.worldModelDirty and buildWorldModel then
+      state.worldModelUpdateTimer = (state.worldModelUpdateTimer or 0) + dt
+      if not state.worldModel or state.worldModelUpdateTimer >= WORLD_MODEL_UPDATE_INTERVAL then
+        local worldModelStarted = M.performanceProfiler.start()
+        state.worldModel = buildWorldModel()
+        state.worldModelDirty = false
+        state.worldModelUpdateTimer = 0
+        M.performanceProfiler.stop("world_model", worldModelStarted)
+      end
+    else
+      state.worldModelUpdateTimer = 0
+    end
     if visualFrameFresh then
       state._roadmindHelpers.updateLidarRenderPoints(dt)
       state._roadmindHelpers.updateDetectedVehicleRenderStates(dt)
@@ -8432,6 +8449,8 @@ end
 function M.getWorldModel()
   if not state.worldModel and buildWorldModel then
     state.worldModel = buildWorldModel()
+    state.worldModelDirty = false
+    state.worldModelUpdateTimer = 0
   end
   if not state.worldModel then
     return {
@@ -8583,6 +8602,8 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
   if not worldModel and buildWorldModel then
     worldModel = buildWorldModel()
     state.worldModel = worldModel
+    state.worldModelDirty = false
+    state.worldModelUpdateTimer = 0
   end
   worldModel = worldModel or {targets = {}, obstacles = {}, staticGeometry = {}}
   local perception = M.getPerceptionSnapshot(worldModel)
