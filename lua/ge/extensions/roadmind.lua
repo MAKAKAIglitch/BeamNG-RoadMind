@@ -7241,8 +7241,10 @@ end
 
 state._roadmindHelpers.checkTargetOcclusion = function(zone, target)
   if type(castRay) ~= "function" then return "unavailable", false end
-  local delta = target.center - zone.origin
-  local centerDistance = delta:length()
+  local dx = target.center.x - zone.origin.x
+  local dy = target.center.y - zone.origin.y
+  local dz = target.center.z - zone.origin.z
+  local centerDistance = math.sqrt(dx * dx + dy * dy + dz * dz)
   if centerDistance < 0.01 then return "unverified", false end
 
   -- The ray starts at this exact sensor mount (for cameras: the camera lens)
@@ -7266,7 +7268,11 @@ state._roadmindHelpers.checkTargetOcclusion = function(zone, target)
   -- so the candidate is behind an occluder (another vehicle, wall or prop).
   if hitObject ~= nil then return "occluded", true end
 
-  local rayDirection = delta / centerDistance
+  local rayDirection = vec3(
+    dx / centerDistance,
+    dy / centerDistance,
+    dz / centerDistance
+  )
   local expectedTargetSurface = math.max(0,
     centerDistance - state._roadmindHelpers.projectedBoxRadius(target, rayDirection))
   if hitDistance and hitDistance < expectedTargetSurface - 0.10 then
