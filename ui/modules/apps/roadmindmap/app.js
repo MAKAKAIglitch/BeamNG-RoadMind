@@ -1056,10 +1056,15 @@
             var zoneAlpha = zone.sensor === "camera" ? 0.105
               : (zone.sensor === "lidar" ? 0.075
                 : (zone.sensor === "radar" ? 0.085 : 0.10));
+            var zoneEnabled = zone.enabled !== false;
+            if (!zoneEnabled) {
+              zoneColor = "#71818d";
+              zoneAlpha *= 0.30;
+            }
             addPolygon([zoneOrigin, farLeft, farRight], zoneColor, zoneAlpha);
-            addLine([zoneOrigin, farLeft], zoneColor, 0.75, 0.28, [3, 5]);
-            addLine([zoneOrigin, farRight], zoneColor, 0.75, 0.28, [3, 5]);
-            addLine([farLeft, farRight], zoneColor, 0.85, 0.34, [3, 5]);
+            addLine([zoneOrigin, farLeft], zoneColor, 0.75, zoneEnabled ? 0.28 : 0.12, [3, 5]);
+            addLine([zoneOrigin, farRight], zoneColor, 0.75, zoneEnabled ? 0.28 : 0.12, [3, 5]);
+            addLine([farLeft, farRight], zoneColor, 0.85, zoneEnabled ? 0.34 : 0.14, [3, 5]);
           }
 
           // Actual sensor returns use their own layer and source colour.
