@@ -875,7 +875,6 @@ local function buildPredictedTrajectory(frame, updateDt)
       and (frontLongitudinal / frontCount + rearLongitudinal / rearCount) * 0.5 or 0)
   local rearToCenter = bodyCenterLongitudinal - rearY
   local curvature = (math.tan(frontAngle) - math.tan(rearAngle)) / wheelbase
-  curvature = math.max(-0.75, math.min(0.75, curvature))
 
   local longitudinalSpeed = frame.velocity and frame.velocity:dot(frame.forward) or 0
   local reverseSelected = steeringValues.reverse == true or tonumber(steeringValues.reverse) == 1
@@ -886,9 +885,29 @@ local function buildPredictedTrajectory(frame, updateDt)
   else
     directionSign = reverseSelected and -1 or 1
   end
-  local travelDistance = math.max(5, math.min(40, math.abs(longitudinalSpeed) * 2.2))
+
+  local speedMagnitude = math.abs(longitudinalSpeed)
+  -- A constant low-speed steering curvature extrapolated over 40 m creates
+  -- several artificial circles. Limit lateral acceleration at speed, and
+  -- scale the preview distance to a short time horizon.
+  local maximumLateralAcceleration = 5.0
+  local speedCurvatureLimit = maximumLateralAcceleration / math.max(1.0, speedMagnitude * speedMagnitude)
+  local curvatureLimit = math.min(0.75, speedCurvatureLimit)
+  curvature = math.max(-curvatureLimit, math.min(curvatureLimit, curvature))
+  local travelDistance = math.min(35, speedMagnitude * 1.6)
+  if travelDistance < 1.5 then
+    return {
+      valid = false, points = {}, reverse = directionSign < 0,
+      speedMps = speedMagnitude, steeringAngleDeg = math.deg(frontAngle),
+      rearSteeringAngleDeg = math.deg(rearAngle), wheelbaseM = wheelbase,
+      vehicleLengthM = vehicleLength, vehicleWidthM = vehicleWidth,
+      source = frontCount > 0 and rearCount > 0
+        and "measured-wheel-axles" or "steering-input-estimate",
+      reason = "vehicle_stopped_or_crawling"
+    }
+  end
   local signedDistance = directionSign * travelDistance
-  local steps = 13
+  local steps = 15
   local points = {}
   local rearAxleOrigin = frame.position + frame.forward * rearY + frame.up * 0.08
   local halfLength = vehicleLength * 0.5
