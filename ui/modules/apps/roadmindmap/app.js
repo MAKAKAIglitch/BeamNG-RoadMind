@@ -207,6 +207,8 @@
             pollGeneration++;
             polling = false;
             extensionReady = false;
+            drawDirty = true;
+            scope.$evalAsync();
             schedulePoll(nextRetryDelay());
           }, 2200);
           var command = "jsonEncode(extensions.roadmind.getMapSnapshot(" +
@@ -251,6 +253,7 @@
             } else {
               // Preserve the last valid snapshot and cached geometry during recovery.
               extensionReady = false;
+              drawDirty = true;
             }
             scope.$evalAsync();
             if (!next) {
@@ -1450,9 +1453,13 @@
             var guidanceLabel = guidance.status === "brake_now" ? "BRAKE NOW"
               : (guidance.status === "prepare" ? "SLOW FOR CURVE"
                 : (guidance.status === "clear" ? "ROAD PREVIEW" : "GUIDANCE WAIT"));
-            var targetLabel = isFinite(Number(guidance.targetSpeedMps))
-              ? "TARGET " + Math.round(Number(guidance.targetSpeedMps) * 3.6) + " km/h"
-              : guidanceLabel;
+            var turnLabel = guidance.turnDirection
+              ? " · " + String(guidance.turnDirection).toUpperCase() : "";
+            var targetLabel = motion.warning === "aeb" ? "AEB ACTIVE"
+              : (motion.warning === "fcw" ? "COLLISION WARNING"
+                : (isFinite(Number(guidance.targetSpeedMps))
+                  ? "TARGET " + Math.round(Number(guidance.targetSpeedMps) * 3.6) + " km/h" + turnLabel
+                  : guidanceLabel + turnLabel));
             var speedLabel = Math.round(Number(motion.speedKph)) + " km/h";
             var accelLabel = (Number(motion.accelerationMps2) >= 0 ? "+" : "") +
               Number(motion.accelerationMps2 || 0).toFixed(1) + " m/s²";
@@ -1481,10 +1488,17 @@
             ctx.fillText(accelLabel + "  ·  " + lateralLabel, telemetryX + 9, telemetryY + 29);
             if (isExpanded) {
               ctx.font = "600 9px sans-serif";
-              ctx.fillStyle = guidance.status === "brake_now" ? "#ff8178"
-                : (guidance.status === "prepare" ? "#f2bb61" : "#8ad9c8");
+              ctx.fillStyle = motion.warning === "aeb" || guidance.status === "brake_now" ? "#ff8178"
+                : (motion.warning === "fcw" || guidance.status === "prepare" ? "#f2bb61" : "#8ad9c8");
               ctx.fillText(targetLabel, telemetryX + 9, telemetryY + 44);
             }
+            var snapshotAge = lastSnapshotAt ? (Date.now() - lastSnapshotAt) / 1000 : Infinity;
+            var feedStale = snapshotAge > 2.0;
+            ctx.font = "600 9px sans-serif";
+            ctx.textAlign = "right";
+            ctx.fillStyle = feedStale ? "#f2bb61" : "#79cdb9";
+            ctx.fillText(feedStale ? "DATA LINK STALE" : "LIVE",
+              cssWidth - 10, telemetryY + 13);
             ctx.restore();
           }
 
