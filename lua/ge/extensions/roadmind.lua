@@ -3018,16 +3018,27 @@ local function raycastBeam(beam, fallbackOrigin, fallbackRange)
   local ok, hit = pcall(castRay, origin, target, true, true)
   if not ok or not hit then return nil end
 
-  local distance = safeField(hit, "dist")
+  -- Read hit metadata in grouped protected accesses. The raycast result and
+  -- point are engine tables/userdata; one pcall per group avoids several tiny
+  -- closures for every successful beam while retaining the safe fallback.
+  local okHitData, distance, pointData, hitObject = pcall(function()
+    return hit.dist, hit.pt, hit.obj
+  end)
+  if not okHitData then
+    distance = safeField(hit, "dist")
+    pointData = safeField(hit, "pt")
+    hitObject = safeField(hit, "obj")
+  end
   if type(distance) ~= "number" or distance < minRange or distance > maxRange then
     return nil
   end
 
   local point = nil
-  local pointData = safeField(hit, "pt")
   if pointData then
-    local x, y, z = safeField(pointData, "x"), safeField(pointData, "y"), safeField(pointData, "z")
-    if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+    local okPoint, x, y, z = pcall(function()
+      return pointData.x, pointData.y, pointData.z
+    end)
+    if okPoint and type(x) == "number" and type(y) == "number" and type(z) == "number" then
       point = vec3(x, y, z)
     end
   end
@@ -3038,7 +3049,7 @@ local function raycastBeam(beam, fallbackOrigin, fallbackRange)
     y = round2(point.y),
     z = round2(point.z),
     distance = round2(distance),
-    hitObjectId = getVehicleId(safeField(hit, "obj"))
+    hitObjectId = getVehicleId(hitObject)
   }
 end
 
