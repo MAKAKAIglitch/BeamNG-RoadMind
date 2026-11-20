@@ -6533,6 +6533,59 @@ function M.getPerceptionSnapshot()
     end
   end
 
+  -- Export a bounded world-space LiDAR cloud for the Vue 3D perception view.
+  -- This is display-only data: it never feeds the World Model or planner.
+  local lidarCandidates = {}
+  local lidarPointLimit = 1400
+  local pointCloudSource = "none"
+  local function appendPerceptionPoint(point)
+    if type(point) ~= "table" or not position then return end
+    local x, y, z = tonumber(point.x), tonumber(point.y), tonumber(point.z)
+    if not x or not y or not z
+        or x ~= x or y ~= y or z ~= z
+        or x == math.huge or x == -math.huge
+        or y == math.huge or y == -math.huge
+        or z == math.huge or z == -math.huge then return end
+
+    local dx, dy, dz = x - position.x, y - position.y, z - position.z
+    local forwardDistance = dx * forward.x + dy * forward.y + dz * (forward.z or 0)
+    local rightDistance = dx * right.x + dy * right.y + dz * (right.z or 0)
+    local heightDistance = up and (dx * up.x + dy * up.y + dz * up.z) or dz
+    if forwardDistance >= -18 and forwardDistance <= 90
+        and math.abs(rightDistance) <= 32 and math.abs(heightDistance) <= 12 then
+      lidarCandidates[#lidarCandidates + 1] = {x = x, y = y, z = z}
+    end
+  end
+
+  local settings = state.settings or DEFAULT_SETTINGS
+  local storedPointCount = math.max(0, tonumber(state.lidarPointCount) or 0)
+  if settings.lidarPersistenceEnabled == true and storedPointCount > 0 and position then
+    local capacity = math.max(1, tonumber(state.lidarPointCloudCapacity) or DEFAULT_PERSISTENT_LIDAR_POINTS)
+    local startIndex = storedPointCount >= capacity
+      and (tonumber(state.lidarPointWriteIndex) or 1) or 1
+    for offset = 0, storedPointCount - 1 do
+      local index = ((startIndex + offset - 1) % capacity) + 1
+      appendPerceptionPoint(state.lidarPointCloud[index])
+    end
+    if #lidarCandidates > 0 then pointCloudSource = "accumulated" end
+  end
+
+  -- A live scan still gives the view useful geometry when point accumulation is off.
+  if #lidarCandidates == 0 and position and type(latest.lidar) == "table"
+      and type(latest.lidar.rays) == "table" then
+    for i = 1, #latest.lidar.rays do
+      local ray = latest.lidar.rays[i]
+      if type(ray) == "table" and ray.hit == true then appendPerceptionPoint(ray) end
+    end
+    if #lidarCandidates > 0 then pointCloudSource = "live" end
+  end
+
+  local lidarPoints = {}
+  local pointStride = math.max(1, math.ceil(#lidarCandidates / lidarPointLimit))
+  for i = 1, #lidarCandidates, pointStride do
+    lidarPoints[#lidarPoints + 1] = lidarCandidates[i]
+  end
+
   local route = {}
   for i = 1, math.min(#(state.routePath or {}), 48) do
     local point = state.routePath[i]
@@ -6548,6 +6601,9 @@ function M.getPerceptionSnapshot()
     vehicle = vehicle,
     targets = targets,
     obstacles = obstacles,
+    lidarPoints = lidarPoints,
+    lidarPointSource = pointCloudSource,
+    lidarPointTotal = #lidarCandidates,
     road = state._roadmindHelpers.cloneWorldModelValue(state.roadState or {
       valid = false, quality = "unavailable", corridor = {}
     }),
