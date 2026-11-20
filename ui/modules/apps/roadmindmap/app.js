@@ -32,6 +32,7 @@
         var renderErrorReported = false;
         var cachedSurfaceKey = null;
         var cachedSurfaceFaces = [];
+        var cachedSurfaceEdges = [];
 
         function lua(command, callback) {
           if (!window.bngApi || typeof window.bngApi.engineLua !== "function") {
@@ -495,7 +496,7 @@
 
           // Spatial returns are a bounded point cloud, not per-return 3D boxes.
           var geometry = asArray(snapshotData.geometry);
-          for (var gi = 0; gi < Math.min(geometry.length, 120); gi++) {
+          for (var gi = 0; gi < geometry.length; gi++) {
             var geometryItem = geometry[gi];
             var geometryPoint = localPoint(geometryItem.position, ego);
             var geometryAge = Number(geometryItem.age);
@@ -506,7 +507,7 @@
           }
 
           var staticGeometry = asArray(snapshotData.staticGeometry);
-          for (var si = 0; si < Math.min(staticGeometry.length, 140); si++) {
+          for (var si = 0; si < staticGeometry.length; si++) {
             var staticItem = staticGeometry[si];
             var staticPoint = localPoint(staticItem.position, ego);
             if (!staticPoint || Number(staticItem.hitCount || 0) < 2) continue;
@@ -516,93 +517,257 @@
               clamp(0.82 - staticAge / 2400, 0.38, 0.82));
           }
 
-          // Reconstruct a bounded local surface from actual World Model returns.
-          // The cache is rebuilt only when a new map snapshot arrives, not per animation frame.
+          // Build a dense local surface from every available sensor return.
+          // Airborne/unsupported points remain visible as markers, but are excluded
+          // from the surface graph so they cannot create floating bridges.
           var surfaceKey = String(snapshotData.timestamp || 0) + ":" +
-            geometry.length + ":" + staticGeometry.length;
+            geometry.length + ":" + staticGeometry.length + ":" +
+            Number(ego.position.x).toFixed(2) + ":" +
+            Number(ego.position.y).toFixed(2) + ":" +
+            Number(ego.position.z).toFixed(2);
           if (surfaceKey !== cachedSurfaceKey) {
             cachedSurfaceKey = surfaceKey;
             cachedSurfaceFaces = [];
+            cachedSurfaceEdges = [];
             var surfacePoints = [];
             var occupiedCells = Object.create(null);
 
-            function addSurfacePoint(worldPosition, confidence, age, stableHits) {
+            function addSurfacePoint(worldPosition, confidence, age, stableHits, source) {
               var local = localPoint(worldPosition, ego);
-              if (!local || Math.abs(local.x) > 38 || local.y < -18 || local.y > 92 ||
-                  local.z < -2.5 || local.z > 5.5) return;
-              if (!isFinite(age) || age > 45 || confidence < 0.25) return;
+              confidence = Number(confidence);
+              age = Number(age);
+              if (!local || !isFinite(confidence) || !isFinite(age) ||
+                  Math.abs(local.x) > 42 || local.y < -22 || local.y > 105 ||
+                  local.z < -3.0 || local.z > 7.0) return;
+              if (age < 0 || (source === "dynamic" && age > 2.5) ||
+                  (source === "static" && age > 60) || confidence < 0.18) return;
               if (stableHits !== undefined && stableHits < 2) return;
-              var cellKey = Math.round(local.x / 0.55) + ":" +
-                Math.round(local.y / 0.55) + ":" + Math.round(local.z / 0.45);
-              var previous = occupiedCells[cellKey];
-              if (previous) {
-                if (confidence > previous.confidence || age < previous.age) {
-                  previous.x = local.x; previous.y = local.y; previous.z = local.z;
-                  previous.confidence = confidence; previous.age = age;
-                }
+
+              // Merge only near-identical returns. The former 0.55 m voxel
+              // swallowed useful details and left visible holes in the mesh.
+              var cellKey = Math.round(local.x / 0.26) + ":" +
+                Math.round(local.y / 0.26) + ":" +
+                Math.round(local.z / 0.24);
+              var existing = occupiedCells[cellKey];
+              if (existing) {
+                existing.confidence = Math.max(existing.confidence, confidence);
+                existing.age = Math.min(existing.age, age);
+                existing.hits = Math.max(existing.hits, Number(stableHits) || 1);
+                existing.sources[source] = true;
                 return;
               }
-              var point = {x: local.x, y: local.y, z: local.z, confidence: confidence, age: age};
+
+              var point = {
+                x: local.x, y: local.y, z: local.z,
+                confidence: confidence, age: age,
+                hits: Number(stableHits) || 1,
+                sources: {}
+              };
+              point.sources[source] = true;
               occupiedCells[cellKey] = point;
               surfacePoints.push(point);
             }
 
-            for (var sp = 0; sp < Math.min(staticGeometry.length, 180); sp++) {
+            // No arbitrary front-end point caps: every point supplied by the
+            // map snapshot enters deduplication and spatial classification.
+            for (var sp = 0; sp < staticGeometry.length; sp++) {
               var stable = staticGeometry[sp];
-              addSurfacePoint(stable.position, Number(stable.confidence) || 0,
-                Number(stable.dataAge), Number(stable.hitCount) || 0);
+              addSurfacePoint(stable.position, stable.confidence, stable.dataAge,
+                Number(stable.hitCount) || 0, "static");
             }
-            for (var gp = 0; gp < Math.min(geometry.length, 120); gp++) {
+            for (var gp = 0; gp < geometry.length; gp++) {
               var measured = geometry[gp];
-              addSurfacePoint(measured.position, Number(measured.confidence) || 0,
-                Number(measured.age), undefined);
+              addSurfacePoint(measured.position, measured.confidence, measured.age,
+                undefined, "dynamic");
             }
 
-            var usedFaces = Object.create(null);
-            var maxSurfaceEdge = 2.35;
-            for (var si2 = 0; si2 < surfacePoints.length && cachedSurfaceFaces.length < 260; si2++) {
-              var origin = surfacePoints[si2];
+            // XY spatial buckets keep neighbor searches local and avoid an
+            // all-pairs scan when the sensor map grows.
+            var spatialCellSize = 2.0;
+            var spatialGrid = Object.create(null);
+            function spatialCell(x, y) {
+              return Math.floor(x / spatialCellSize) + ":" +
+                Math.floor(y / spatialCellSize);
+            }
+            for (var pi = 0; pi < surfacePoints.length; pi++) {
+              var indexedPoint = surfacePoints[pi];
+              var bucketKey = spatialCell(indexedPoint.x, indexedPoint.y);
+              if (!spatialGrid[bucketKey]) spatialGrid[bucketKey] = [];
+              spatialGrid[bucketKey].push(pi);
+            }
+
+            function nearbyIndices(point, radius) {
+              var result = [];
+              var minCellX = Math.floor((point.x - radius) / spatialCellSize);
+              var maxCellX = Math.floor((point.x + radius) / spatialCellSize);
+              var minCellY = Math.floor((point.y - radius) / spatialCellSize);
+              var maxCellY = Math.floor((point.y + radius) / spatialCellSize);
+              for (var cx = minCellX; cx <= maxCellX; cx++) {
+                for (var cy = minCellY; cy <= maxCellY; cy++) {
+                  var cell = spatialGrid[cx + ":" + cy] || [];
+                  for (var ci = 0; ci < cell.length; ci++) result.push(cell[ci]);
+                }
+              }
+              return result;
+            }
+
+            // Detect returns that sit above a nearby supported surface. They
+            // remain in the point layer, but do not get connected to the ground.
+            for (var ai = 0; ai < surfacePoints.length; ai++) {
+              var pointForGroundTest = surfacePoints[ai];
+              var localCandidates = nearbyIndices(pointForGroundTest, 2.6);
+              var sameLevel = 0;
+              var lowerSupport = 0;
+              var nearbyHeights = [];
+              for (var ac = 0; ac < localCandidates.length; ac++) {
+                var candidateIndex = localCandidates[ac];
+                if (candidateIndex === ai) continue;
+                var candidatePoint = surfacePoints[candidateIndex];
+                var dx = candidatePoint.x - pointForGroundTest.x;
+                var dy = candidatePoint.y - pointForGroundTest.y;
+                var horizontalDistance = Math.sqrt(dx * dx + dy * dy);
+                if (horizontalDistance < 0.18 || horizontalDistance > 2.6) continue;
+                var dz = candidatePoint.z - pointForGroundTest.z;
+                nearbyHeights.push(candidatePoint.z);
+                if (Math.abs(dz) <= 0.58) sameLevel++;
+                if (dz < -0.78) lowerSupport++;
+              }
+              nearbyHeights.sort(function (a, b) { return a - b; });
+              var localMedian = nearbyHeights.length
+                ? nearbyHeights[Math.floor(nearbyHeights.length * 0.5)]
+                : pointForGroundTest.z;
+              pointForGroundTest.airborne = lowerSupport >= 2 &&
+                sameLevel < 2 && pointForGroundTest.z - localMedian > 0.82;
+              pointForGroundTest.support = sameLevel;
+            }
+
+            var groundIndices = [];
+            for (var gi2 = 0; gi2 < surfacePoints.length; gi2++) {
+              if (!surfacePoints[gi2].airborne) groundIndices.push(gi2);
+            }
+
+            // Build a dense neighbor graph. Every supported point is considered
+            // as a graph origin; close neighbors are all connected, while a
+            // small number of longer, well-supported links bridge sensor gaps.
+            var neighborLists = new Array(surfacePoints.length);
+            for (var ni = 0; ni < surfacePoints.length; ni++) neighborLists[ni] = [];
+            for (var oi = 0; oi < groundIndices.length; oi++) {
+              var originIndex = groundIndices[oi];
+              var origin = surfacePoints[originIndex];
+              var candidateIndices = nearbyIndices(origin, 4.55);
               var neighbors = [];
-              for (var sj = 0; sj < surfacePoints.length; sj++) {
-                if (sj === si2) continue;
-                var candidate = surfacePoints[sj];
-                var dxs = candidate.x - origin.x;
-                var dys = candidate.y - origin.y;
-                var horizontal = Math.sqrt(dxs * dxs + dys * dys);
-                if (horizontal < 0.22 || horizontal > maxSurfaceEdge ||
-                    Math.abs(candidate.z - origin.z) > 0.85) continue;
-                neighbors.push({index: sj, point: candidate, distance: horizontal});
+              for (var ci2 = 0; ci2 < candidateIndices.length; ci2++) {
+                var neighborIndex = candidateIndices[ci2];
+                if (neighborIndex === originIndex ||
+                    surfacePoints[neighborIndex].airborne) continue;
+                var neighborPoint = surfacePoints[neighborIndex];
+                var ndx = neighborPoint.x - origin.x;
+                var ndy = neighborPoint.y - origin.y;
+                var ndz = neighborPoint.z - origin.z;
+                var horizontal = Math.sqrt(ndx * ndx + ndy * ndy);
+                if (horizontal < 0.20 || horizontal > 4.55 ||
+                    Math.abs(ndz) > 0.76) continue;
+                neighbors.push({
+                  index: neighborIndex,
+                  point: neighborPoint,
+                  distance: horizontal,
+                  angle: Math.atan2(ndy, ndx)
+                });
               }
               neighbors.sort(function (a, b) { return a.distance - b.distance; });
-              neighbors = neighbors.slice(0, 5);
-              for (var sj2 = 0; sj2 < neighbors.length && cachedSurfaceFaces.length < 260; sj2++) {
-                for (var sk = sj2 + 1; sk < neighbors.length && cachedSurfaceFaces.length < 260; sk++) {
-                  var second = neighbors[sj2];
-                  var third = neighbors[sk];
-                  var edge = Math.sqrt(
-                    Math.pow(second.point.x - third.point.x, 2) +
-                    Math.pow(second.point.y - third.point.y, 2));
-                  if (edge > maxSurfaceEdge ||
-                      Math.abs(second.point.z - third.point.z) > 0.85) continue;
-                  var twiceArea = Math.abs(
-                    (second.point.x - origin.x) * (third.point.y - origin.y) -
-                    (second.point.y - origin.y) * (third.point.x - origin.x));
-                  if (twiceArea < 0.12 || twiceArea > 4.8) continue;
-                  var faceKey = [si2, second.index, third.index].sort(function (a, b) { return a - b; }).join(":");
-                  if (usedFaces[faceKey]) continue;
-                  usedFaces[faceKey] = true;
-                  cachedSurfaceFaces.push({
-                    points: [origin, second.point, third.point],
-                    confidence: Math.min(origin.confidence, second.point.confidence, third.point.confidence)
-                  });
+              neighborLists[originIndex] = neighbors;
+            }
+
+            var usedEdges = Object.create(null);
+            function addSurfaceEdge(aIndex, bIndex) {
+              var low = Math.min(aIndex, bIndex);
+              var high = Math.max(aIndex, bIndex);
+              var edgeKey = low + ":" + high;
+              if (usedEdges[edgeKey]) return;
+              usedEdges[edgeKey] = true;
+              cachedSurfaceEdges.push({
+                points: [surfacePoints[low], surfacePoints[high]]
+              });
+            }
+
+            for (var ei = 0; ei < groundIndices.length; ei++) {
+              var edgeOriginIndex = groundIndices[ei];
+              var edgeOrigin = surfacePoints[edgeOriginIndex];
+              var edgeNeighbors = neighborLists[edgeOriginIndex];
+              var longLinks = 0;
+              for (var en = 0; en < edgeNeighbors.length; en++) {
+                var edgeNeighbor = edgeNeighbors[en];
+                if (edgeNeighbor.distance <= 3.15) {
+                  addSurfaceEdge(edgeOriginIndex, edgeNeighbor.index);
+                } else if (edgeNeighbor.distance <= 4.55 &&
+                    edgeNeighbor.point.confidence >= 0.42 &&
+                    edgeOrigin.confidence >= 0.42 &&
+                    edgeNeighbor.point.support >= 2 && edgeOrigin.support >= 2 &&
+                    longLinks < 3) {
+                  addSurfaceEdge(edgeOriginIndex, edgeNeighbor.index);
+                  longLinks++;
                 }
               }
             }
+
+            // Local angular triangulation creates connected surface patches.
+            // Neighbor triangles may span slightly larger distances only when
+            // all three returns are stable, nearly coplanar and well supported.
+            var usedFaces = Object.create(null);
+            for (var ti = 0; ti < groundIndices.length; ti++) {
+              var centerIndex = groundIndices[ti];
+              var center = surfacePoints[centerIndex];
+              var triangleNeighbors = neighborLists[centerIndex].slice(0, 9);
+              if (triangleNeighbors.length < 2) continue;
+              triangleNeighbors.sort(function (a, b) { return a.angle - b.angle; });
+
+              for (var tn = 0; tn < triangleNeighbors.length; tn++) {
+                var first = triangleNeighbors[tn];
+                var second = triangleNeighbors[(tn + 1) % triangleNeighbors.length];
+                var neighborEdgeX = first.point.x - second.point.x;
+                var neighborEdgeY = first.point.y - second.point.y;
+                var neighborEdge = Math.sqrt(
+                  neighborEdgeX * neighborEdgeX + neighborEdgeY * neighborEdgeY);
+                var heightDifference = Math.abs(first.point.z - second.point.z);
+                var angleGap = (second.angle - first.angle + Math.PI * 2) % (Math.PI * 2);
+                var twiceArea = Math.abs(
+                  (first.point.x - center.x) * (second.point.y - center.y) -
+                  (first.point.y - center.y) * (second.point.x - center.x));
+                var longestEdge = Math.max(first.distance, second.distance, neighborEdge);
+                var stableGapBridge = longestEdge <= 4.55 &&
+                  center.confidence >= 0.48 && first.point.confidence >= 0.48 &&
+                  second.point.confidence >= 0.48 &&
+                  center.support >= 2 && first.point.support >= 2 &&
+                  second.point.support >= 2;
+                if (angleGap > Math.PI * 0.92 || neighborEdge < 0.18 ||
+                    heightDifference > 0.68 || twiceArea < 0.055 ||
+                    twiceArea > 9.5 ||
+                    (longestEdge > 3.35 && !stableGapBridge)) continue;
+
+                var faceIndices = [centerIndex, first.index, second.index].sort(function (a, b) {
+                  return a - b;
+                });
+                var faceKey = faceIndices.join(":");
+                if (usedFaces[faceKey]) continue;
+                usedFaces[faceKey] = true;
+                cachedSurfaceFaces.push({
+                  points: [center, first.point, second.point],
+                  confidence: Math.min(center.confidence, first.point.confidence,
+                    second.point.confidence),
+                  gapBridge: longestEdge > 3.35
+                });
+              }
+            }
           }
+
           for (var sf = 0; sf < cachedSurfaceFaces.length; sf++) {
             var surfaceFace = cachedSurfaceFaces[sf];
-            addPolygon(surfaceFace.points, "#397786",
-              clamp(0.18 + surfaceFace.confidence * 0.28, 0.18, 0.42), "#75b9c2");
+            addPolygon(surfaceFace.points, surfaceFace.gapBridge ? "#315d70" : "#397786",
+              clamp(0.20 + surfaceFace.confidence * 0.30, 0.20, 0.48),
+              surfaceFace.gapBridge ? "#6c9eaa" : "#75b9c2");
+          }
+          for (var se = 0; se < cachedSurfaceEdges.length; se++) {
+            addLine(cachedSurfaceEdges[se].points, "#5ca3ad", 0.65, 0.30);
           }
 
           var poiItems = asArray(snapshotData.poi && snapshotData.poi.items);
