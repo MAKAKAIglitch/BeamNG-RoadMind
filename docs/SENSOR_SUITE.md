@@ -1,161 +1,147 @@
-# RoadMind virtual sensor suite
+# RoadMind sensor suite
 
-This document describes the current Drive-compatible sensor layout and the exact boundary between simulated measurements and native sensor APIs.
+## 1. Design rule
 
-## Layout overview
+The sensor configuration and roles defined in **ROADMAP_BRANCH_TESLA_MAP_STYLE.md** are the baseline for this branch. Keep the current layout unless a measured test demonstrates a specific need to change it.
 
-| System | Quantity | Placement | Coverage / range | Update |
-|---|---:|---|---|---:|
-| Forward LiDAR | 1 | Front roof / windshield area | 120° × 16°, 30–160 m configurable | 1–4 Hz |
-| Front long-range radar | 1 | Front center | 28° horizontal, 160 m | 1–2 Hz |
-| Corner radars | 4 | Front-left/right, rear-left/right | 58°, 50–65 m | 1–2 Hz |
-| Front ultrasonic | 4 | Front bumper | 5 m, 1/3-ray beam | 1–2 Hz |
-| Rear ultrasonic | 4 | Rear bumper | 5 m, 1/3-ray beam | 1–2 Hz |
-| Corner ultrasonic | 4 | Vehicle corners | 5 m, 1/3-ray beam | 1–2 Hz |
-| Cameras | 7 | Windshield, side mirrors, rear glass and rear corners | Individual frustums, 22–85 m visualization range | 2–5 Hz pose refresh |
-| IMU | 1 | Near vehicle center | Acceleration signals + estimated yaw rate | 2–5 Hz |
-| GNSS-like position | 1 | Roof | BeamNG world position and altitude | 2–5 Hz |
-| Wheel odometry | 1 data source | Vehicle electrics | Wheel speed and odometer | 2–5 Hz sample |
+Each sensor is responsible for a distinct type of evidence. Sensors may corroborate one another, but one sensor must not silently impersonate another.
 
-## Vehicle detection zones
+## 2. Baseline inventory
 
-RoadMind keeps one Game Engine vehicle registry made from oriented bounding boxes (OBBs). The registry refreshes independently of sensor raycasts, using a speed-adaptive 0.30/0.15/0.10 s cadence (about 3.3–10 Hz). It excludes the player vehicle, invalid entries and entries reported as deleted/destroyed; a vehicle without valid OBB data is not registered.
+| Sensor group | Count | Layout / coverage | Primary role |
+|---|---:|---|---|
+| LiDAR | 1 | Front-facing, 120° horizontal sector; up to 51 directions and 65 m configured maximum | Geometric surface sampling and front road/obstacle reconstruction |
+| RADAR | 5 | One front long-range unit and four corner units | Independent target/range and relative-motion channel |
+| Ultrasonic | 12 | Front, rear and corner/side near-field units | Very close surfaces, parking distance and near-field free space |
+| Cameras | 7 | Front narrow/wide, left/right sides, rear wide and rear corners | Surrounding coverage; semantic perception with a real image backend |
+| IMU-like | 1 | Ego motion source | Acceleration and angular-motion support |
+| GNSS-like | 1 | BeamNG world position | Local map positioning; not necessarily geographic coordinates |
+| Wheel odometry | 1 source | Vehicle wheel speed/odometer signals when exposed | Distance and ego-motion support |
 
-The latest calibrated sensor mounts define independent detection volumes. Their world-space transforms refresh separately from raycasting at 0.15/0.10/0.075 s (about 6.7–13.3 Hz) as speed rises:
+The LiDAR remains forward-only. Do not turn it into a 360-degree scanner. Combined camera coverage is intended to surround the vehicle; it does not imply that the regular Drive backend receives camera pixels.
 
-- LiDAR uses its 120° horizontal and 16° vertical coverage plus configured range.
-- Each radar uses its own horizontal/vertical coverage and range.
-- Each ultrasonic unit uses its close-range coverage and configured minimum/maximum range.
-- Each of the seven calibrated cameras contributes an independent front, side, rear or rear-corner frustum. Camera detection is controlled separately from the optional 3D frustum overlay and does not require LiDAR.
+## 3. Sensor responsibilities
 
-A target's complete OBB is projected onto the sensor's forward/right/up axes. Broad-phase range filtering happens before the detailed bounds test. Multiple sensors observing the same vehicle produce one candidate record with a list of sensor zones.
+### 3.1 Forward LiDAR
 
-Up to eight occlusion raycasts per detection cycle are allowed (up to 80 queries/s at a 10 Hz traffic cadence), shared across all targets and active cameras. A rotating candidate cursor and per-target camera cursor prevent the same nearest cars or first camera from monopolizing the budget. When a target intersects a camera frustum, only camera zones are used for that vehicle observation; LiDAR/radar/ultrasonic remain separate obstacle sensors. Recent visibility is cached briefly while the target stays close to its checked position and the source camera remains active. Candidates are classified as **visible**, **occluded** or **unverified**; confirmed-visible targets feed the session-scoped tracker.
+**Purpose:** geometric measurement of surfaces in the forward sector: road surface where sampled, boundaries, barriers, walls and obstacle surfaces.
 
-Camera detection uses the BeamNG vehicle registry only as a candidate broad phase. The complete target OBB must intersect a calibrated camera frustum, then a Game Engine scene raycast must confirm an unobstructed line of sight. Front, side, rear-wide and rear-corner cameras all participate. If a target is inside one or more camera frustums, the vehicle observation is camera-only and cannot be attributed to LiDAR/radar/ultrasonic; overlapping camera views are merged into one tracked vehicle. This works with LiDAR disabled. In regular BeamNG.drive it is a simulator-assisted camera-visibility model based on OBBs and scene geometry, not RGB image recognition. The same scene-occlusion test prevents a target from being reported as visible through a wall or another vehicle. Camera-source handoff, dense traffic and occlusion still require live-game validation.
-The in-world detected-vehicle overlay is stricter than the internal tracker: camera candidates are drawn only with a fresh `visible` result, and a coasting track is hidden unless a matching camera candidate is still raycast-confirmed. A ray is accepted as visible only when its first identified scene hit is the candidate vehicle itself; a different hit is occlusion, and an ambiguous hit is unverified (not drawn). Camera visibility cache age is capped at 0.36 s to match the 0.10–0.30 s detection cadence.
+Rules:
+- preserve the single front-facing unit and its forward sector;
+- use ray hits as geometric returns, not semantic classes;
+- attach the originating sensor, ray index, timestamp and hit-object identity when available;
+- keep dynamic-vehicle returns associated with the relevant dynamic track rather than permanently inserting them into static geometry;
+- do not assume rays pass through vehicles or other objects;
+- validate self-hit rejection, road/ground filtering, sensor height, pitch and vehicle-specific mounting in game.
 
-## Vehicle tracks and motion estimates
+The Drive implementation uses Game Engine scene raycasts. It is a geometric proxy, not a physical laser propagation/intensity/reflectivity model. The implementation has configurable density and cadence; actual settings and caps must be read from the current runtime configuration rather than assumed from this document.
 
-The GE vehicle registry provides simulator-assisted OBB observations. When a candidate is inside one or more current sensor coverage zones and scene-raycast visibility is confirmed, RoadMind creates or updates a session-scoped track ID such as `RM-000001`. Repeated observations from several sensor zones are merged into one candidate and then one track.
+### 3.2 Cameras
 
-Track fields include:
+The seven configured mounts provide front, side, rear and rear-corner coverage. Their intended system role is the primary semantic channel for visible vehicles, signs, traffic signals, road markings, lane boundaries and visible infrastructure.
 
-- Latest OBB-center position, dimensions and vehicle orientation.
-- Sensor-zone sources that geometrically cover the target, plus a separate visibility status from the bounded occlusion checks.
-- Last-observed simulation timestamp, data age, missed-scan count, confidence and status (`confirmed`, `coasting` or `stale`).
-- Estimated velocity from timestamped position differences, plus estimated relative speed.
-- Simulator-provided velocity stored separately from RoadMind's timestamp-derived estimate.
-- A short predicted display position kept separate from the last observed position.
+Backend distinction is mandatory:
 
-The tracker uses a 0.75 s recent-visibility cache and retains a missed target for at most 1.5 s, six missed detection cycles, or two complete registry snapshots without that vehicle. An explicit vehicle-destroyed event removes its track immediately. The active store is limited to 128 tracks.
+- **Regular BeamNG.drive:** current frustums and simulator-assisted vehicle OBB visibility/occlusion checks describe geometric coverage. They do not produce RGB frames and do not perform pixel-level semantic recognition.
+- **BeamNG.tech or another real image source:** a future camera adapter may provide RGB, depth and semantic annotations where the installed backend supports them. Only detections derived from actual frames may use the native-camera provenance.
 
-All vehicle positions, dimensions, orientation and the simulator-provided velocity originate from BeamNG's vehicle OBB/object data. The estimated velocities are derived values, not radar Doppler measurements. This is a simulator-assisted tracking prototype, not camera recognition or physical sensor-only tracking.
+A vehicle can be reported as currently camera-visible only when it is within a valid camera frustum and the visibility test indicates an unobstructed line of sight. Occluded candidates must not be rendered as currently visible. Coasting predictions must remain visually and semantically distinct from current sightings.
 
-## Unified world model
+Camera coverage is not a substitute for the front LiDAR or RADAR. It supplies a different type of evidence and should operate independently when the backend supports it.
 
-The GE extension exports `extensions.roadmind.getWorldModel()`. It returns schema version 2 as an independent snapshot in `beamng-world` coordinates and metres.
+### 3.3 RADAR
 
-The model has separate `observations.lidar`, `observations.radar`, `observations.ultrasonic` and `observations.vehicleRegistry` arrays. Raycast observations keep their sensor origin, ray direction, range, timestamp, data age and source. Vehicle OBB observations are explicitly labelled simulator-assisted and are included only after a candidate is confirmed visible.
+The baseline has five units: one front long-range sensor plus four corner sensors. Their intended job is to find and track dynamic targets, estimate range and relative movement, and provide information about closing traffic.
 
-The model exposes one tracked target per RoadMind track ID, plus spatially clustered non-vehicle raycast obstacles. A target's observed `position` is distinct from its short-horizon `predictedPosition`; simulator velocity and timestamp-derived estimated velocity are separate fields. Each source has a freshness/status record and the model reports invalid, stale, conflicting, low-confidence, truncated and dropped data counters.
+In regular Drive, the current implementation uses scene-raycast geometry and timestamped/simulator-assisted vehicle motion. This is not RF/FMCW simulation and does not produce physical Doppler measurements. A relative-speed estimate from tracked positions must be labelled as an estimate. Simulator velocity must remain a separate provenance field.
 
-Vehicle targets are merged by RoadMind track ID. Non-vehicle returns are grouped into 0.75 m spatial cells; these clusters are not semantic object identities. Confidence values are heuristics, not calibrated probabilities. The complete schema and consumer guidance are in [WORLD_MODEL.md](WORLD_MODEL.md).
+Ideal RADAR, if used in a future BeamNG.tech/debug adapter, is ground-truth/kinematic assistance and must never be displayed as a physical RADAR measurement.
 
-## Time-consistent LiDAR point display
+### 3.4 Ultrasonic parking sensors
 
-Raw scan hits are timestamped in the GE simulation clock and retain their ray index and hit object ID when the engine supplies one. The raw array remains the measurement source for downstream logic.
+The twelve sensors cover the front, rear and corner/side near-field zones. Their responsibility is short-range surface distance and nearby free-space checks for parking and low-speed manoeuvring.
 
-The renderer keeps a separate point state:
+They can return a nearby vehicle surface if it lies within the sensor's beam, but they are not a second vehicle classification/tracking system. Keep their processing focused on close surfaces, curbs, posts, walls and bumper-to-object distance.
 
-- A recent tracked vehicle hit is stored in that vehicle's local OBB coordinates and follows its timestamp-derived track motion between scans.
-- A target can be extrapolated for display by at most 0.5 s. This extrapolation is render-only, not a new sensor measurement.
-- Static scene points stay in world coordinates. Known hit object IDs help avoid mixing adjacent surfaces; unknown static hits are continued only when their world point stays within 0.35 m on the same ray.
-- A changed/missing return or lost object association causes the old marker to fade, not travel toward an unrelated new hit.
-- The live renderer caps the active ray layer at 99 points and the fading layer at 198 markers. When inertia is enabled, same-ray returns use a critically damped spring so changed measurements glide instead of snapping. A shared render-only spring layer also smooths the player's own OBB bounds and axes, sensor mounts, radar/ultrasonic returns, camera frustums, localization markers, traffic sensor origins, route lines and planner candidates. It builds a separate display snapshot; raw measurements, the fused World Model and planner/safety inputs are never filtered.
-- A separate session-only world-space point map deduplicates all LiDAR hits (including other-vehicle surfaces) into 0.35 m cells. Its user-configurable capacity is 500–10,000 points; old points are overwritten only after the selected capacity is reached. The accumulated map does not age out and remains drawn while the simulation is paused.
+The current Drive implementation uses short-range scene raycasts. It does not simulate acoustic propagation, transducer response or material-dependent echoes.
 
-The optional accumulated scan map stores every accepted world-space LiDAR hit, including vehicle surfaces. Moving vehicles therefore leave a spatial scan trail in the map; it is not a live deforming mesh. The render layer separately smooths moving returns and vehicle OBB outlines. The shared display filter also smooths every other moving overlay while keeping the accumulated LiDAR map fixed in world coordinates. This visual layer performs no raycasts and never feeds interpolated coordinates back into raw sensor measurements, World Model fusion or safety/planning.
+### 3.5 IMU and ego motion
 
-## LiDAR
+Use available vehicle motion signals to support orientation, motion compensation and scan alignment:
+- vehicle pose and orientation;
+- speed and velocity;
+- acceleration and yaw-rate estimate;
+- wheel speed and odometer distance;
+- simulation timestamps.
 
-The Vehicle Lua scheduler spreads LiDAR, radar, ultrasonic, pose and detection-zone work over successive graphics frames, with at most one due job executed per frame. Vehicle speed optionally changes scan intervals: 1.5× slower below 5 m/s and 0.75× faster at or above 25 m/s.
+Regular Drive values derived from electrics or pose differences are virtual/simulator-derived signals, not calibrated hardware-grade IMU measurements. If a native Advanced IMU backend is added, preserve its source and timestamp independently.
 
-The forward LiDAR uses 9–33 horizontal samples and 1–3 vertical elevations (up to 99 ray directions; the High preset uses 51, while Economy uses 9). The first elevation is always horizontal and forward; the second adds a downward layer; the third adds an upward layer. Each ray is evaluated by the Game Engine scene-raycast API, which returns the closest scene hit or no return. Valid hits are rendered as a beam from the front sensor origin and a point at the hit.
+### 3.6 GNSS-like position and odometry
 
-The scanner is intentionally forward-facing, not a 360° roof scanner.
+Use the vehicle's position in the BeamNG world/map coordinate frame to anchor the local model. The world frame is not a geodetic reference. Do not invent latitude/longitude for a level without a verified geographic transform.
 
-## Radar
+Wheel-speed and odometer electrics support ego-motion estimation. They do not supply road geometry or discover map POIs.
 
-Five radar units approximate a modern front-and-corner layout:
+## 4. Vehicle-specific mounting and calibration
 
-- Front long-range unit for forward traffic and obstacles.
-- Front-left and front-right corner units.
-- Rear-left and rear-right corner units.
+Every configured sensor mount must be defined in vehicle-local coordinates and transformed using the active vehicle pose.
 
-Each radar samples a small horizontal ray fan. Returns contain range and world hit position. The raw radar return does not create an independent radar track or measure Doppler. When the scene raycast exposes a vehicle object ID, the world model can associate that hit with the separate simulator-assisted RoadMind vehicle track. Relative speed is estimated from timestamped target positions and simulator player velocity, not from radar signal processing.
+A vehicle/configuration profile should record:
+- supported vehicle/configuration key;
+- sensor inventory and whether each sensor is fitted/enabled;
+- mount position and yaw/pitch/roll;
+- horizontal/vertical field of view;
+- usable minimum/maximum range;
+- update frequency and measurement resolution;
+- role and coverage zone;
+- calibration source and confidence;
+- known blind spots and self-occlusion.
 
-This is a kinematic raycast proxy. It does not simulate RF propagation, frequency-modulated chirps, antenna arrays, RCS, multipath or Doppler processing.
+Prefer verified vehicle-specific installation points. A shared body-class fallback may be used when exact data is unavailable, but it must be labelled as estimated. Do not imply that every vehicle factory-fits every sensor. Provide explicit override/calibration support for modified vehicles.
 
-## Ultrasonic
+On vehicle/configuration change, discard old transforms, pending frames, tracks tied to the old vehicle and cached geometry. Recompute the active sensor layout once, then update world transforms at the due sensor/pose cadence rather than repeatedly measuring the body every ray or frame.
 
-Twelve short-range units cover the front, rear and corners. Each sensor uses three Game Engine scene-raycasts around its center direction and returns the nearest hit up to 5 m. This creates a compact cone approximation suitable for visual parking/close-obstacle feedback.
+Consider self-occlusion from the body, glass, bumper covers, mirrors, roof attachments and trailers. A nominal frustum/range is not proof of effective visibility.
 
-The model does not simulate acoustic wave propagation, surface absorption or material-dependent sensitivity.
+## 5. Observation and visibility rules
 
-## Cameras
+- Every sensor frame carries a simulation timestamp and source identity.
+- Sensor-local coordinates are transformed through the vehicle frame into the common world/map frame.
+- A delayed frame from a previous player vehicle must be rejected.
+- A current detection requires range/FOV validity and any applicable occlusion test.
+- A coasting track is not a fresh sighting.
+- If the object leaves the sensor coverage or becomes occluded, its visibility state changes; it must not remain marked as currently visible.
+- Data from simulator object registries must remain marked simulator-assisted even when a camera zone or sensor zone is used as a geometric filter.
+- No sensor or source may create a semantic object class without evidence appropriate to that class.
 
-Seven camera mounts show the intended view coverage:
+## 6. Backend compatibility
 
-1. Front narrow
-2. Front wide
-3. Left side
-4. Right side
-5. Rear wide
-6. Rear left
-7. Rear right
+### Regular BeamNG.drive
 
-Each mount has its own calibrated frustum using its vehicle-local position, orientation, horizontal FOV, vertical FOV and coverage distance. These same frustums are used for camera-based vehicle candidate filtering even when the debug frustum overlay is hidden.
+Current baseline:
+- scene-raycast proxies for LiDAR, RADAR and ultrasonic;
+- geometric camera frustums plus simulator-assisted target candidates/occlusion checks;
+- vehicle state and electrics for ego-motion signals;
+- vehicle OBB registry for candidate vehicle geometry;
+- NavGraph and available level metadata for road context.
 
-In regular BeamNG.drive, RoadMind does not read RGB frames or perform pixel-level image recognition. Vehicle candidates come from the game's OBB registry, are filtered through these camera frustums, and then pass a bounded scene-raycast line-of-sight check. Native rendered camera/depth/semantic sensor access belongs to BeamNG.tech.
+These are useful deterministic inputs, but they are not equivalent to the native physical-style sensors in BeamNG.tech.
 
-## Localization and motion
+### BeamNG.tech
 
-### IMU-like motion data
+A separate adapter may use native Camera, LiDAR, RADAR, Ideal RADAR, Ultrasonic, GPS, IMU/Advanced IMU and Roads Sensor APIs when supported by the installed version. Verify the exact API and data transfer path before implementation. Do not assume Tech-only shared-memory or sensor interfaces exist in ordinary Drive.
 
-- Acceleration: BeamNG electrics `accXSmooth`, `accYSmooth`, `accZSmooth`.
-- Yaw rate: estimated from the change in vehicle forward direction over the sample interval.
-- Mount: near the vehicle center.
+All backend adapters must publish into the same versioned observation interface while retaining backend and provenance metadata.
 
-The values are suitable for prototyping and visualization; they are not a calibrated six-axis IMU model with bias, noise, temperature drift or sensor fusion.
+## 7. Validation checklist
 
-### GNSS-like position
-
-- Position: `obj:getPosition()` in BeamNG world coordinates.
-- Altitude: world Z coordinate.
-- Mount: virtual roof antenna point.
-
-There is no latitude/longitude conversion because the mod has no geodetic reference for the current map.
-
-### Wheel odometry
-
-Uses BeamNG vehicle electrics where available:
-
-- `wheelspeed` — wheel-measured vehicle speed in m/s.
-- `odometer` — vehicle odometer in metres.
-- `airspeed` — vehicle speed relative to the world.
-
-These are simulator vehicle signals, not a per-wheel encoder model.
-
-## Visualization legend
-
-- Cyan/blue: forward LiDAR and sensor origin.
-- Green/yellow: radar units and returns.
-- Turquoise/yellow: ultrasonic units and close returns.
-- Blue: camera frustums.
-- Magenta: IMU mount.
-- Green: GNSS-like antenna position.
-
-## BeamNG.tech native upgrade path
-
-When a BeamNG.tech installation is available, the sensor adapter can be replaced or extended to create native camera, LiDAR, RADAR, ultrasonic, GPS and IMU sensors through `extensions.tech_sensors`. The Drive-compatible raycast backend remains useful for basic gameplay installs.
+- [ ] Sensor mount origins and orientations checked on multiple vehicle classes.
+- [ ] Vehicle/configuration changes replace the sensor inventory and transforms correctly.
+- [ ] LiDAR remains forward-facing and does not become a 360-degree scanner.
+- [ ] Beam directions, range, self-hits and surface returns are checked in game.
+- [ ] Radar targets and relative-motion estimates are separated from simulator velocity.
+- [ ] Ultrasonic returns are restricted to the near field and do not become vehicle classification.
+- [ ] Camera visibility respects FOV, range, self-occlusion and external occlusion.
+- [ ] Camera visibility works independently of LiDAR where supported by the selected backend.
+- [ ] Stale frames and old-vehicle frames are rejected.
+- [ ] Sensor load and visualization cost are measured separately.

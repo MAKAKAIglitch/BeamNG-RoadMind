@@ -120,8 +120,8 @@ local ROUTE_MAX_LOST_UPDATES = 4
 local ROUTE_SAFETY_INTERVAL = 0.10
 local PLANNER_INTERVAL = 0.20
 local PLANNER_HORIZON_M = 25.0
-local PLANNER_SAMPLE_STEP_M = 2.5
-local PLANNER_MAX_SAMPLES = 13
+local PLANNER_SAMPLE_STEP_M = 1.25
+local PLANNER_MAX_SAMPLES = 21
 local PLANNER_MAX_CANDIDATES = 5
 local PLANNER_ROAD_HALF_WIDTH_M = 3.5
 local PLANNER_ROAD_EDGE_MARGIN_M = 0.35
@@ -130,11 +130,34 @@ local PLANNER_MAX_OBSTACLES = 128
 local PLANNER_MAX_TARGETS = 96
 local PLANNER_MAX_DATA_AGE = 1.0
 local PLANNER_CANDIDATE_OFFSETS = {-1.25, -0.625, 0, 0.625, 1.25}
+local SESSION_STATIC_MAP_MAX_CELLS = 3000
+local SESSION_STATIC_MAP_MAX_IDS = 8192
+local SESSION_STATIC_MAP_MAX_AGE = 3600
+local SESSION_STATIC_MAP_RADIUS_M = 125
+local SESSION_STATIC_MAP_MAX_OUTPUT = 700
 
 local state = {
   activeVehicleId = nil,
   activeVehicle = nil,
   visualizationEnabled = false,
+  mapModeEnabled = false,
+  mapPlanningEnabled = false,
+  mapStartedSensors = false,
+  sessionStaticMap = {},
+  sessionStaticObservationIds = {},
+  sessionStaticObservationOrder = {},
+  sessionStaticMapCount = 0,
+  levelMetadataLoaded = false,
+  levelMetadataFile = nil,
+  levelDirectory = nil,
+  levelMetadataName = nil,
+  navGraphCache = nil,
+  navGraphGeneration = 0,
+  levelRoadRules = {rightHandDrive = false, turnOnRed = false},
+  levelPOICache = {},
+  levelPOIStatus = "unavailable",
+  levelPOISource = "",
+  levelSignalCache = {status = "unavailable", source = "", items = {}, timestamp = -math.huge},
   settings = nil,
   latestData = nil,
   frameAge = math.huge,
@@ -2604,6 +2627,54 @@ function M.setVisualizationEnabled(enabled)
   return settingsResult()
 end
 
+
+function M.setMapEnabled(enabled)
+  if not state.settings then state._roadmindHelpers.loadSettings() end
+  local wanted = enabled == true
+
+  if wanted then
+    if state.mapModeEnabled then
+      return {ok = true, enabled = true, scanning = state.visualizationEnabled}
+    end
+
+    local startedSensors = not state.visualizationEnabled
+    if startedSensors then
+      local result = M.setVisualizationEnabled(true)
+      if not result or result.ok ~= true then
+        return result or {ok = false, error = "Could not start RoadMind sensors"}
+      end
+    end
+
+    state.mapStartedSensors = startedSensors
+    state.mapModeEnabled = true
+    state.mapPlanningEnabled = true
+    if state.localPlanner then state.localPlanner.timestamp = nil end
+    return {
+      ok = true,
+      enabled = true,
+      scanning = state.visualizationEnabled,
+      startedSensors = startedSensors
+    }
+  end
+
+  -- The HUD widget is a view, not the owner of sensor lifecycle.
+  local stopSensors = false
+  state.mapModeEnabled = false
+  state.mapPlanningEnabled = false
+  state.mapStartedSensors = false
+  if not state.routePilotEnabled then
+    state.localPlanner = {
+      status = "idle", reasonCode = "inactive", timestamp = nil,
+      candidates = {}, selectedIndex = nil
+    }
+  end
+  if stopSensors and state.visualizationEnabled then
+    return M.setVisualizationEnabled(false)
+  end
+  return {ok = true, enabled = false, scanning = state.visualizationEnabled}
+end
+
+
 function M.setRoutePilotEnabled(enabled)
   if not state.settings then state._roadmindHelpers.loadSettings() end
 
@@ -4336,9 +4407,140 @@ buildWorldModel = function()
     return a.dataAge < b.dataAge
   end)
 
+
+  -- Add only new, temporally consistent front-LiDAR observations. Vehicle
+  -- returns remain in the dynamic track layer and are never made static.
+  state.sessionStaticMap = state.sessionStaticMap or {}
+  state.sessionStaticObservationIds = state.sessionStaticObservationIds or {}
+  state.sessionStaticObservationOrder = state.sessionStaticObservationOrder or {}
+  local staticCells = state.sessionStaticMap
+  local processedIds = state.sessionStaticObservationIds
+  local processedOrder = state.sessionStaticObservationOrder
+
+  for i = 1, #(model.observations.lidar or {}) do
+    local observation = model.observations.lidar[i]
+    local observationId = observation and observation.observationId
+    if type(observationId) == "string" and not processedIds[observationId]
+        and observation.targetTrackId == nil and observation.targetVehicleId == nil
+        and observation.isPredicted ~= true then
+      processedIds[observationId] = true
+      processedOrder[#processedOrder + 1] = observationId
+      if #processedOrder > SESSION_STATIC_MAP_MAX_IDS then
+        local expiredId = table.remove(processedOrder, 1)
+        if expiredId then processedIds[expiredId] = nil end
+      end
+
+      local point = asVec3(observation.position)
+      if point then
+        local key = state._roadmindHelpers.worldObstacleCellKey(point)
+        local cell = staticCells[key]
+        local timestamp = tonumber(observation.timestamp) or now
+        if not cell then
+          staticCells[key] = {
+            hitCount = 1, conflictCount = 0,
+            sumX = point.x, sumY = point.y, sumZ = point.z,
+            position = vectorToPlainTable(point),
+            lastPosition = vectorToPlainTable(point),
+            firstObservedAt = timestamp,
+            lastObservedAt = timestamp
+          }
+        else
+          local lastPosition = asVec3(cell.lastPosition or cell.position)
+          local delta = lastPosition and (point - lastPosition):length() or math.huge
+          if delta <= WORLD_MODEL_OBSTACLE_CELL_SIZE * 0.72 then
+            cell.hitCount = (cell.hitCount or 0) + 1
+            cell.sumX = (cell.sumX or 0) + point.x
+            cell.sumY = (cell.sumY or 0) + point.y
+            cell.sumZ = (cell.sumZ or 0) + point.z
+            cell.position = {
+              x = cell.sumX / cell.hitCount,
+              y = cell.sumY / cell.hitCount,
+              z = cell.sumZ / cell.hitCount
+            }
+            cell.lastPosition = vectorToPlainTable(point)
+            cell.lastObservedAt = math.max(cell.lastObservedAt or timestamp, timestamp)
+          elseif now - (cell.lastObservedAt or 0) > 1.25 then
+            staticCells[key] = {
+              hitCount = 1,
+              conflictCount = (cell.conflictCount or 0) + 1,
+              sumX = point.x, sumY = point.y, sumZ = point.z,
+              position = vectorToPlainTable(point),
+              lastPosition = vectorToPlainTable(point),
+              firstObservedAt = timestamp,
+              lastObservedAt = timestamp
+            }
+          else
+            cell.conflictCount = (cell.conflictCount or 0) + 1
+          end
+        end
+      end
+    end
+  end
+
+  local egoPosition = asVec3(safeCall(state.activeVehicle, "getPosition"))
+  local staticCellCount = 0
+  for key, cell in pairs(staticCells) do
+    local cellPosition = asVec3(cell.position)
+    local age = math.max(0, now - (tonumber(cell.lastObservedAt) or now))
+    local distance = egoPosition and cellPosition and (cellPosition - egoPosition):length() or 0
+    if age > SESSION_STATIC_MAP_MAX_AGE
+        or (egoPosition and distance > SESSION_STATIC_MAP_RADIUS_M) then
+      staticCells[key] = nil
+    else
+      staticCellCount = staticCellCount + 1
+    end
+  end
+
+  while staticCellCount > SESSION_STATIC_MAP_MAX_CELLS do
+    local oldestKey, oldestTimestamp = nil, math.huge
+    for key, cell in pairs(staticCells) do
+      local timestamp = tonumber(cell.lastObservedAt) or -math.huge
+      if timestamp < oldestTimestamp then
+        oldestKey, oldestTimestamp = key, timestamp
+      end
+    end
+    if not oldestKey then break end
+    staticCells[oldestKey] = nil
+    staticCellCount = staticCellCount - 1
+  end
+  state.sessionStaticMapCount = staticCellCount
+
+  model.staticGeometry = {}
+  for key, cell in pairs(staticCells) do
+    local point = asVec3(cell.position)
+    local hits = tonumber(cell.hitCount) or 0
+    if point and hits >= 2 then
+      local distance = egoPosition and (point - egoPosition):length() or math.huge
+      if distance <= 105 then
+        model.staticGeometry[#model.staticGeometry + 1] = {
+          geometryId = key,
+          position = vectorToPlainTable(point),
+          classification = "stable-static-candidate",
+          sourceKind = "session-map-temporal-lidar",
+          sourceSensor = "lidar",
+          firstObservedAt = cell.firstObservedAt,
+          lastObservedAt = cell.lastObservedAt,
+          dataAge = round2(math.max(0, now - (cell.lastObservedAt or now))),
+          hitCount = hits,
+          conflictCount = cell.conflictCount or 0,
+          confidence = math.min(0.92, 0.45 + math.min(hits, 8) * 0.055)
+        }
+      end
+    end
+  end
+  table.sort(model.staticGeometry, function(a, b)
+    local da = egoPosition and (asVec3(a.position) - egoPosition):length() or math.huge
+    local db = egoPosition and (asVec3(b.position) - egoPosition):length() or math.huge
+    return da < db
+  end)
+  while #model.staticGeometry > SESSION_STATIC_MAP_MAX_OUTPUT do
+    table.remove(model.staticGeometry)
+  end
+
   model.summary = {
     targetCount = #model.targets,
     obstacleCount = #model.obstacles,
+    staticGeometryCount = #model.staticGeometry,
     observationCount = model.observationCount,
     staleSourceCount = model.quality.staleSourceCount
   }
@@ -4406,7 +4608,330 @@ state._roadmindHelpers.snapshotVehicleBounds = function(vehicle, vehicleId)
 end
 
 
+
+local function roadMindReadLevelJson(filePath)
+  if type(jsonReadFile) ~= "function" or type(filePath) ~= "string" then return nil end
+  local ok, result = pcall(jsonReadFile, filePath)
+  if ok and type(result) == "table" then return result end
+  return nil
+end
+
+local function roadMindLevelContext()
+  if type(getMissionFilename) ~= "function" then return nil end
+  local ok, missionFile = pcall(getMissionFilename)
+  if not ok or type(missionFile) ~= "string" or missionFile == "" then return nil end
+  local levelDirectory, baseName = string.match(missionFile, "^(.*[/\\])([^/\\]+)$")
+  if not levelDirectory or not baseName then return nil end
+  local levelName = string.match(levelDirectory, "levels[/\\]([^/\\]+)[/\\]$")
+  if not levelName then levelName = string.gsub(baseName, "%.[^%.]+$", "") end
+  return missionFile, levelDirectory, levelName
+end
+
+local function roadMindPoint(value)
+  if type(value) == "table" then
+    local x = tonumber(safeField(value, "x") or safeField(value, 1))
+    local y = tonumber(safeField(value, "y") or safeField(value, 2))
+    local z = tonumber(safeField(value, "z") or safeField(value, 3))
+    if x and y and z and x == x and y == y and z == z then
+      return {x = x, y = y, z = z}
+    end
+  end
+  local point = asVec3(value)
+  return point and vectorToPlainTable(point) or nil
+end
+
+local function roadMindPoiText(item)
+  local values = {}
+  local function append(value)
+    if type(value) == "string" or type(value) == "number" then
+      values[#values + 1] = tostring(value)
+    elseif type(value) == "table" then
+      for key, entry in pairs(value) do
+        if type(entry) == "string" or type(entry) == "number" then
+          values[#values + 1] = tostring(entry)
+        elseif type(key) == "string" and entry == true then
+          values[#values + 1] = key
+        end
+      end
+    end
+  end
+  if type(item) == "table" then
+    append(safeField(item, "name"))
+    append(safeField(item, "title"))
+    append(safeField(item, "type"))
+    append(safeField(item, "category"))
+    append(safeField(item, "desc"))
+    append(safeField(item, "description"))
+    append(safeField(item, "tags"))
+    append(safeField(item, "customFields"))
+  end
+  return string.lower(table.concat(values, " "))
+end
+
+local function roadMindPoiKind(item, fallback)
+  local text = roadMindPoiText(item)
+  if string.find(text, "charg", 1, true) or string.find(text, "electric", 1, true)
+      or string.find(text, "ev_", 1, true) then return "charging" end
+  if string.find(text, "fuel", 1, true) or string.find(text, "gas", 1, true)
+      or string.find(text, "petrol", 1, true) then return "fuel" end
+  if string.find(text, "parking", 1, true) or fallback == "parking" then return "parking" end
+  if string.find(text, "garage", 1, true) or string.find(text, "repair", 1, true)
+      or string.find(text, "service", 1, true) then return "service" end
+  return fallback or "location"
+end
+
+state._roadmindHelpers.loadLevelMetadata = function(force)
+  local missionFile, levelDirectory, levelName = roadMindLevelContext()
+  if not missionFile then
+    state.levelMetadataLoaded = false
+    state.levelPOIStatus = "unavailable"
+    state.levelPOISource = "The active level info.json path is unavailable"
+    return false
+  end
+  if force ~= true and state.levelMetadataLoaded
+      and state.levelMetadataFile == missionFile then
+    return true
+  end
+
+  state.levelMetadataFile = missionFile
+  state.levelDirectory = levelDirectory
+  state.levelMetadataName = levelName
+  state.levelRoadRules = {rightHandDrive = false, turnOnRed = false}
+  state.levelPOICache = {}
+  state.levelPOIStatus = "unavailable"
+  state.levelPOISource = "Level .sites.json and BeamNGPointOfInterest data"
+
+  local levelInfo = roadMindReadLevelJson(missionFile)
+  if type(levelInfo) == "table" and type(levelInfo.roadRules) == "table" then
+    state.levelRoadRules.rightHandDrive = levelInfo.roadRules.rightHandDrive == true
+    state.levelRoadRules.turnOnRed = levelInfo.roadRules.turnOnRed == true
+  end
+
+  local poiById = {}
+  local loadedSitesFiles = 0
+  local function addPoi(item, fallbackKind, source, fallbackName)
+    if type(item) ~= "table" or #state.levelPOICache >= 512 then return end
+    local position = roadMindPoint(safeField(item, "pos") or safeField(item, "position"))
+    if not position then return end
+    local name = safeField(item, "name") or safeField(item, "title")
+      or safeField(item, "id") or fallbackName or fallbackKind or "Location"
+    name = tostring(name)
+    local kind = roadMindPoiKind(item, fallbackKind)
+    local id = string.lower(kind .. ":" .. name)
+    if poiById[id] then return end
+    poiById[id] = true
+    local tags = safeField(item, "tags")
+    state.levelPOICache[#state.levelPOICache + 1] = {
+      id = id,
+      name = name,
+      kind = kind,
+      position = position,
+      radius = tonumber(safeField(item, "radius")),
+      extent = roadMindPoint(safeField(item, "scl") or safeField(item, "size")),
+      source = source,
+      tags = type(tags) == "table"
+        and state._roadmindHelpers.cloneWorldModelValue(tags) or nil
+    }
+  end
+
+  local sitesManager = rawget(_G, "gameplay_sites_sitesManager")
+  if not sitesManager and type(extensions) == "table" and type(extensions.load) == "function" then
+    pcall(extensions.load, "gameplay_sites_sitesManager")
+    sitesManager = rawget(_G, "gameplay_sites_sitesManager")
+  end
+  if type(sitesManager) == "table"
+      and type(sitesManager.getCurrentLevelSitesFiles) == "function"
+      and type(sitesManager.loadSites) == "function" then
+    local okFiles, sitesFiles = pcall(sitesManager.getCurrentLevelSitesFiles)
+    if okFiles and type(sitesFiles) == "table" then
+      for _, sitesFile in ipairs(sitesFiles) do
+        local fileName = tostring(sitesFile or "")
+        local lowerPath = string.lower(fileName)
+        if fileName ~= ""
+            and not string.find(lowerPath, "/missions/", 1, true)
+            and not string.find(lowerPath, "/quickrace/", 1, true)
+            and not string.find(lowerPath, "/scenarios/", 1, true) then
+          local okSites, sites = pcall(sitesManager.loadSites, fileName)
+          if okSites and type(sites) == "table" then
+            loadedSitesFiles = loadedSitesFiles + 1
+            local sortedSpots = sites.parkingSpots and sites.parkingSpots.sorted
+            if type(sortedSpots) == "table" then
+              for _, spot in ipairs(sortedSpots) do
+                local customFields = safeField(spot, "customFields")
+                addPoi({
+                  name = safeField(spot, "name"),
+                  pos = safeField(spot, "pos"),
+                  tags = customFields and safeField(customFields, "tags") or nil
+                }, "parking", fileName, nil)
+              end
+            end
+            for _, item in pairs(sites.locations or {}) do
+              addPoi(item, nil, fileName, nil)
+            end
+          end
+        end
+      end
+    end
+  else
+    -- Conservative fallback for levels exposing site files but not the manager API.
+    local sitesFiles = {"city.sites.json", "facilities.sites.json", "garages.sites.json"}
+    for i = 1, #sitesFiles do
+      local fileName = sitesFiles[i]
+      local sites = roadMindReadLevelJson(levelDirectory .. fileName)
+      if type(sites) == "table" then
+        loadedSitesFiles = loadedSitesFiles + 1
+        for _, item in pairs(sites.locations or {}) do
+          addPoi(item, nil, fileName, nil)
+        end
+        for _, item in pairs(sites.parkingSpots or {}) do
+          addPoi(item, "parking", fileName, nil)
+        end
+      end
+    end
+  end
+
+  -- Scene POIs include level-authored fuel, garage and service markers.
+  if type(scenetree) == "table" and type(scenetree.findClassObjects) == "function"
+      and type(scenetree.findObject) == "function" then
+    local okNames, objectNames = pcall(scenetree.findClassObjects, "BeamNGPointOfInterest")
+    if okNames and type(objectNames) == "table" then
+      for i = 1, math.min(#objectNames, 1024) do
+        local objectName = objectNames[i]
+        local okObject, object = pcall(scenetree.findObject, objectName)
+        if okObject and object then
+          local title = safeField(object, "title")
+          local desc = safeField(object, "desc")
+          local objectType = safeField(object, "type")
+          addPoi({
+            name = title or objectName,
+            title = title,
+            desc = desc,
+            type = objectType,
+            pos = safeCall(object, "getPosition")
+          }, nil, "BeamNGPointOfInterest", objectName)
+        end
+      end
+    end
+  end
+
+  if #state.levelPOICache > 0 then
+    state.levelPOIStatus = "available"
+  elseif loadedSitesFiles > 0 then
+    state.levelPOIStatus = "empty"
+  else
+    state.levelPOIStatus = "unavailable"
+    state.levelPOISource = "No readable sites files or BeamNGPointOfInterest objects"
+  end
+
+  state.levelMetadataLoaded = true
+  state.levelSignalCache = {
+    status = "unavailable",
+    source = "core_trafficSignals runtime state has not been sampled yet",
+    items = {},
+    timestamp = -math.huge
+  }
+  return true
+end
+
+local function roadMindSignalColor(stateName, stateData)
+  local values = {string.lower(tostring(stateName or ""))}
+  local lights = type(stateData) == "table" and stateData.lights or nil
+  if type(lights) == "table" then
+    for i = 1, #lights do values[#values + 1] = string.lower(tostring(lights[i])) end
+  end
+  local joined = table.concat(values, " ")
+  if string.find(joined, "green", 1, true) then return "green" end
+  if string.find(joined, "yellow", 1, true) or string.find(joined, "amber", 1, true) then return "amber" end
+  if string.find(joined, "red", 1, true) then return "red" end
+  if string.find(joined, "off", 1, true) or string.find(joined, "black", 1, true) then return "off" end
+  return "unknown"
+end
+
+state._roadmindHelpers.refreshTrafficSignals = function()
+  if not state.levelMetadataLoaded then state._roadmindHelpers.loadLevelMetadata(false) end
+  local api = rawget(_G, "core_trafficSignals")
+  if not api and type(extensions) == "table" and type(extensions.load) == "function" then
+    pcall(extensions.load, "core_trafficSignals")
+    api = rawget(_G, "core_trafficSignals")
+  end
+
+  local items = {}
+  local runtimeAvailable = false
+  if type(api) == "table" and type(api.getSignals) == "function" then
+    local okSignals, signals = pcall(api.getSignals)
+    if okSignals and type(signals) == "table" then
+      runtimeAvailable = true
+      for i = 1, math.min(#signals, 256) do
+        local instance = signals[i]
+        local position = roadMindPoint(safeField(instance, "pos"))
+        if position then
+          local stateName, stateData = nil, nil
+          local getState = safeField(instance, "getState")
+          if type(getState) == "function" then
+            local okState
+            okState, stateName, stateData = pcall(getState, instance)
+            if not okState then stateName, stateData = nil, nil end
+          end
+          local road = safeField(instance, "road")
+          local direction = roadMindPoint(safeField(instance, "dir") or safeField(instance, "direction"))
+          items[#items + 1] = {
+            id = tostring(safeField(instance, "id") or i),
+            name = tostring(safeField(instance, "name") or ("Signal " .. i)),
+            position = position,
+            direction = direction,
+            state = type(stateName) == "string" and stateName or "unknown",
+            color = roadMindSignalColor(stateName, stateData),
+            action = type(stateData) == "table" and stateData.action or nil,
+            controllerId = safeField(instance, "controllerId"),
+            sequenceId = safeField(instance, "sequenceId"),
+            road = road and {
+              n1 = safeField(road, "n1"),
+              n2 = safeField(road, "n2"),
+              useLane = safeField(instance, "useCurrentLane")
+            } or nil,
+            source = "core_trafficSignals.getState",
+            live = type(stateName) == "string" and stateName ~= ""
+          }
+        end
+      end
+    end
+  end
+
+  if not runtimeAvailable then
+    local signalData = state.levelDirectory
+      and roadMindReadLevelJson(state.levelDirectory .. "signals.json") or nil
+    for i, instance in ipairs(signalData and signalData.instances or {}) do
+      local position = roadMindPoint(instance.pos or instance.position)
+      if position then
+        items[#items + 1] = {
+          id = tostring(instance.id or i),
+          name = tostring(instance.name or ("Signal " .. i)),
+          position = position,
+          direction = roadMindPoint(instance.dir or instance.direction),
+          state = "unknown",
+          color = "unknown",
+          controllerId = instance.controllerId,
+          sequenceId = instance.sequenceId,
+          road = nil,
+          source = "signals.json metadata; live phase unavailable",
+          live = false
+        }
+      end
+    end
+  end
+
+  state.levelSignalCache = {
+    status = runtimeAvailable and "live" or (#items > 0 and "metadata-only" or "unavailable"),
+    source = runtimeAvailable and "core_trafficSignals" or "levels/<level>/signals.json",
+    items = items,
+    timestamp = state.simulationTime
+  }
+end
+
 state._roadmindHelpers.updateRoadUnderstanding = function()
+  if state._roadmindHelpers.loadLevelMetadata then
+    state._roadmindHelpers.loadLevelMetadata(false)
+  end
   if not state.activeVehicle or type(map) ~= "table"
       or type(map.findClosestRoad) ~= "function" or type(map.getMap) ~= "function" then
     state.roadState = {valid = false, quality = "unavailable", timestamp = state.simulationTime, corridor = {}}
@@ -4433,8 +4958,19 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     return
   end
 
-  local okMap, mapData = pcall(map.getMap)
-  local nodes = okMap and type(mapData) == "table" and mapData.nodes or nil
+  local levelKey = tostring(state.levelMetadataName or state.levelDirectory or "unknown-level")
+  local navCache = state.navGraphCache
+  if not navCache or navCache.levelKey ~= levelKey or type(navCache.nodes) ~= "table" then
+    local okMap, mapData = pcall(map.getMap)
+    local loadedNodes = okMap and type(mapData) == "table" and mapData.nodes or nil
+    if type(loadedNodes) == "table" and next(loadedNodes) ~= nil then
+      state.navGraphGeneration = (state.navGraphGeneration or 0) + 1
+      state.navGraphCache = {levelKey = levelKey, nodes = loadedNodes,
+        generation = state.navGraphGeneration, timestamp = state.simulationTime}
+      navCache = state.navGraphCache
+    end
+  end
+  local nodes = navCache and navCache.nodes or nil
   local nodeA = type(nodes) == "table" and nodes[nodeAId] or nil
   local nodeB = type(nodes) == "table" and nodes[nodeBId] or nil
   local pointA = nodeA and asVec3(safeField(nodeA, "pos")) or nil
@@ -4481,6 +5017,125 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     {x = pointA.x, y = pointA.y, z = pointA.z, nodeId = tostring(nodeAId)},
     {x = pointB.x, y = pointB.y, z = pointB.z, nodeId = tostring(nodeBId)}
   }
+  local roadHalfWidth = PLANNER_ROAD_HALF_WIDTH_M
+  local widthSource = "conservative-navgraph-heuristic"
+  local laneModel = {
+    status = "unknown",
+    source = "The current NavGraph edge does not expose lane-direction metadata"
+  }
+  local function readRoadEdge(fromId, toId)
+    local fromNode = nodes[fromId]
+    local links = fromNode and safeField(fromNode, "links") or nil
+    local edge = type(links) == "table" and links[toId] or nil
+    if type(edge) ~= "table" then
+      local toNode = nodes[toId]
+      local reverseLinks = toNode and safeField(toNode, "links") or nil
+      edge = type(reverseLinks) == "table" and reverseLinks[fromId] or nil
+    end
+    return type(edge) == "table" and edge or nil
+  end
+  local rightHandDrive = state.levelRoadRules
+    and state.levelRoadRules.rightHandDrive == true or false
+
+  local function roadEdgeHalfWidth(fromNode, toNode)
+    local radiusA, radiusB = tonumber(safeField(fromNode, "radius")), tonumber(safeField(toNode, "radius"))
+    if radiusA and radiusB and radiusA >= 1 and radiusA <= 30 and radiusB >= 1 and radiusB <= 30 then
+      return (radiusA + radiusB) * 0.5, "navgraph-node-radius"
+    end
+    return PLANNER_ROAD_HALF_WIDTH_M, "conservative-navgraph-heuristic"
+  end
+
+  local function buildDirectedLaneModel(edge, fromId, toId, halfWidth)
+    local result = {
+      status = "unknown", directionStatus = "unknown", directionAllowed = nil,
+      forwardLaneOffsets = {}, laneBoundaryOffsets = {}, lanesForward = nil, lanesReverse = nil,
+      laneCount = nil, laneWidth = nil,
+      oneWay = type(edge) == "table" and safeField(edge, "oneWay") == true or false,
+      source = "NavGraph lane metadata unavailable"
+    }
+    if type(edge) ~= "table" then return result end
+    local incomingId = safeField(edge, "inNode")
+    local fromMatches = incomingId ~= nil and tostring(incomingId) == tostring(fromId)
+    local toMatches = incomingId ~= nil and tostring(incomingId) == tostring(toId)
+    result.incomingNode = incomingId ~= nil and tostring(incomingId) or nil
+    if incomingId ~= nil and not fromMatches and not toMatches then
+      result.status, result.directionStatus, result.directionAllowed =
+        "direction-restricted", "incoming-node-mismatch", false
+      return result
+    end
+    local laneString = safeField(edge, "lanes")
+    if type(laneString) ~= "string" or laneString == "" or incomingId == nil then
+      result.directionStatus = "direction-unknown"
+      result.source = "NavGraph connectivity only; lane direction unknown"
+      if result.oneWay and not fromMatches then
+        result.status, result.directionAllowed = "direction-restricted", false
+      end
+      return result
+    end
+    local _, reverseCount = string.gsub(laneString, "%-a", "")
+    local _, forwardCount = string.gsub(laneString, "%+a", "")
+    local forward = fromMatches and forwardCount or reverseCount
+    local reverse = fromMatches and reverseCount or forwardCount
+    result.lanesForward, result.lanesReverse = forward, reverse
+    result.laneCount = forward + reverse
+    result.directionStatus = "lane-metadata"
+    if forward <= 0 then
+      result.status, result.directionAllowed = "direction-restricted", false
+      return result
+    end
+    if result.laneCount <= 0 or halfWidth <= 0 then return result end
+    local laneWidth = (halfWidth * 2) / result.laneCount
+    local offsets, boundaries = {}, {}
+    if reverse == 0 then
+      for i = 0, forward - 1 do
+        offsets[#offsets + 1] = rightHandDrive and (-halfWidth + (i + 0.5) * laneWidth)
+          or (halfWidth - (i + 0.5) * laneWidth)
+      end
+      for i = 1, forward - 1 do
+        boundaries[#boundaries + 1] = rightHandDrive and (-halfWidth + i * laneWidth)
+          or (halfWidth - i * laneWidth)
+      end
+    else
+      local divider = rightHandDrive and (-halfWidth + reverse * laneWidth)
+        or (halfWidth - reverse * laneWidth)
+      for i = 0, forward - 1 do
+        offsets[#offsets + 1] = rightHandDrive and (divider + (i + 0.5) * laneWidth)
+          or (divider - (i + 0.5) * laneWidth)
+        boundaries[#boundaries + 1] = rightHandDrive and (divider + i * laneWidth)
+          or (divider - i * laneWidth)
+      end
+    end
+    result.status, result.directionAllowed = "metadata", true
+    result.source = "NavGraph processed DecalRoad/map.json lane data"
+    result.laneWidth = laneWidth
+    result.forwardLaneOffsets, result.laneBoundaryOffsets = offsets, boundaries
+    result.direction = fromMatches and "inNode-to-outNode" or "outNode-to-inNode"
+    result.rightHandDrive = rightHandDrive
+    result.drivability = tonumber(safeField(edge, "drivability"))
+    result.speedLimitMps = tonumber(safeField(edge, "speedLimit"))
+    result.roadType = safeField(edge, "type")
+    result.hiddenInNavi = safeField(edge, "hiddenInNavi") == true
+    return result
+  end
+
+  local function edgeAllowsTravel(edge, fromId, laneInfo)
+    if type(edge) ~= "table" or safeField(edge, "hiddenInNavi") == true then return false end
+    local drivability = tonumber(safeField(edge, "drivability"))
+    if drivability ~= nil and drivability <= 0 then return false end
+    if laneInfo and laneInfo.status == "direction-restricted" then return false end
+    if safeField(edge, "oneWay") == true then
+      local incomingId = safeField(edge, "inNode")
+      if incomingId == nil or tostring(incomingId) ~= tostring(fromId) then return false end
+    end
+    return true
+  end
+
+  local firstEdge = readRoadEdge(nodeAId, nodeBId)
+  roadHalfWidth, widthSource = roadEdgeHalfWidth(nodeA, nodeB)
+  laneModel = buildDirectedLaneModel(firstEdge, nodeAId, nodeBId, roadHalfWidth)
+  if not edgeAllowsTravel(firstEdge, nodeAId, laneModel) then
+    laneModel.status, laneModel.directionAllowed = "direction-restricted", false
+  end
   local visited = {[tostring(nodeAId)] = true, [tostring(nodeBId)] = true}
   local currentId = nodeBId
   local currentPosition = pointB
@@ -4488,7 +5143,7 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
 
   -- Extend a short centerline by following the most forward connected graph edge.
   -- This is NavGraph geometry, not a lane-boundary or free-space estimate.
-  for _ = 1, 4 do
+  for _ = 1, 16 do
     local currentNode = nodes[currentId]
     local links = currentNode and safeField(currentNode, "links") or nil
     if type(links) ~= "table" then break end
@@ -4523,6 +5178,234 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     currentPosition = bestPosition
   end
 
+
+  local laneGraph = {
+    schemaVersion = 1, status = "unavailable", source = "BeamNG NavGraph",
+    timestamp = state.simulationTime, cacheGeneration = navCache and navCache.generation or 0,
+    currentLaneId = nil, currentLaneStatus = "unknown",
+    segments = {}, junctions = {}, connections = {},
+    nodeCount = 0, segmentCount = 0, laneCount = 0, junctionCount = 0, connectionCount = 0
+  }
+  local queue, queuedEdges, visitedEdges = {}, {}, {}
+  local queueIndex = 1
+  local maxSegments, maxDepth, maxDistance, maxBranches = 96, 4, 125, 8
+  local function edgeKey(a,b) return tostring(a)..">"..tostring(b) end
+  local function enqueue(fromId,toId,depth,distance,current)
+    local key=edgeKey(fromId,toId)
+    if queuedEdges[key] or visitedEdges[key] then return end
+    local fromNode,toNode=nodes[fromId],nodes[toId]
+    if not fromNode or not toNode then return end
+    local p1,p2=asVec3(safeField(fromNode,"pos")),asVec3(safeField(toNode,"pos"))
+    if not p1 or not p2 then return end
+    if (p1-position):length()>maxDistance and (p2-position):length()>maxDistance then return end
+    local edge=readRoadEdge(fromId,toId)
+    local width=roadEdgeHalfWidth(fromNode,toNode)
+    local info=buildDirectedLaneModel(edge,fromId,toId,width)
+    if not edgeAllowsTravel(edge,fromId,info) then return end
+    queuedEdges[key]=true
+    queue[#queue+1]={from=fromId,to=toId,depth=depth,distance=distance,current=current==true}
+  end
+  enqueue(nodeAId,nodeBId,0,0,true)
+  enqueue(nodeBId,nodeAId,0,0,false)
+
+  while queueIndex<=#queue and #laneGraph.segments<maxSegments do
+    local item=queue[queueIndex]
+    queueIndex=queueIndex+1
+    local fromId,toId=item.from,item.to
+    local key=edgeKey(fromId,toId)
+    if not visitedEdges[key] then
+      visitedEdges[key]=true
+      local fromNode,toNode=nodes[fromId],nodes[toId]
+      local p1=fromNode and asVec3(safeField(fromNode,"pos")) or nil
+      local p2=toNode and asVec3(safeField(toNode,"pos")) or nil
+      local edge=readRoadEdge(fromId,toId)
+      if p1 and p2 and edge then
+        local delta=p2-p1
+        local flat=vec3(delta.x,delta.y,0)
+        local length=flat:length()
+        local halfWidth,widthSource=roadEdgeHalfWidth(fromNode,toNode)
+        local laneInfo=buildDirectedLaneModel(edge,fromId,toId,halfWidth)
+        local drivability=tonumber(safeField(edge,"drivability"))
+        if length>0.5 and (drivability==nil or drivability>0) and safeField(edge,"hiddenInNavi")~=true then
+          local tangent=flat/length
+          local normal=vec3(-tangent.y,tangent.x,0)
+          local lanes={}
+          if laneInfo.status=="metadata" then
+            for laneIndex=1,#(laneInfo.forwardLaneOffsets or {}) do
+              local offset=tonumber(laneInfo.forwardLaneOffsets[laneIndex])
+              if offset then
+                lanes[#lanes+1]={
+                  id=key..":lane:"..tostring(laneIndex),index=laneIndex,
+                  fromNode=tostring(fromId),toNode=tostring(toId),
+                  centerOffset=round2(offset),width=round2(laneInfo.laneWidth or 0),
+                  start=vectorToPlainTable(p1+normal*offset),
+                  finish=vectorToPlainTable(p2+normal*offset),direction="forward"
+                }
+                laneGraph.laneCount=laneGraph.laneCount+1
+              end
+            end
+          end
+          laneGraph.segments[#laneGraph.segments+1]={
+            id=key,from=tostring(fromId),to=tostring(toId),
+            start=vectorToPlainTable(p1),finish=vectorToPlainTable(p2),
+            length=round2(length),roadHalfWidth=round2(halfWidth),widthSource=widthSource,
+            laneModel=laneInfo,lanes=lanes,laneCount=#lanes,
+            directionStatus=laneInfo.directionStatus or "unknown",
+            oneWay=safeField(edge,"oneWay")==true,drivability=drivability,
+            speedLimitMps=tonumber(safeField(edge,"speedLimit")),
+            roadType=safeField(edge,"type"),depth=item.depth,current=item.current
+          }
+          local travelled=(item.distance or 0)+length
+          if item.depth<maxDepth and travelled<maxDistance then
+            local links=safeField(toNode,"links")
+            if type(links)=="table" then
+              local choices={}
+              for candidateId in pairs(links) do
+                if tostring(candidateId)~=tostring(fromId) then
+                  local candidateNode=nodes[candidateId]
+                  local candidatePosition=candidateNode and asVec3(safeField(candidateNode,"pos")) or nil
+                  if candidatePosition and (candidatePosition-position):length()<=maxDistance then
+                    local candidateEdge=readRoadEdge(toId,candidateId)
+                    if candidateEdge then
+                      local nextWidth=roadEdgeHalfWidth(toNode,candidateNode)
+                      local nextInfo=buildDirectedLaneModel(candidateEdge,toId,candidateId,nextWidth)
+                      local allowed=edgeAllowsTravel(candidateEdge,toId,nextInfo)
+                      local nextDrive=tonumber(safeField(candidateEdge,"drivability"))
+                      if allowed and (nextDrive==nil or nextDrive>0) and safeField(candidateEdge,"hiddenInNavi")~=true then
+                        local v=candidatePosition-p2
+                        local fv=vec3(v.x,v.y,0)
+                        if fv:length()>0.5 then
+                          local alignment=tangent:dot(fv:normalized())
+                          if alignment>-0.45 then choices[#choices+1]={id=candidateId,alignment=alignment} end
+                        end
+                      end
+                    end
+                  end
+                end
+              end
+              table.sort(choices,function(a,b)
+                if a.alignment==b.alignment then return tostring(a.id)<tostring(b.id) end
+                return a.alignment>b.alignment
+              end)
+              for i=1,math.min(maxBranches,#choices) do enqueue(toId,choices[i].id,item.depth+1,travelled,false) end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  laneGraph.segmentCount=#laneGraph.segments
+  local seenNodes,incomingByNode,outgoingByNode={},{},{}
+  local function addSegment(bucket,nodeId,segment)
+    local key=tostring(nodeId)
+    bucket[key]=bucket[key] or {}
+    bucket[key][#bucket[key]+1]=segment
+  end
+  for i=1,#laneGraph.segments do
+    local seg=laneGraph.segments[i]
+    seenNodes[seg.from],seenNodes[seg.to]=true,true
+    addSegment(outgoingByNode,seg.from,seg)
+    addSegment(incomingByNode,seg.to,seg)
+  end
+  for _ in pairs(seenNodes) do laneGraph.nodeCount=laneGraph.nodeCount+1 end
+
+  for nodeId,incoming in pairs(incomingByNode) do
+    local outgoing=outgoingByNode[nodeId] or {}
+    local connectionsAtNode=0
+    for ii=1,#incoming do
+      local inSeg=incoming[ii]
+      for il=1,#(inSeg.lanes or {}) do
+        local inLane=inSeg.lanes[il]
+        local is,ie=asVec3(inLane.start),asVec3(inLane.finish)
+        local inDir=is and ie and vec3(ie.x-is.x,ie.y-is.y,0) or nil
+        if inDir and inDir:length()>0.1 then
+          inDir=inDir:normalized()
+          for oi=1,#outgoing do
+            local outSeg=outgoing[oi]
+            if outSeg.id~=inSeg.id then
+              local best,bestD,bestAlign=nil,math.huge,-1
+              for ol=1,#(outSeg.lanes or {}) do
+                local lane=outSeg.lanes[ol]
+                local os,oe=asVec3(lane.start),asVec3(lane.finish)
+                local outDir=os and oe and vec3(oe.x-os.x,oe.y-os.y,0) or nil
+                if os and outDir and outDir:length()>0.1 then
+                  outDir=outDir:normalized()
+                  local align=inDir:dot(outDir)
+                  if align>-0.45 then
+                    local d=(asVec3(inLane.finish)-os):length()
+                    if d<bestD then best,bestD,bestAlign=lane,d,align end
+                  end
+                end
+              end
+              local maxJoin=math.max(5,math.min(11,(inSeg.roadHalfWidth+outSeg.roadHalfWidth)*0.82))
+              if best and bestD<=maxJoin and #laneGraph.connections<480 then
+                local os,oe=asVec3(best.start),asVec3(best.finish)
+                local od=vec3(oe.x-os.x,oe.y-os.y,0):normalized()
+                local cross=inDir.x*od.y-inDir.y*od.x
+                local turn="straight"
+                if bestAlign<0.92 then
+                  if cross>0.12 then turn="left" elseif cross< -0.12 then turn="right" else turn="curve" end
+                end
+                laneGraph.connections[#laneGraph.connections+1]={
+                  id=inLane.id.."=>"..best.id,fromLaneId=inLane.id,toLaneId=best.id,
+                  viaNode=tostring(nodeId),turnType=turn,endpointDistance=round2(bestD),
+                  headingAlignment=round2(bestAlign),status="geometric-candidate",
+                  legality="unverified",source="NavGraph connectivity and lane-centre geometry"
+                }
+                connectionsAtNode=connectionsAtNode+1
+              end
+            end
+          end
+        end
+      end
+    end
+    if #incoming>0 and #outgoing>1 then
+      local node=nodes[nodeId]
+      local p=node and asVec3(safeField(node,"pos")) or nil
+      laneGraph.junctions[#laneGraph.junctions+1]={
+        nodeId=nodeId,position=p and vectorToPlainTable(p) or nil,
+        incomingSegmentCount=#incoming,outgoingSegmentCount=#outgoing,
+        connectionCount=connectionsAtNode,status="topology-candidate",
+        source="NavGraph node connectivity"
+      }
+    end
+  end
+  laneGraph.junctionCount=#laneGraph.junctions
+  laneGraph.connectionCount=#laneGraph.connections
+  laneGraph.status=laneGraph.laneCount>0 and "lane-graph-available"
+    or (laneGraph.segmentCount>0 and "road-graph-only" or "unavailable")
+
+  local laneLocalization={status="unknown",laneId=nil,laneIndex=nil,lateralError=nil,confidence=0,
+    source="No verified forward lane metadata on current road edge"}
+  if laneModel.status=="metadata" and #(laneModel.forwardLaneOffsets or {})>0 then
+    local bestIndex,bestError=nil,math.huge
+    for i=1,#laneModel.forwardLaneOffsets do
+      local offset=tonumber(laneModel.forwardLaneOffsets[i])
+      if offset then
+        local d=math.abs(lateralOffset-offset)
+        if d<bestError then bestIndex,bestError=i,d end
+      end
+    end
+    if bestIndex then
+      local laneWidth=tonumber(laneModel.laneWidth) or 3.5
+      local confidence=math.max(0,math.min(1,1-bestError/math.max(0.5,laneWidth*0.75)))
+      laneLocalization={
+        status=(quality=="high" or quality=="medium") and bestError<=laneWidth*0.75 and "localized" or "uncertain",
+        laneId=edgeKey(nodeAId,nodeBId)..":lane:"..tostring(bestIndex),laneIndex=bestIndex,
+        centerOffset=tonumber(laneModel.forwardLaneOffsets[bestIndex]),
+        lateralError=round2(bestError),confidence=round2(confidence),
+        source="Vehicle pose projected onto directed NavGraph lane centre"
+      }
+      if laneLocalization.status=="localized" then
+        laneGraph.currentLaneId,laneGraph.currentLaneStatus=laneLocalization.laneId,"localized"
+      else laneGraph.currentLaneStatus="uncertain" end
+    end
+  end
+  if laneGraph.currentLaneStatus=="unknown" and laneLocalization.status=="uncertain" then
+    laneGraph.currentLaneStatus="uncertain"
+  end
+
   state.roadState = {
     valid = true,
     quality = quality,
@@ -4534,7 +5417,12 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     lateralOffset = lateralOffset,
     headingAlignment = alignment,
     roadDirection = {x = tangent.x, y = tangent.y, z = 0},
-    corridor = corridor
+    corridor = corridor,
+    roadHalfWidth = roadHalfWidth,
+    widthSource = widthSource,
+    laneModel = laneModel,
+    laneLocalization = laneLocalization,
+    laneGraph = laneGraph
   }
 end
 
@@ -4771,6 +5659,7 @@ state._roadmindHelpers.evaluatePlannerCandidate = function(candidate, footprint,
       - math.abs(candidate.targetOffset) * 1.5
       - maximumCurvature * 8.0
       - curvatureChange * 3.0
+      - (candidate.laneChangeCost or 0)
   end
 end
 
@@ -4779,8 +5668,8 @@ updateLocalTrajectoryPlanner = function()
   if previous.timestamp and state.simulationTime - previous.timestamp < PLANNER_INTERVAL then
     return previous
   end
-  if not state.routePilotEnabled then
-    return state._roadmindHelpers.setLocalPlannerState("idle", "inactive", "Route pilot is inactive", {}, nil)
+  if not state.routePilotEnabled and not state.mapPlanningEnabled then
+    return state._roadmindHelpers.setLocalPlannerState("idle", "inactive", "Map planning and route pilot are inactive", {}, nil)
   end
   local function waiting(code, reason)
     return state._roadmindHelpers.setLocalPlannerState("waiting", code, reason, {}, nil)
@@ -4811,6 +5700,12 @@ updateLocalTrajectoryPlanner = function()
       or (state.roadState.quality ~= "high" and state.roadState.quality ~= "medium")
       or now - (tonumber(state.roadState.timestamp) or -math.huge) > PLANNER_MAX_DATA_AGE then
     return waiting("road_unavailable", "Road localization is not reliable enough for trajectory planning")
+  end
+
+  local laneModel = type(state.roadState) == "table" and state.roadState.laneModel or nil
+  if type(laneModel) == "table" and laneModel.status == "direction-restricted" then
+    return state._roadmindHelpers.setLocalPlannerState("blocked", "direction_restricted",
+      "NavGraph does not define a forward lane on this directed road edge", {}, nil)
   end
 
   local footprint = state._roadmindHelpers.getPlannerVehicleFootprint()
@@ -4893,13 +5788,193 @@ updateLocalTrajectoryPlanner = function()
     end
   end
 
+  -- Prefer lane records from the connected local graph. Candidate lane changes
+  -- are limited to an immediately adjacent lane and only considered when the
+  -- current-lane localization is explicitly reliable.
+  local candidateOffsets = {}
+  local laneModel = state.roadState.laneModel or {}
+  local laneGraph = state.roadState.laneGraph or {}
+  local laneLocalization = state.roadState.laneLocalization or {}
+  local roadStartNode = tostring(state.roadState.segmentStartNode or "")
+  local roadEndNode = tostring(state.roadState.segmentEndNode or "")
+  local graphSegment = nil
+  for i = 1, #(laneGraph.segments or {}) do
+    local segment = laneGraph.segments[i]
+    if tostring(segment.from or "") == roadStartNode
+        and tostring(segment.to or "") == roadEndNode then
+      graphSegment = segment
+      break
+    end
+  end
+
+  -- Lane offsets are defined relative to the directed NavGraph edge. Convert
+  -- graph lane centre points into the route's local right-vector frame so curved
+  -- or slightly offset route corridors do not silently flip/shift lane choices.
+  local graphSegmentProgress = nil
+  if graphSegment then
+    local graphStart = asVec3(graphSegment.start)
+    local graphFinish = asVec3(graphSegment.finish)
+    if graphStart and graphFinish then
+      local graphDelta = vec3(graphFinish.x - graphStart.x, graphFinish.y - graphStart.y, 0)
+      local graphLengthSquared = graphDelta:dot(graphDelta)
+      if graphLengthSquared > 0.25 then
+        local toVehicle = vec3(
+          footprint.center.x - graphStart.x,
+          footprint.center.y - graphStart.y,
+          0
+        )
+        graphSegmentProgress = math.max(0, math.min(1,
+          toVehicle:dot(graphDelta) / graphLengthSquared))
+      end
+    end
+  end
+
+  local laneOffsetSign = 1
+  local graphForward = asVec3(state.roadState.roadDirection)
+  if graphForward then
+    local flatGraphForward = vec3(graphForward.x, graphForward.y, 0)
+    if flatGraphForward:length() > 0.1
+        and flatGraphForward:normalized():dot(routeForward) < 0 then
+      laneOffsetSign = -1
+    end
+  end
+
+  local laneRecords = {}
+  local function addLaneRecord(laneId, laneIndex, laneOffset, laneWidth, laneStartPoint, laneFinishPoint)
+    laneIndex = tonumber(laneIndex)
+    laneOffset = tonumber(laneOffset)
+    laneWidth = tonumber(laneWidth)
+    if laneIndex and laneOffset then
+      local routeOffset = laneOffset * laneOffsetSign
+      local laneStart = asVec3(laneStartPoint)
+      local laneFinish = asVec3(laneFinishPoint)
+      if laneStart and laneFinish and graphSegmentProgress ~= nil then
+        local lanePoint = laneStart + (laneFinish - laneStart) * graphSegmentProgress
+        routeOffset = (lanePoint - projection):dot(routeRight)
+      end
+      laneRecords[#laneRecords + 1] = {
+        id = laneId and tostring(laneId) or nil,
+        index = laneIndex,
+        offset = routeOffset,
+        width = laneWidth
+      }
+    end
+  end
+
+  if graphSegment and type(graphSegment.lanes) == "table" then
+    for i = 1, #graphSegment.lanes do
+      local lane = graphSegment.lanes[i]
+      if type(lane) == "table" then
+        addLaneRecord(lane.id, lane.index, lane.centerOffset, lane.width, lane.start, lane.finish)
+      end
+    end
+  end
+  if #laneRecords == 0 and laneModel.status == "metadata"
+      and type(laneModel.forwardLaneOffsets) == "table" then
+    for i = 1, #laneModel.forwardLaneOffsets do
+      addLaneRecord(
+        tostring(state.roadState.segmentStartNode or "") .. ">"
+          .. tostring(state.roadState.segmentEndNode or "") .. ":lane:" .. tostring(i),
+        i, laneModel.forwardLaneOffsets[i], laneModel.laneWidth
+      )
+    end
+  end
+
+  local currentLaneId = laneGraph.currentLaneId or laneLocalization.laneId
+  local currentLaneIndex = tonumber(laneLocalization.laneIndex)
+  local closestLane, closestLaneError = nil, math.huge
+  for i = 1, #laneRecords do
+    local lane = laneRecords[i]
+    local laneError = math.abs(lane.offset - currentOffset)
+    if lane.id and currentLaneId and lane.id == tostring(currentLaneId) then
+      currentLaneIndex = lane.index
+      closestLane, closestLaneError = lane, laneError
+      break
+    end
+    if laneError < closestLaneError then
+      closestLane, closestLaneError = lane, laneError
+    end
+  end
+
+  local lanePositionVerified = laneGraph.currentLaneStatus == "localized"
+    or laneLocalization.status == "localized"
+  if currentLaneIndex == nil and closestLane then
+    local nearestWidth = closestLane.width or tonumber(laneModel.laneWidth) or 3.5
+    if closestLaneError <= math.max(0.75, nearestWidth * 0.75) then
+      currentLaneIndex = closestLane.index
+      currentLaneId = closestLane.id
+    end
+  end
+
+  if currentLaneIndex ~= nil then
+    for i = 1, #laneRecords do
+      local lane = laneRecords[i]
+      local laneDelta = math.abs(lane.index - currentLaneIndex)
+      local isCurrentLane = laneDelta == 0
+      local isAdjacentLane = laneDelta == 1
+      if isCurrentLane or (lanePositionVerified and isAdjacentLane) then
+        local laneChange = not isCurrentLane
+        candidateOffsets[#candidateOffsets + 1] = {
+          offset = lane.offset,
+          laneId = lane.id,
+          laneIndex = lane.index,
+          maneuver = laneChange and "adjacent-lane-change" or "keep-lane",
+          laneChange = laneChange,
+          laneChangeLegality = laneChange and "unverified" or "not-applicable",
+          laneWidth = lane.width
+        }
+      end
+    end
+  elseif closestLane then
+    -- Without a reliable lane localization, retain only the nearest plausible
+    -- lane as a stay-in-lane preview; do not suggest a lane change.
+    candidateOffsets[#candidateOffsets + 1] = {
+      offset = closestLane.offset,
+      laneId = closestLane.id,
+      laneIndex = closestLane.index,
+      maneuver = "keep-lane-unlocalized",
+      laneChange = false,
+      laneChangeLegality = "not-applicable",
+      laneWidth = closestLane.width
+    }
+  end
+
+  table.sort(candidateOffsets, function(a, b)
+    local aDistance = math.abs(a.offset - currentOffset)
+    local bDistance = math.abs(b.offset - currentOffset)
+    if aDistance == bDistance then
+      return (a.laneIndex or math.huge) < (b.laneIndex or math.huge)
+    end
+    return aDistance < bDistance
+  end)
+
+  if #candidateOffsets == 0 then
+    -- Preserve the conservative corridor-offset fallback when NavGraph lane
+    -- metadata is absent or cannot be associated with the current segment.
+    for i = 1, #PLANNER_CANDIDATE_OFFSETS do
+      candidateOffsets[#candidateOffsets + 1] = {
+        offset = PLANNER_CANDIDATE_OFFSETS[i],
+        maneuver = "corridor-offset-preview",
+        laneChange = false,
+        laneChangeLegality = "unknown"
+      }
+    end
+  end
+
   local candidates, selectedIndex, bestScore = {}, nil, -math.huge
   local reasons = {obstacle = 0, vehicle = 0, road_edge = 0, turning_radius = 0}
-  for candidateIndex = 1, math.min(PLANNER_MAX_CANDIDATES, #PLANNER_CANDIDATE_OFFSETS) do
-    local targetOffset = PLANNER_CANDIDATE_OFFSETS[candidateIndex]
+  for candidateIndex = 1, math.min(PLANNER_MAX_CANDIDATES, #candidateOffsets) do
+    local laneChoice = candidateOffsets[candidateIndex]
+    local targetOffset = laneChoice.offset
+    local laneChange = laneChoice.laneChange == true
     local candidate = {
       index = candidateIndex, targetOffset = targetOffset, safe = true, path = {},
-      minimumClearance = 12.0, minimumRoadMargin = math.huge, pathProgress = 0
+      minimumClearance = 12.0, minimumRoadMargin = math.huge, pathProgress = 0,
+      laneId = laneChoice.laneId, laneIndex = laneChoice.laneIndex,
+      maneuver = laneChoice.maneuver or "corridor-offset-preview",
+      laneChange = laneChange,
+      laneChangeLegality = laneChoice.laneChangeLegality or "unknown",
+      laneChangeCost = laneChange and 4.0 or 0.0
     }
     for sampleIndex = 1, #centerlineSamples do
       local sample = centerlineSamples[sampleIndex]
@@ -4916,7 +5991,9 @@ updateLocalTrajectoryPlanner = function()
       candidate.pathProgress = sample.distance
       local projectedHalfWidth = footprint.halfLength * math.abs(footprint.forward:dot(normal))
         + footprint.halfWidth * math.abs(footprint.right:dot(normal))
-      local roadMargin = PLANNER_ROAD_HALF_WIDTH_M - math.abs(lateralOffset) - projectedHalfWidth
+      local roadHalfWidth = tonumber(state.roadState.roadHalfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+      roadHalfWidth = math.max(2.0, math.min(20.0, roadHalfWidth))
+      local roadMargin = roadHalfWidth - math.abs(lateralOffset) - projectedHalfWidth
       candidate.minimumRoadMargin = math.min(candidate.minimumRoadMargin, roadMargin)
       if roadMargin < PLANNER_ROAD_EDGE_MARGIN_M then
         candidate.safe = false
@@ -4944,6 +6021,13 @@ updateLocalTrajectoryPlanner = function()
         minimumClearance = round2(selected.minimumClearance),
         minimumRoadMargin = round2(selected.minimumRoadMargin),
         selectedOffset = round2(selected.targetOffset),
+        selectedLaneId = selected.laneId,
+        selectedLaneIndex = selected.laneIndex,
+        selectedManeuver = selected.maneuver,
+        selectedLaneChange = selected.laneChange == true,
+        selectedLaneChangeLegality = selected.laneChangeLegality,
+        laneLocalizationStatus = laneLocalization.status or laneGraph.currentLaneStatus or "unknown",
+        laneGraphStatus = laneGraph.status or "unavailable",
         routeProjectionDistance = round2(distanceToPath),
         sampleCount = #selected.path
       })
@@ -6335,6 +7419,11 @@ function M.onUpdate(dt)
       state._roadmindHelpers.updateLidarRenderPoints(dt)
       state._roadmindHelpers.updateDetectedVehicleRenderStates(dt)
     end
+    if state.mapPlanningEnabled and visualFrameFresh then
+      local mapPlannerStarted = M.performanceProfiler.start()
+      updateLocalTrajectoryPlanner()
+      M.performanceProfiler.stop("map_planner_preview", mapPlannerStarted)
+    end
     if routePilotActive then
       local safetyStarted = M.performanceProfiler.start()
       state._roadmindHelpers.updateRoutePilotSafety(dt)
@@ -6347,19 +7436,52 @@ function M.onUpdate(dt)
   state._roadmindHelpers.updateADAS(dt)
   M.performanceProfiler.stop("adas", adasStarted)
 
-  -- Advance render-only inertia at display cadence. This covers own-vehicle
-  -- bounds/axes/mounts, radar and ultrasonic returns, camera frustums,
-  -- localization, traffic origins, route lines and planner candidates.
+  -- Prepare smoothed sensor geometry outside the render-critical hook.
   local visualStarted = M.performanceProfiler.start()
   state._roadmindHelpers.updateVisualizationRenderState(dt)
   M.performanceProfiler.stop("visualization", visualStarted)
-
-  -- Keep redrawing the last valid snapshot while the simulation is paused.
-  local drawStarted = M.performanceProfiler.start()
-  drawFrame()
-  M.performanceProfiler.stop("debug_draw", drawStarted)
   M.performanceProfiler.stop("ge_update", geStarted)
   M.performanceProfiler.advance(dt)
+end
+
+-- debugDrawer queues primitives for the next render frame. Submitting them from
+-- onPreRender keeps sensor dots visible during live Freeroam rendering.
+function M.onPreRender(dtReal, dtSim, dtRaw)
+  if not state.visualizationEnabled then return end
+  drawFrame()
+end
+
+function M.onClientStartMission()
+  state.sessionStaticMap = {}
+  state.sessionStaticObservationIds = {}
+  state.sessionStaticObservationOrder = {}
+  state.sessionStaticMapCount = 0
+  state.levelMetadataLoaded = false
+  state.levelMetadataName = nil
+  state.levelDirectory = nil
+  state.navGraphCache = nil
+  state.levelPOICache = {}
+  state.levelSignalCache = {status = "unavailable", items = {}}
+end
+
+function M.onClientEndMission()
+  state.sessionStaticMap = {}
+  state.sessionStaticObservationIds = {}
+  state.sessionStaticObservationOrder = {}
+  state.sessionStaticMapCount = 0
+  state.levelMetadataLoaded = false
+  state.levelMetadataName = nil
+  state.levelDirectory = nil
+  state.navGraphCache = nil
+  state.levelPOICache = {}
+  state.levelSignalCache = {status = "unavailable", items = {}}
+end
+
+function M.clearSessionMap()
+  state.sessionStaticMap = {}
+  state.sessionStaticMapCount = 0
+  if state.worldModel then state.worldModel.staticGeometry = {} end
+  return {ok = true, cleared = true}
 end
 
 function M.onCursorVisibilityChanged(visible)
@@ -6560,6 +7682,173 @@ function M.getPerceptionSnapshot()
       routeSafetyStopped = state.routeSafetyStopped == true,
       routePilotError = state.routePilotError,
       plannerStatus = state.localPlanner and state.localPlanner.status or "idle"
+    }
+  }
+end
+
+
+function M.getMapSnapshot()
+  local perception = M.getPerceptionSnapshot()
+  local worldModel = M.getWorldModel()
+  local routeState = M.getRouteState()
+  local vehicle = perception and perception.vehicle or nil
+  local vehiclePosition = vehicle and asVec3(vehicle.position) or nil
+
+  if vehicle and state.activeVehicle then
+    local velocity = asVec3(safeCall(state.activeVehicle, "getVelocity"))
+    vehicle.speedMps = velocity and round2(velocity:length()) or 0
+  end
+
+  local geometry = {}
+  for i = 1, math.min(#(worldModel.obstacles or {}), 384) do
+    local obstacle = worldModel.obstacles[i]
+    local position = obstacle and obstacle.position
+    local point = asVec3(position)
+    local age = tonumber(obstacle and obstacle.dataAge) or math.huge
+    local distance = vehiclePosition and point and (point - vehiclePosition):length() or math.huge
+    if point and age >= 0 and age <= 2.5 and distance <= 95 then
+      geometry[#geometry + 1] = {
+        id = obstacle.obstacleId,
+        position = state._roadmindHelpers.cloneWorldModelValue(position),
+        age = age,
+        confidence = obstacle.confidence,
+        observationCount = obstacle.observationCount,
+        sources = state._roadmindHelpers.copySensorSources(obstacle.sourceSensors),
+        sourceKind = obstacle.sourceKind,
+        measurementKind = obstacle.measurementKind
+      }
+    end
+  end
+
+  local road = state._roadmindHelpers.cloneWorldModelValue(state.roadState or {
+    valid = false, quality = "unavailable", corridor = {}
+  })
+  road.roadHalfWidth = tonumber(road.roadHalfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+  road.widthSource = road.widthSource or "conservative-navgraph-heuristic"
+  road.laneModel = road.laneModel or {
+    status = "unknown",
+    source = "No verified lane metadata is available on the current road edge"
+  }
+  local laneGraph = state._roadmindHelpers.cloneWorldModelValue(road.laneGraph or {
+    schemaVersion = 1, status = "unavailable", segments = {}, junctions = {}, connections = {}
+  })
+  road.laneGraph = nil
+
+  local routePath = routeState and routeState.route and routeState.route.path or {}
+  local route = {}
+  for i = 1, math.min(#routePath, 180) do
+    local point = routePath[i]
+    if type(point) == "table" then
+      route[#route + 1] = {x = point.x, y = point.y, z = point.z}
+    end
+  end
+
+  if not state.levelMetadataLoaded then
+    state._roadmindHelpers.loadLevelMetadata(false)
+  end
+  if not state.levelSignalCache or state.simulationTime - (tonumber(state.levelSignalCache.timestamp) or -math.huge) >= 0.75 then
+    state._roadmindHelpers.refreshTrafficSignals()
+  end
+
+  local nearbyPOI = {}
+  for i = 1, #(state.levelPOICache or {}) do
+    local item = state.levelPOICache[i]
+    local point = asVec3(item.position)
+    local distance = vehiclePosition and point and (point - vehiclePosition):length() or math.huge
+    if point and distance <= 350 then
+      nearbyPOI[#nearbyPOI + 1] = {
+        id = item.id, name = item.name, kind = item.kind,
+        position = item.position, distance = round2(distance),
+        source = item.source, tags = item.tags
+      }
+    end
+  end
+  table.sort(nearbyPOI, function(a, b) return a.distance < b.distance end)
+  while #nearbyPOI > 80 do table.remove(nearbyPOI) end
+
+  local nearbySignals = {}
+  for i = 1, #((state.levelSignalCache and state.levelSignalCache.items) or {}) do
+    local item = state.levelSignalCache.items[i]
+    local point = asVec3(item.position)
+    local distance = vehiclePosition and point and (point - vehiclePosition):length() or math.huge
+    if point and distance <= 220 then
+      local copy = state._roadmindHelpers.cloneWorldModelValue(item)
+      copy.distance = round2(distance)
+      local signalRoad = copy.road or {}
+      local n1 = signalRoad.n1 ~= nil and tostring(signalRoad.n1) or nil
+      local n2 = signalRoad.n2 ~= nil and tostring(signalRoad.n2) or nil
+      copy.relevantToCurrentSegment = n1 ~= nil and n2 ~= nil and (
+        (n1 == tostring(road.segmentStartNode) and n2 == tostring(road.segmentEndNode))
+        or (n1 == tostring(road.segmentEndNode) and n2 == tostring(road.segmentStartNode))
+      ) or false
+      nearbySignals[#nearbySignals + 1] = copy
+    end
+  end
+  table.sort(nearbySignals, function(a, b) return a.distance < b.distance end)
+  while #nearbySignals > 48 do table.remove(nearbySignals) end
+
+  local planner = routeState and routeState.planner or {
+    status = "waiting", reasonCode = "not-ready", candidates = {}
+  }
+  local selectedPath = nil
+  local selectedIndex = tonumber(planner.selectedIndex)
+  if selectedIndex and type(planner.candidates) == "table" then
+    local candidate = planner.candidates[selectedIndex]
+    if type(candidate) == "table" and candidate.safe == true then
+      selectedPath = state._roadmindHelpers.cloneWorldModelValue(candidate.path)
+    end
+  end
+
+  return {
+    schemaVersion = 2,
+    timestamp = state.simulationTime,
+    coordinateFrame = "beamng-world",
+    coordinateUnits = "meters",
+    vehicle = state._roadmindHelpers.cloneWorldModelValue(vehicle),
+    road = road,
+    laneGraph = laneGraph,
+    geometry = geometry,
+    vehicles = state._roadmindHelpers.cloneWorldModelValue(perception.targets or {}),
+    staticGeometry = state._roadmindHelpers.cloneWorldModelValue(worldModel.staticGeometry or {}),
+    sessionMap = {cellCount = state.sessionStaticMapCount or 0, scope = "current-level-session"},
+    route = route,
+    planner = state._roadmindHelpers.cloneWorldModelValue(planner),
+    selectedTrajectory = selectedPath,
+    sourceStatus = state._roadmindHelpers.cloneWorldModelValue(worldModel.sourceStatus or {}),
+    worldModelQuality = state._roadmindHelpers.cloneWorldModelValue(worldModel.quality or {}),
+    poi = {
+      status = state.levelPOIStatus or "unavailable",
+      source = state.levelPOISource or "No level-sites adapter is connected",
+      items = nearbyPOI
+    },
+    semantics = {
+      status = "unavailable",
+      source = "Regular Drive camera mounts are geometric coverage models, not RGB/semantic detections",
+      items = {}
+    },
+    signals = {
+      status = state.levelSignalCache and state.levelSignalCache.status or "unavailable",
+      source = state.levelSignalCache and state.levelSignalCache.source or "Traffic signal API unavailable",
+      items = nearbySignals,
+      timestamp = state.levelSignalCache and state.levelSignalCache.timestamp or nil
+    },
+    status = {
+      enabled = state.mapModeEnabled == true,
+      scanning = state.visualizationEnabled == true,
+      frameAge = state.frameAge,
+      roadQuality = road.quality or "unavailable",
+      laneStatus = road.laneModel.status or "unknown",
+      laneLocalization = laneGraph.currentLaneStatus or "unknown",
+      laneGraphStatus = laneGraph.status or "unavailable",
+      laneGraphSegments = laneGraph.segmentCount or 0,
+      laneGraphLanes = laneGraph.laneCount or 0,
+      laneGraphJunctions = laneGraph.junctionCount or 0,
+      laneGraphConnections = laneGraph.connectionCount or 0,
+      plannerStatus = planner.status or "waiting",
+      plannerReason = planner.reason or nil,
+      sessionMapCells = state.sessionStaticMapCount or 0,
+      poiStatus = state.levelPOIStatus or "unavailable",
+      signalStatus = state.levelSignalCache and state.levelSignalCache.status or "unavailable"
     }
   }
 end
