@@ -8748,6 +8748,16 @@ state._roadmindHelpers.updateAdaptivePerformance = function(dt)
 end
 
 
+local function clampMapMotion(value, minimum, maximum)
+  return math.max(minimum, math.min(maximum, value))
+end
+
+local function finiteMapMotion(value)
+  return type(value) == "number" and value == value
+    and value ~= math.huge and value ~= -math.huge
+end
+
+
 local function updateMapMotion(dt)
   local vehicle = state.activeVehicle
   if not vehicle then
@@ -8762,7 +8772,7 @@ local function updateMapMotion(dt)
 
   local speed = velocity:length()
   local forwardSpeed = velocity:dot(forward)
-  if not finite(speed) or not finite(forwardSpeed) then return end
+  if not finiteMapMotion(speed) or not finiteMapMotion(forwardSpeed) then return end
 
   local sampleDt = tonumber(dt) or 0
   if sampleDt < 0.001 or sampleDt > 0.25 then sampleDt = 0 end
@@ -8775,19 +8785,19 @@ local function updateMapMotion(dt)
     yawRate = tonumber(previous.yawRateRadS) or 0
 
     if sampleDt > 0 then
-      local rawAcceleration = clamp(
+      local rawAcceleration = clampMapMotion(
         (forwardSpeed - (tonumber(previous.forwardSpeedMps) or forwardSpeed)) / sampleDt,
         -12, 8
       )
-      local accelerationAlpha = clamp(sampleDt * 4.5, 0, 0.8)
+      local accelerationAlpha = clampMapMotion(sampleDt * 4.5, 0, 0.8)
       acceleration = acceleration + (rawAcceleration - acceleration) * accelerationAlpha
 
       if previous.forward then
         local oldForward = previous.forward
         local crossZ = oldForward.x * forward.y - oldForward.y * forward.x
-        local headingDot = clamp(oldForward.x * forward.x + oldForward.y * forward.y, -1, 1)
-        local rawYawRate = clamp(math.atan2(crossZ, headingDot) / sampleDt, -1.6, 1.6)
-        local yawAlpha = clamp(sampleDt * 5.0, 0, 0.8)
+        local headingDot = clampMapMotion(oldForward.x * forward.x + oldForward.y * forward.y, -1, 1)
+        local rawYawRate = clampMapMotion(math.atan2(crossZ, headingDot) / sampleDt, -1.6, 1.6)
+        local yawAlpha = clampMapMotion(sampleDt * 5.0, 0, 0.8)
         yawRate = yawRate + (rawYawRate - yawRate) * yawAlpha
       end
     end
@@ -8826,9 +8836,9 @@ local function buildMapMotionSnapshot(position, forward)
     local time = index * step
     if index > 0 then
       local previousTime = time - step
-      local turnFade = clamp(1 - math.max(0, previousTime - 1.0) * 0.20, 0.40, 1)
+      local turnFade = clampMapMotion(1 - math.max(0, previousTime - 1.0) * 0.20, 0.40, 1)
       heading = heading + yawRate * turnFade * step
-      local predictedSpeed = clamp(
+      local predictedSpeed = clampMapMotion(
         forwardSpeed + acceleration * math.min(time, 1.5), -55, 55
       )
       x = x + math.cos(heading) * predictedSpeed * step
@@ -8866,7 +8876,7 @@ local function buildCurveGuidance(position, speedMps, path, roadQuality)
     confidence = "none"
   }
   if not position or type(path) ~= "table" or #path < 3
-      or not finite(tonumber(speedMps) or 0) then
+      or not finiteMapMotion(tonumber(speedMps) or 0) then
     return unavailable
   end
 
@@ -8881,7 +8891,7 @@ local function buildCurveGuidance(position, speedMps, path, roadQuality)
       local dx, dy = b.x - a.x, b.y - a.y
       local lengthSquared = dx * dx + dy * dy
       if lengthSquared > 0.04 then
-        local t = clamp(((position.x - a.x) * dx + (position.y - a.y) * dy)
+        local t = clampMapMotion(((position.x - a.x) * dx + (position.y - a.y) * dy)
           / lengthSquared, 0, 1)
         local px, py = a.x + dx * t, a.y + dy * t
         local ex, ey = position.x - px, position.y - py
@@ -8920,7 +8930,7 @@ local function buildCurveGuidance(position, speedMps, path, roadQuality)
       local cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
       local curvature = math.abs(2 * cross / (ab * bc * ca))
       if curvature > 0.003 then
-        local targetSpeed = clamp(math.sqrt(maxLateralAcceleration / curvature), 4.0, 33.0)
+        local targetSpeed = clampMapMotion(math.sqrt(maxLateralAcceleration / curvature), 4.0, 33.0)
         if targetSpeed < bestTargetSpeed then
           bestTargetSpeed = targetSpeed
           bestCurveDistance = travelled
@@ -8961,7 +8971,7 @@ local function buildCurveGuidance(position, speedMps, path, roadQuality)
       local segmentLength = distance(segmentStart, segmentEnd)
       if segmentLength > 0.001 then
         if remaining <= segmentLength then
-          local t = clamp(remaining / segmentLength, 0, 1)
+          local t = clampMapMotion(remaining / segmentLength, 0, 1)
           brakePoint = {
             x = segmentStart.x + (segmentEnd.x - segmentStart.x) * t,
             y = segmentStart.y + (segmentEnd.y - segmentStart.y) * t,
