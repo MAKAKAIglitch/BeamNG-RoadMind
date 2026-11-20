@@ -60,7 +60,7 @@ The in-game UI app lives in `ui/modules/apps/roadmindmap/`. Add **RoadMind Map**
 
 The map consumes a compact snapshot from the Game Engine Lua World Model. It renders the current vehicle and tracked traffic as low-poly meshes, fresh fused raycast returns, repeatedly confirmed static LiDAR geometry accumulated for the current level session, the NavGraph road corridor, nearby level POIs, and the selected safe local trajectory in blue. The preview planner runs without enabling vehicle actuation.
 
-Road width is taken from NavGraph node radii when available, with an explicitly labelled conservative fallback. Directed lane data is decoded from NavGraph edge lane strings and incoming-node metadata. The preview planner evaluates actual forward lane centres when those metadata are available; otherwise it falls back to a conservative corridor and does not invent lane markings. POIs are loaded through the level sites manager and scene POI objects. Traffic lights use the current `core_trafficSignals` instance state when available; `signals.json` alone is treated as position/identity metadata, never as proof of a live phase.
+Road width is taken from NavGraph node radii when available, with an explicitly labelled conservative fallback. Directed lane data is decoded from NavGraph edge lane strings and incoming-node metadata. A mission-scoped NavGraph cache feeds a bounded local directed road/lane graph; segments expose lane centres, direction, width and candidate lane-to-lane connections at shared nodes. The current vehicle is localized to a lane only when road quality and lateral distance pass conservative checks. Junction connections are geometric candidates with unverified legal status and are not used to authorize turns or autonomous lane changes. The preview planner still operates on the current route corridor and is not yet a lane-network route planner. POIs are loaded through the level sites manager and scene POI objects. Traffic lights use the current `core_trafficSignals` instance state when available; `signals.json` alone is treated as position/identity metadata, never as proof of a live phase.
 
 Regular BeamNG.drive camera mounts remain geometric coverage models, not RGB/semantic recognition. The map has not yet passed repeatable in-game visual, behaviour, or performance tests.
 
@@ -76,6 +76,7 @@ Full autonomous steering, throttle and braking, lane changes, overtaking and exp
 - [Architecture](docs/ARCHITECTURE.md)
 - [Sensor suite](docs/SENSOR_SUITE.md)
 - [World Model](docs/WORLD_MODEL.md)
+- [Local lane graph](docs/LANE_GRAPH.md)
 - [Performance](docs/PERFORMANCE.md)
 - [Settings and runtime controls](docs/SETTINGS.md)
 

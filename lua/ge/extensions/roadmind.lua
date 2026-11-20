@@ -151,6 +151,8 @@ local state = {
   levelMetadataFile = nil,
   levelDirectory = nil,
   levelMetadataName = nil,
+  navGraphCache = nil,
+  navGraphGeneration = 0,
   levelRoadRules = {rightHandDrive = false, turnOnRed = false},
   levelPOICache = {},
   levelPOIStatus = "unavailable",
@@ -4956,8 +4958,19 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     return
   end
 
-  local okMap, mapData = pcall(map.getMap)
-  local nodes = okMap and type(mapData) == "table" and mapData.nodes or nil
+  local levelKey = tostring(state.levelMetadataName or state.levelDirectory or "unknown-level")
+  local navCache = state.navGraphCache
+  if not navCache or navCache.levelKey ~= levelKey or type(navCache.nodes) ~= "table" then
+    local okMap, mapData = pcall(map.getMap)
+    local loadedNodes = okMap and type(mapData) == "table" and mapData.nodes or nil
+    if type(loadedNodes) == "table" and next(loadedNodes) ~= nil then
+      state.navGraphGeneration = (state.navGraphGeneration or 0) + 1
+      state.navGraphCache = {levelKey = levelKey, nodes = loadedNodes,
+        generation = state.navGraphGeneration, timestamp = state.simulationTime}
+      navCache = state.navGraphCache
+    end
+  end
+  local nodes = navCache and navCache.nodes or nil
   local nodeA = type(nodes) == "table" and nodes[nodeAId] or nil
   local nodeB = type(nodes) == "table" and nodes[nodeBId] or nil
   local pointA = nodeA and asVec3(safeField(nodeA, "pos")) or nil
@@ -5021,17 +5034,108 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     end
     return type(edge) == "table" and edge or nil
   end
-  local firstEdge = readRoadEdge(nodeAId, nodeBId)
-  local radiusA = tonumber(safeField(nodeA, "radius"))
-  local radiusB = tonumber(safeField(nodeB, "radius"))
-  if radiusA and radiusB and radiusA >= 1 and radiusA <= 30
-      and radiusB >= 1 and radiusB <= 30 then
-    roadHalfWidth = (radiusA + radiusB) * 0.5
-    widthSource = "navgraph-node-radius"
-  end
-
   local rightHandDrive = state.levelRoadRules
     and state.levelRoadRules.rightHandDrive == true or false
+
+  local function roadEdgeHalfWidth(fromNode, toNode)
+    local radiusA, radiusB = tonumber(safeField(fromNode, "radius")), tonumber(safeField(toNode, "radius"))
+    if radiusA and radiusB and radiusA >= 1 and radiusA <= 30 and radiusB >= 1 and radiusB <= 30 then
+      return (radiusA + radiusB) * 0.5, "navgraph-node-radius"
+    end
+    return PLANNER_ROAD_HALF_WIDTH_M, "conservative-navgraph-heuristic"
+  end
+
+  local function buildDirectedLaneModel(edge, fromId, toId, halfWidth)
+    local result = {
+      status = "unknown", directionStatus = "unknown", directionAllowed = nil,
+      forwardLaneOffsets = {}, laneBoundaryOffsets = {}, lanesForward = nil, lanesReverse = nil,
+      laneCount = nil, laneWidth = nil,
+      oneWay = type(edge) == "table" and safeField(edge, "oneWay") == true or false,
+      source = "NavGraph lane metadata unavailable"
+    }
+    if type(edge) ~= "table" then return result end
+    local incomingId = safeField(edge, "inNode")
+    local fromMatches = incomingId ~= nil and tostring(incomingId) == tostring(fromId)
+    local toMatches = incomingId ~= nil and tostring(incomingId) == tostring(toId)
+    result.incomingNode = incomingId ~= nil and tostring(incomingId) or nil
+    if incomingId ~= nil and not fromMatches and not toMatches then
+      result.status, result.directionStatus, result.directionAllowed =
+        "direction-restricted", "incoming-node-mismatch", false
+      return result
+    end
+    local laneString = safeField(edge, "lanes")
+    if type(laneString) ~= "string" or laneString == "" or incomingId == nil then
+      result.directionStatus = "direction-unknown"
+      result.source = "NavGraph connectivity only; lane direction unknown"
+      if result.oneWay and not fromMatches then
+        result.status, result.directionAllowed = "direction-restricted", false
+      end
+      return result
+    end
+    local _, reverseCount = string.gsub(laneString, "%-a", "")
+    local _, forwardCount = string.gsub(laneString, "%+a", "")
+    local forward = fromMatches and forwardCount or reverseCount
+    local reverse = fromMatches and reverseCount or forwardCount
+    result.lanesForward, result.lanesReverse = forward, reverse
+    result.laneCount = forward + reverse
+    result.directionStatus = "lane-metadata"
+    if forward <= 0 then
+      result.status, result.directionAllowed = "direction-restricted", false
+      return result
+    end
+    if result.laneCount <= 0 or halfWidth <= 0 then return result end
+    local laneWidth = (halfWidth * 2) / result.laneCount
+    local offsets, boundaries = {}, {}
+    if reverse == 0 then
+      for i = 0, forward - 1 do
+        offsets[#offsets + 1] = rightHandDrive and (-halfWidth + (i + 0.5) * laneWidth)
+          or (halfWidth - (i + 0.5) * laneWidth)
+      end
+      for i = 1, forward - 1 do
+        boundaries[#boundaries + 1] = rightHandDrive and (-halfWidth + i * laneWidth)
+          or (halfWidth - i * laneWidth)
+      end
+    else
+      local divider = rightHandDrive and (-halfWidth + reverse * laneWidth)
+        or (halfWidth - reverse * laneWidth)
+      for i = 0, forward - 1 do
+        offsets[#offsets + 1] = rightHandDrive and (divider + (i + 0.5) * laneWidth)
+          or (divider - (i + 0.5) * laneWidth)
+        boundaries[#boundaries + 1] = rightHandDrive and (divider + i * laneWidth)
+          or (divider - i * laneWidth)
+      end
+    end
+    result.status, result.directionAllowed = "metadata", true
+    result.source = "NavGraph processed DecalRoad/map.json lane data"
+    result.laneWidth = laneWidth
+    result.forwardLaneOffsets, result.laneBoundaryOffsets = offsets, boundaries
+    result.direction = fromMatches and "inNode-to-outNode" or "outNode-to-inNode"
+    result.rightHandDrive = rightHandDrive
+    result.drivability = tonumber(safeField(edge, "drivability"))
+    result.speedLimitMps = tonumber(safeField(edge, "speedLimit"))
+    result.roadType = safeField(edge, "type")
+    result.hiddenInNavi = safeField(edge, "hiddenInNavi") == true
+    return result
+  end
+
+  local function edgeAllowsTravel(edge, fromId, laneInfo)
+    if type(edge) ~= "table" or safeField(edge, "hiddenInNavi") == true then return false end
+    local drivability = tonumber(safeField(edge, "drivability"))
+    if drivability ~= nil and drivability <= 0 then return false end
+    if laneInfo and laneInfo.status == "direction-restricted" then return false end
+    if safeField(edge, "oneWay") == true then
+      local incomingId = safeField(edge, "inNode")
+      if incomingId == nil or tostring(incomingId) ~= tostring(fromId) then return false end
+    end
+    return true
+  end
+
+  local firstEdge = readRoadEdge(nodeAId, nodeBId)
+  roadHalfWidth, widthSource = roadEdgeHalfWidth(nodeA, nodeB)
+  laneModel = buildDirectedLaneModel(firstEdge, nodeAId, nodeBId, roadHalfWidth)
+  if not edgeAllowsTravel(firstEdge, nodeAId, laneModel) then
+    laneModel.status, laneModel.directionAllowed = "direction-restricted", false
+  end
   local lanes = firstEdge and safeField(firstEdge, "lanes") or nil
   local incomingNode = firstEdge and safeField(firstEdge, "inNode") or nil
   local followsIncomingDirection = incomingNode ~= nil
@@ -5138,6 +5242,234 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     currentPosition = bestPosition
   end
 
+
+  local laneGraph = {
+    schemaVersion = 1, status = "unavailable", source = "BeamNG NavGraph",
+    timestamp = state.simulationTime, cacheGeneration = navCache and navCache.generation or 0,
+    currentLaneId = nil, currentLaneStatus = "unknown",
+    segments = {}, junctions = {}, connections = {},
+    nodeCount = 0, segmentCount = 0, laneCount = 0, junctionCount = 0, connectionCount = 0
+  }
+  local queue, queuedEdges, visitedEdges = {}, {}, {}
+  local queueIndex = 1
+  local maxSegments, maxDepth, maxDistance, maxBranches = 96, 4, 125, 8
+  local function edgeKey(a,b) return tostring(a)..">"..tostring(b) end
+  local function enqueue(fromId,toId,depth,distance,current)
+    local key=edgeKey(fromId,toId)
+    if queuedEdges[key] or visitedEdges[key] then return end
+    local fromNode,toNode=nodes[fromId],nodes[toId]
+    if not fromNode or not toNode then return end
+    local p1,p2=asVec3(safeField(fromNode,"pos")),asVec3(safeField(toNode,"pos"))
+    if not p1 or not p2 then return end
+    if (p1-position):length()>maxDistance and (p2-position):length()>maxDistance then return end
+    local edge=readRoadEdge(fromId,toId)
+    local width=roadEdgeHalfWidth(fromNode,toNode)
+    local info=buildDirectedLaneModel(edge,fromId,toId,width)
+    if not edgeAllowsTravel(edge,fromId,info) then return end
+    queuedEdges[key]=true
+    queue[#queue+1]={from=fromId,to=toId,depth=depth,distance=distance,current=current==true}
+  end
+  enqueue(nodeAId,nodeBId,0,0,true)
+  enqueue(nodeBId,nodeAId,0,0,false)
+
+  while queueIndex<=#queue and #laneGraph.segments<maxSegments do
+    local item=queue[queueIndex]
+    queueIndex=queueIndex+1
+    local fromId,toId=item.from,item.to
+    local key=edgeKey(fromId,toId)
+    if not visitedEdges[key] then
+      visitedEdges[key]=true
+      local fromNode,toNode=nodes[fromId],nodes[toId]
+      local p1=fromNode and asVec3(safeField(fromNode,"pos")) or nil
+      local p2=toNode and asVec3(safeField(toNode,"pos")) or nil
+      local edge=readRoadEdge(fromId,toId)
+      if p1 and p2 and edge then
+        local delta=p2-p1
+        local flat=vec3(delta.x,delta.y,0)
+        local length=flat:length()
+        local halfWidth,widthSource=roadEdgeHalfWidth(fromNode,toNode)
+        local laneInfo=buildDirectedLaneModel(edge,fromId,toId,halfWidth)
+        local drivability=tonumber(safeField(edge,"drivability"))
+        if length>0.5 and (drivability==nil or drivability>0) and safeField(edge,"hiddenInNavi")~=true then
+          local tangent=flat/length
+          local normal=vec3(-tangent.y,tangent.x,0)
+          local lanes={}
+          if laneInfo.status=="metadata" then
+            for laneIndex=1,#(laneInfo.forwardLaneOffsets or {}) do
+              local offset=tonumber(laneInfo.forwardLaneOffsets[laneIndex])
+              if offset then
+                lanes[#lanes+1]={
+                  id=key..":lane:"..tostring(laneIndex),index=laneIndex,
+                  fromNode=tostring(fromId),toNode=tostring(toId),
+                  centerOffset=round2(offset),width=round2(laneInfo.laneWidth or 0),
+                  start=vectorToPlainTable(p1+normal*offset),
+                  finish=vectorToPlainTable(p2+normal*offset),direction="forward"
+                }
+                laneGraph.laneCount=laneGraph.laneCount+1
+              end
+            end
+          end
+          laneGraph.segments[#laneGraph.segments+1]={
+            id=key,from=tostring(fromId),to=tostring(toId),
+            start=vectorToPlainTable(p1),finish=vectorToPlainTable(p2),
+            length=round2(length),roadHalfWidth=round2(halfWidth),widthSource=widthSource,
+            laneModel=laneInfo,lanes=lanes,laneCount=#lanes,
+            directionStatus=laneInfo.directionStatus or "unknown",
+            oneWay=safeField(edge,"oneWay")==true,drivability=drivability,
+            speedLimitMps=tonumber(safeField(edge,"speedLimit")),
+            roadType=safeField(edge,"type"),depth=item.depth,current=item.current
+          }
+          local travelled=(item.distance or 0)+length
+          if item.depth<maxDepth and travelled<maxDistance then
+            local links=safeField(toNode,"links")
+            if type(links)=="table" then
+              local choices={}
+              for candidateId in pairs(links) do
+                if tostring(candidateId)~=tostring(fromId) then
+                  local candidateNode=nodes[candidateId]
+                  local candidatePosition=candidateNode and asVec3(safeField(candidateNode,"pos")) or nil
+                  if candidatePosition and (candidatePosition-position):length()<=maxDistance then
+                    local candidateEdge=readRoadEdge(toId,candidateId)
+                    if candidateEdge then
+                      local nextWidth=roadEdgeHalfWidth(toNode,candidateNode)
+                      local nextInfo=buildDirectedLaneModel(candidateEdge,toId,candidateId,nextWidth)
+                      local allowed=edgeAllowsTravel(candidateEdge,toId,nextInfo)
+                      local nextDrive=tonumber(safeField(candidateEdge,"drivability"))
+                      if allowed and (nextDrive==nil or nextDrive>0) and safeField(candidateEdge,"hiddenInNavi")~=true then
+                        local v=candidatePosition-p2
+                        local fv=vec3(v.x,v.y,0)
+                        if fv:length()>0.5 then
+                          local alignment=tangent:dot(fv:normalized())
+                          if alignment>-0.45 then choices[#choices+1]={id=candidateId,alignment=alignment} end
+                        end
+                      end
+                    end
+                  end
+                end
+              end
+              table.sort(choices,function(a,b)
+                if a.alignment==b.alignment then return tostring(a.id)<tostring(b.id) end
+                return a.alignment>b.alignment
+              end)
+              for i=1,math.min(maxBranches,#choices) do enqueue(toId,choices[i].id,item.depth+1,travelled,false) end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  laneGraph.segmentCount=#laneGraph.segments
+  local seenNodes,incomingByNode,outgoingByNode={},{},{}
+  local function addSegment(bucket,nodeId,segment)
+    local key=tostring(nodeId)
+    bucket[key]=bucket[key] or {}
+    bucket[key][#bucket[key]+1]=segment
+  end
+  for i=1,#laneGraph.segments do
+    local seg=laneGraph.segments[i]
+    seenNodes[seg.from],seenNodes[seg.to]=true,true
+    addSegment(outgoingByNode,seg.from,seg)
+    addSegment(incomingByNode,seg.to,seg)
+  end
+  for _ in pairs(seenNodes) do laneGraph.nodeCount=laneGraph.nodeCount+1 end
+
+  for nodeId,incoming in pairs(incomingByNode) do
+    local outgoing=outgoingByNode[nodeId] or {}
+    local connectionsAtNode=0
+    for ii=1,#incoming do
+      local inSeg=incoming[ii]
+      for il=1,#(inSeg.lanes or {}) do
+        local inLane=inSeg.lanes[il]
+        local is,ie=asVec3(inLane.start),asVec3(inLane.finish)
+        local inDir=is and ie and vec3(ie.x-is.x,ie.y-is.y,0) or nil
+        if inDir and inDir:length()>0.1 then
+          inDir=inDir:normalized()
+          for oi=1,#outgoing do
+            local outSeg=outgoing[oi]
+            if outSeg.id~=inSeg.id then
+              local best,bestD,bestAlign=nil,math.huge,-1
+              for ol=1,#(outSeg.lanes or {}) do
+                local lane=outSeg.lanes[ol]
+                local os,oe=asVec3(lane.start),asVec3(lane.finish)
+                local outDir=os and oe and vec3(oe.x-os.x,oe.y-os.y,0) or nil
+                if os and outDir and outDir:length()>0.1 then
+                  outDir=outDir:normalized()
+                  local align=inDir:dot(outDir)
+                  if align>-0.45 then
+                    local d=(asVec3(inLane.finish)-os):length()
+                    if d<bestD then best,bestD,bestAlign=lane,d,align end
+                  end
+                end
+              end
+              local maxJoin=math.max(5,math.min(11,(inSeg.roadHalfWidth+outSeg.roadHalfWidth)*0.82))
+              if best and bestD<=maxJoin and #laneGraph.connections<480 then
+                local os,oe=asVec3(best.start),asVec3(best.finish)
+                local od=vec3(oe.x-os.x,oe.y-os.y,0):normalized()
+                local cross=inDir.x*od.y-inDir.y*od.x
+                local turn="straight"
+                if bestAlign<0.92 then
+                  if cross>0.12 then turn="left" elseif cross< -0.12 then turn="right" else turn="curve" end
+                end
+                laneGraph.connections[#laneGraph.connections+1]={
+                  id=inLane.id.."=>"..best.id,fromLaneId=inLane.id,toLaneId=best.id,
+                  viaNode=tostring(nodeId),turnType=turn,endpointDistance=round2(bestD),
+                  headingAlignment=round2(bestAlign),status="geometric-candidate",
+                  legality="unverified",source="NavGraph connectivity and lane-centre geometry"
+                }
+                connectionsAtNode=connectionsAtNode+1
+              end
+            end
+          end
+        end
+      end
+    end
+    if #incoming>0 and #outgoing>1 then
+      local node=nodes[nodeId]
+      local p=node and asVec3(safeField(node,"pos")) or nil
+      laneGraph.junctions[#laneGraph.junctions+1]={
+        nodeId=nodeId,position=p and vectorToPlainTable(p) or nil,
+        incomingSegmentCount=#incoming,outgoingSegmentCount=#outgoing,
+        connectionCount=connectionsAtNode,status="topology-candidate",
+        source="NavGraph node connectivity"
+      }
+    end
+  end
+  laneGraph.junctionCount=#laneGraph.junctions
+  laneGraph.connectionCount=#laneGraph.connections
+  laneGraph.status=laneGraph.laneCount>0 and "lane-graph-available"
+    or (laneGraph.segmentCount>0 and "road-graph-only" or "unavailable")
+
+  local laneLocalization={status="unknown",laneId=nil,laneIndex=nil,lateralError=nil,confidence=0,
+    source="No verified forward lane metadata on current road edge"}
+  if laneModel.status=="metadata" and #(laneModel.forwardLaneOffsets or {})>0 then
+    local bestIndex,bestError=nil,math.huge
+    for i=1,#laneModel.forwardLaneOffsets do
+      local offset=tonumber(laneModel.forwardLaneOffsets[i])
+      if offset then
+        local d=math.abs(lateralOffset-offset)
+        if d<bestError then bestIndex,bestError=i,d end
+      end
+    end
+    if bestIndex then
+      local laneWidth=tonumber(laneModel.laneWidth) or 3.5
+      local confidence=math.max(0,math.min(1,1-bestError/math.max(0.5,laneWidth*0.75)))
+      laneLocalization={
+        status=(quality=="high" or quality=="medium") and bestError<=laneWidth*0.75 and "localized" or "uncertain",
+        laneId=edgeKey(nodeAId,nodeBId)..":lane:"..tostring(bestIndex),laneIndex=bestIndex,
+        centerOffset=tonumber(laneModel.forwardLaneOffsets[bestIndex]),
+        lateralError=round2(bestError),confidence=round2(confidence),
+        source="Vehicle pose projected onto directed NavGraph lane centre"
+      }
+      if laneLocalization.status=="localized" then
+        laneGraph.currentLaneId,laneGraph.currentLaneStatus=laneLocalization.laneId,"localized"
+      else laneGraph.currentLaneStatus="uncertain" end
+    end
+  end
+  if laneGraph.currentLaneStatus=="unknown" and laneLocalization.status=="uncertain" then
+    laneGraph.currentLaneStatus="uncertain"
+  end
+
   state.roadState = {
     valid = true,
     quality = quality,
@@ -5152,7 +5484,9 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     corridor = corridor,
     roadHalfWidth = roadHalfWidth,
     widthSource = widthSource,
-    laneModel = laneModel
+    laneModel = laneModel,
+    laneLocalization = laneLocalization,
+    laneGraph = laneGraph
   }
 end
 
@@ -7019,6 +7353,7 @@ function M.onClientStartMission()
   state.levelMetadataLoaded = false
   state.levelMetadataName = nil
   state.levelDirectory = nil
+  state.navGraphCache = nil
   state.levelPOICache = {}
   state.levelSignalCache = {status = "unavailable", items = {}}
 end
@@ -7031,6 +7366,7 @@ function M.onClientEndMission()
   state.levelMetadataLoaded = false
   state.levelMetadataName = nil
   state.levelDirectory = nil
+  state.navGraphCache = nil
   state.levelPOICache = {}
   state.levelSignalCache = {status = "unavailable", items = {}}
 end
@@ -7287,6 +7623,10 @@ function M.getMapSnapshot()
     status = "unknown",
     source = "No verified lane metadata is available on the current road edge"
   }
+  local laneGraph = state._roadmindHelpers.cloneWorldModelValue(road.laneGraph or {
+    schemaVersion = 1, status = "unavailable", segments = {}, junctions = {}, connections = {}
+  })
+  road.laneGraph = nil
 
   local routePath = routeState and routeState.route and routeState.route.path or {}
   local route = {}
@@ -7360,6 +7700,7 @@ function M.getMapSnapshot()
     coordinateUnits = "meters",
     vehicle = state._roadmindHelpers.cloneWorldModelValue(vehicle),
     road = road,
+    laneGraph = laneGraph,
     geometry = geometry,
     vehicles = state._roadmindHelpers.cloneWorldModelValue(perception.targets or {}),
     staticGeometry = state._roadmindHelpers.cloneWorldModelValue(worldModel.staticGeometry or {}),
@@ -7391,6 +7732,12 @@ function M.getMapSnapshot()
       frameAge = state.frameAge,
       roadQuality = road.quality or "unavailable",
       laneStatus = road.laneModel.status or "unknown",
+      laneLocalization = laneGraph.currentLaneStatus or "unknown",
+      laneGraphStatus = laneGraph.status or "unavailable",
+      laneGraphSegments = laneGraph.segmentCount or 0,
+      laneGraphLanes = laneGraph.laneCount or 0,
+      laneGraphJunctions = laneGraph.junctionCount or 0,
+      laneGraphConnections = laneGraph.connectionCount or 0,
       plannerStatus = planner.status or "waiting",
       plannerReason = planner.reason or nil,
       sessionMapCells = state.sessionStaticMapCount or 0,
