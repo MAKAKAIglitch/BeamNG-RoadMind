@@ -171,7 +171,7 @@ end
 
 
 
-local function getVehicleFrame()
+local function getVehicleFrame(cachedVelocity)
   if not obj then
     return nil
   end
@@ -179,7 +179,7 @@ local function getVehicleFrame()
   local position = safeCall(obj, "getPosition")
   local forward = normalize(safeCall(obj, "getDirectionVector"))
   local up = normalize(safeCall(obj, "getDirectionVectorUp"))
-  local velocity = safeCall(obj, "getVelocity")
+  local velocity = cachedVelocity or safeCall(obj, "getVelocity")
 
   if not position or not forward or not up or not velocity then
     return nil
@@ -1098,18 +1098,21 @@ function M.updateGFX(dt)
   if dt < 0 then dt = 0 end
   state.elapsed = state.elapsed + dt
 
-  local frame = getVehicleFrame()
-  if not frame then return end
+  -- Speed is needed to adapt scan cadence, but position and orientation
+  -- are only needed when a sensor job is actually due.
+  local velocity = safeCall(obj, "getVelocity")
+  if not velocity then return end
+  local speed = velocity:length()
 
   -- Let stationary vehicles use a lower sensor cadence. At higher speed,
   -- tighten the intervals because the scene changes more between scans.
   local speedMultiplier = 1.0
   if sensorSettings.speedAdaptiveRateEnabled ~= false then
-    if frame.speed < 5 then
+    if speed < 5 then
       speedMultiplier = 1.5
-    elseif frame.speed >= 45 then
+    elseif speed >= 45 then
       speedMultiplier = 0.50
-    elseif frame.speed >= 25 then
+    elseif speed >= 25 then
       speedMultiplier = 0.65
     end
   end
@@ -1164,6 +1167,15 @@ function M.updateGFX(dt)
   local zonesDue = state.detectionZoneTimer >= detectionZoneInterval
     and (sensorSettings.lidarEnabled or sensorSettings.radarEnabled or sensorSettings.ultrasonicEnabled
       or sensorSettings.cameraDetectionEnabled)
+
+  -- Avoid three engine object reads and vector transforms on frames where no
+  -- sensor task is due. The speed sample above still updates the adaptive
+  -- cadence every frame; full pose is captured once for the selected job.
+  local frame = nil
+  if changed or lidarDue or radarDue or ultrasonicDue or poseDue or zonesDue then
+    frame = getVehicleFrame(velocity)
+    if not frame then return end
+  end
 
   -- Round-robin over five independent jobs. A graphics frame handles at most
   -- one due scan/pose/zone job, spreading simultaneous deadlines over frames.
