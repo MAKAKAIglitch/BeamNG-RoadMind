@@ -8660,8 +8660,8 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
   -- requiring new sensor observations.
   local latestPose = state.latestData
     and (state.latestData.vehiclePose or state.latestData.localizationVehiclePose) or nil
-  local liveMapPosition = latestPose and asVec3(latestPose.position) or nil
-  liveMapPosition = liveMapPosition or asVec3(safeCall(state.activeVehicle, "getPosition"))
+  local liveMapPosition = asVec3(safeCall(state.activeVehicle, "getPosition"))
+  liveMapPosition = liveMapPosition or (latestPose and asVec3(latestPose.position) or nil)
   local configuredMapRadius = math.max(100, math.min(500,
     tonumber(state.settings and state.settings.mapRadiusM) or 500))
   local cachedOutputCenter = asVec3(state.sessionStaticMapOutputCenter)
