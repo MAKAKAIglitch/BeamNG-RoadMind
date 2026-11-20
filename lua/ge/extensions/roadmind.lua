@@ -164,6 +164,7 @@ local state = {
   mapVehicleCheckTimer = 0,
   mapMotionTime = 0,
   mapMotion = nil,
+  mapWheelTrajectoryTimestamp = nil,
   sessionStaticMap = {},
   sessionStaticObservationIds = {},
   sessionStaticObservationOrder = {},
@@ -1488,6 +1489,7 @@ state._roadmindHelpers.detachPreviousVehicle = function()
   state.vehicleCalibrationError = nil
   state.mapMotion = nil
   state.mapMotionTime = 0
+  state.mapWheelTrajectoryTimestamp = nil
   state._roadmindHelpers.resetTrackingState(true)
   state.vehicleRegistry = {}
   state.vehicleRegistryById = {}
@@ -2752,6 +2754,7 @@ function M.setVisualizationEnabled(enabled)
 
   if wanted then
     local previousId = state.activeVehicleId
+    state.mapWheelTrajectoryTimestamp = nil
     state.visualizationEnabled = true
     state._roadmindHelpers.resetTrackingState(true)
     state._roadmindHelpers.clearLidarRenderState()
@@ -2779,6 +2782,7 @@ function M.setVisualizationEnabled(enabled)
       return {ok = false, error = "No active player vehicle"}
     end
   else
+    state.mapWheelTrajectoryTimestamp = nil
     if state.activeVehicle and (state.adasLastBrakeCommand or 0) > 0 then
       queueVehicleCommand(state.activeVehicle,
         "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
@@ -2860,6 +2864,7 @@ function M.setMapEnabled(enabled)
   if not state.perceptionViewEnabled then
     state.mapMotion = nil
     state.mapMotionTime = 0
+    state.mapWheelTrajectoryTimestamp = nil
   end
   if not state.routePilotEnabled then
     state.localPlanner = {
@@ -2881,6 +2886,7 @@ function M.setPerceptionViewEnabled(enabled)
   elseif not state.mapModeEnabled then
     state.mapMotion = nil
     state.mapMotionTime = 0
+    state.mapWheelTrajectoryTimestamp = nil
   end
   return {
     ok = true,
@@ -8625,6 +8631,7 @@ state._roadmindHelpers.mergeSensorFrame = function(frame)
   if updates.trajectory == true then
     latest.predictedTrajectory = type(frame.predictedTrajectory) == "table"
       and frame.predictedTrajectory or {points = {}, valid = false}
+    state.mapWheelTrajectoryTimestamp = state.mapMotionTime
   end
   if updates.pose == true then
     latest.cameras = type(frame.cameras) == "table" and frame.cameras or {}
@@ -8846,7 +8853,8 @@ local function buildMapMotionSnapshot(position, forward)
   local latest = state.latestData or {}
   local wheelTrajectory = latest.predictedTrajectory
   local timestamps = latest.sensorTimestamps or {}
-  local trajectoryAge = state.simulationTime - (tonumber(timestamps.detectionZones) or -math.huge)
+  local trajectoryAge = state.mapMotionTime
+    - (tonumber(state.mapWheelTrajectoryTimestamp) or -math.huge)
   if type(wheelTrajectory) == "table" and wheelTrajectory.valid == true
       and type(wheelTrajectory.points) == "table" and #wheelTrajectory.points >= 2
       and trajectoryAge >= 0 and trajectoryAge <= 0.75 then
@@ -9181,6 +9189,7 @@ end
 function M.onClientStartMission()
   state.mapMotion = nil
   state.mapMotionTime = 0
+  state.mapWheelTrajectoryTimestamp = nil
   state.sessionStaticMap = {}
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
@@ -9223,6 +9232,7 @@ end
 function M.onClientEndMission()
   state.mapMotion = nil
   state.mapMotionTime = 0
+  state.mapWheelTrajectoryTimestamp = nil
   state.sessionStaticMap = {}
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
