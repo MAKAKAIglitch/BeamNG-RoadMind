@@ -13,7 +13,7 @@ RoadMind aims to become a lightweight, modular autonomous-driving system for Bea
 5. Validate and harden the native Lua trajectory controller, user takeover and independent safety supervisor.
 6. Validate existing ADAS thresholds, brake blending, blind-spot tracking and pose-locked visualization in repeatable scenarios.
 7. Separate the ADAS interface from core sensor settings before expanding assistance controls.
-8. Add sign/signal awareness, lane-level perception and the perception display only on top of a measured, provenance-aware world model.
+8. Extend the 3D perception display with sign/signal and lane-level information only when supported by a measured, provenance-aware world model.
 
 Phase 9 is implemented as a bounded local planner. Phase 10 now has its first native Vehicle Lua controller prototype; the next milestone is in-game validation and controller hardening, not adding more complexity before basic tracking and braking are proven.
 
@@ -341,7 +341,7 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 - [ ] Add an ADAS option to respect posted speed limits and use a recognized speed limit as a configurable target-speed cap.
 - [ ] Add an explicit option to ignore speed-limit information for speed control while still allowing the sign to be shown in the perception display; do not let this option silently disable hazard warnings or emergency braking.
 - [ ] Add stop-line/red-light approach warnings and later rule-aware stopping only after signal state, lane association and stopping-distance behavior are validated.
-- [ ] Add sign/signal labels to the ADAS status view and the future perception display, using readable text labels rather than relying only on colors or emoji.
+- [ ] Add sign/signal labels to the ADAS status view and 3D perception display, using readable text labels rather than relying only on colors or emoji.
 - [ ] Validate sign orientation, duplicates, temporary roadworks signs, occlusion, distance, state changes and map-to-map differences.
 
 **Implementation path:** in regular BeamNG.drive, use dependable level/simulator metadata and object state when exposed. Pixel-level sign/light recognition requires an actual image source and belongs to the optional BeamNG.tech camera backend. If a map does not expose reliable semantics, report unknown rather than inventing a detection.
@@ -417,4 +417,4 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 - GNSS-like positioning reports BeamNG world coordinates, not geodetic latitude/longitude.
 - IMU-like values are derived from simulator signals and are not calibrated hardware-grade outputs.
 - Game Engine vehicle-list/bounds data can assist target discovery and tracking, but it is simulator-assisted information, not a LiDAR/camera measurement. Keep that distinction explicit in data and documentation.
-- Route planning, a first native trajectory controller and initial ADAS features exist as experimental code; they are not considered validated until repeatable in-game tests pass. Manual ACC, full lane-level perception, traffic-sign/signal awareness, trailer-aware rear sensor gating and the RoadMind Perception display remain roadmap work.
+- Route planning, a first native trajectory controller and initial ADAS features exist as experimental code; they are not considered validated until repeatable in-game tests pass. Manual ACC, full lane-level perception, traffic-sign/signal awareness and trailer-aware rear sensor gating remain roadmap work. The 3D RoadMind Perception display is implemented in code but still requires repeatable live-game validation.
