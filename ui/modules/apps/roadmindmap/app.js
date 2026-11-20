@@ -533,23 +533,41 @@
 
                 var graphLaneModel = graphSegment.laneModel || {};
                 var graphBoundaries = asArray(graphLaneModel.laneBoundaryOffsets);
+                var laneBoundaryGeometry = asArray(graphSegment.laneBoundaryGeometry);
                 var laneModelKnown = graphLaneModel.status === "metadata";
                 var laneModelInferred = graphLaneModel.status === "traffic-inferred"
                   || graphLaneModel.status === "traffic-provisional";
                 if (laneModelKnown || laneModelInferred) {
-                  var centerDivider = Number(graphLaneModel.centerDividerOffset);
-                  var hasCenterDivider = isFinite(centerDivider);
-                  for (var gb = 0; gb < graphBoundaries.length; gb++) {
-                    var boundaryOffset = Number(graphBoundaries[gb]);
-                    if (!isFinite(boundaryOffset)) continue;
-                    var isCenterDivider = hasCenterDivider && Math.abs(boundaryOffset - centerDivider) < 0.05;
-                    addLine([
-                      {x: graphStart.x + gnx * boundaryOffset, y: graphStart.y + gny * boundaryOffset, z: graphStart.z - 0.055},
-                      {x: graphFinish.x + gnx * boundaryOffset, y: graphFinish.y + gny * boundaryOffset, z: graphFinish.z - 0.055}
-                    ], isCenterDivider ? "#c5aa78" : (laneModelKnown ? "#8799a7" : "#b18b56"),
-                      isCenterDivider ? 1.1 : (graphSegment.current ? 0.95 : 0.78),
-                      isCenterDivider ? 0.76 : (laneModelKnown ? (graphSegment.current ? 0.68 : 0.48) : 0.62),
-                      isCenterDivider ? null : (laneModelKnown ? [5, 7] : [2, 5]));
+                  if (laneBoundaryGeometry.length > 0) {
+                    for (var gb = 0; gb < laneBoundaryGeometry.length; gb++) {
+                      var boundary = laneBoundaryGeometry[gb];
+                      var boundaryStart = localPoint(boundary.start, ego);
+                      var boundaryFinish = localPoint(boundary.finish, ego);
+                      if (!boundaryStart || !boundaryFinish) continue;
+                      var isCenterDivider = boundary.centerDivider === true;
+                      addLine([boundaryStart, boundaryFinish],
+                        isCenterDivider ? "#c5aa78" : (laneModelKnown ? "#8799a7" : "#b18b56"),
+                        isCenterDivider ? 1.1 : (graphSegment.current ? 0.95 : 0.78),
+                        isCenterDivider ? 0.76 : (laneModelKnown ? (graphSegment.current ? 0.68 : 0.48) : 0.62),
+                        isCenterDivider ? null : (laneModelKnown ? [5, 7] : [2, 5]));
+                    }
+                  } else {
+                    // Compatibility fallback for snapshots produced before joined
+                    // lane-marking geometry became available.
+                    var centerDivider = Number(graphLaneModel.centerDividerOffset);
+                    var hasCenterDivider = isFinite(centerDivider);
+                    for (var gb = 0; gb < graphBoundaries.length; gb++) {
+                      var boundaryOffset = Number(graphBoundaries[gb]);
+                      if (!isFinite(boundaryOffset)) continue;
+                      var isCenterDivider = hasCenterDivider && Math.abs(boundaryOffset - centerDivider) < 0.05;
+                      addLine([
+                        {x: graphStart.x + gnx * boundaryOffset, y: graphStart.y + gny * boundaryOffset, z: graphStart.z - 0.055},
+                        {x: graphFinish.x + gnx * boundaryOffset, y: graphFinish.y + gny * boundaryOffset, z: graphFinish.z - 0.055}
+                      ], isCenterDivider ? "#c5aa78" : (laneModelKnown ? "#8799a7" : "#b18b56"),
+                        isCenterDivider ? 1.1 : (graphSegment.current ? 0.95 : 0.78),
+                        isCenterDivider ? 0.76 : (laneModelKnown ? (graphSegment.current ? 0.68 : 0.48) : 0.62),
+                        isCenterDivider ? null : (laneModelKnown ? [5, 7] : [2, 5]));
+                    }
                   }
                 }
               }
