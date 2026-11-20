@@ -7849,14 +7849,16 @@ state._roadmindHelpers.updateVehicleDetection = function(dt)
   end
 
   state.vehicleRegistryTimer = state.vehicleRegistryTimer + elapsed
+  local registryStarted = nil
   if not state.vehicleRegistryWork and state.vehicleRegistryTimer >= updateInterval then
     state.vehicleRegistryTimer = state.vehicleRegistryTimer % updateInterval
+    registryStarted = M.performanceProfiler.start()
     state._roadmindHelpers.beginVehicleRegistryRefresh()
   end
   -- Keep advancing a single registry build in small pieces on consecutive GE
   -- frames. Detection below continues against the previous complete snapshot.
   if state.vehicleRegistryWork then
-    local registryStarted = M.performanceProfiler.start()
+    registryStarted = registryStarted or M.performanceProfiler.start()
     state._roadmindHelpers.stepVehicleRegistryRefresh(VEHICLE_REGISTRY_BATCH_SIZE)
     M.performanceProfiler.stop("traffic_registry", registryStarted)
   end
