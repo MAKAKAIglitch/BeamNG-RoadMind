@@ -167,6 +167,7 @@ const EN = {
   stale: "stale",
   carCamera: "Camera visibility model",
   carSim: "BeamNG vehicle bounds",
+  unverified: "unverified",
   refresh: "Refresh",
   disclaimer: "Triangles are a render-only surface estimate between nearby LiDAR returns. They are not used by the planner."
 }
@@ -195,6 +196,7 @@ const RU = {
   stale: "устарел",
   carCamera: "Модель видимости камер",
   carSim: "Габариты машины BeamNG",
+  unverified: "не подтверждён",
   refresh: "Обновить",
   disclaimer: "Треугольники — визуальная аппроксимация поверхности между близкими точками LiDAR. Планировщик их не использует."
 }
@@ -202,7 +204,7 @@ const RU = {
 const locale = ref("en-US")
 const mode = ref("follow")
 const loading = ref(false)
-const snapshot = ref({ vehicle: null, targets: [], obstacles: [], lidarPoints: [], road: {}, route: [] })
+const snapshot = ref({ vehicle: null, targets: [], candidates: [], obstacles: [], lidarPoints: [], road: {}, route: [] })
 let timer = null
 
 const BOX_EDGES = [
@@ -544,29 +546,51 @@ function buildBox(centerWorld, dimensions, orientation) {
   return { edges, top: topPoints, side: sidePoints }
 }
 
-const vehicles = computed(() => (snapshot.value.targets || []).map(track => {
-  const center = track.predictedPosition || track.position
-  const projected = projectWorld(center)
-  if (!projected || projected.x < -40 || projected.x > 520 || projected.y < -40 || projected.y > 560) return null
-  const age = Number(track.dataAge || 0)
-  const state = track.status === "confirmed" && age < 0.55 ? "visible"
-    : (track.status === "stale" || age > 1 ? "stale" : "predicted")
-  const sources = track.sourceSensors || []
-  const source = sources.some(s => s.sensor === "camera") ? t("carCamera") : t("carSim")
-  const box = buildBox(center, track.dimensions, track.orientation)
-  const delta = worldToLocal(center)
-  const distance = delta ? Math.sqrt(delta.f * delta.f + delta.r * delta.r) : 0
-  return {
-    id: track.trackId || "vehicle",
-    edges: box ? box.edges : [],
-    top: box ? box.top : "",
-    state: t(state),
-    source,
-    edgeClass: state === "visible" ? "vehicle-edge-visible" : state === "stale" ? "vehicle-edge-stale" : "vehicle-edge-predicted",
-    topClass: state === "visible" ? "vehicle-top-visible" : "vehicle-top-predicted",
-    distance: distance.toFixed(1)
+const vehicles = computed(() => {
+  const all = [
+    ...(snapshot.value.targets || []).map(track => ({ ...track, candidate: false })),
+    ...(snapshot.value.candidates || []).map(candidate => ({ ...candidate, candidate: true }))
+  ]
+  const seen = new Set()
+  const result = []
+
+  for (const track of all) {
+    const key = track.sourceVehicleId != null
+      ? String(track.sourceVehicleId)
+      : String(track.trackId || track.candidateId || "")
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+
+    const center = track.predictedPosition || track.position
+    const projected = projectWorld(center)
+    if (!projected || projected.x < -40 || projected.x > 520 || projected.y < -40 || projected.y > 560) continue
+
+    const age = Number(track.dataAge || 0)
+    const status = track.candidate && track.visibility !== "visible" ? "unverified"
+      : (track.status === "confirmed" && age < 0.75 ? "visible"
+        : (track.status === "stale" || age > 1 ? "stale" : "predicted"))
+    const sources = track.sourceSensors || []
+    const source = sources.some(s => s.sensor === "camera") ? t("carCamera") : t("carSim")
+    const box = buildBox(center, track.dimensions, track.orientation)
+    const delta = worldToLocal(center)
+    const distance = delta ? Math.sqrt(delta.f * delta.f + delta.r * delta.r) : 0
+
+    result.push({
+      id: track.trackId || track.candidateId || key,
+      edges: box ? box.edges : [],
+      top: box ? box.top : "",
+      state: status === "unverified" ? t("unverified") : t(status),
+      source,
+      edgeClass: status === "visible" ? "vehicle-edge-visible"
+        : status === "unverified" ? "vehicle-edge-unverified"
+          : status === "stale" ? "vehicle-edge-stale" : "vehicle-edge-predicted",
+      topClass: status === "unverified" ? "vehicle-top-unverified"
+        : status === "visible" ? "vehicle-top-visible" : "vehicle-top-predicted",
+      distance: distance.toFixed(1)
+    })
   }
-}).filter(Boolean))
+  return result.sort((a, b) => Number(a.distance) - Number(b.distance))
+})
 
 const obstacles = computed(() => (snapshot.value.obstacles || []).map(obstacle => {
   const p = projectWorld(obstacle.position)
@@ -686,9 +710,11 @@ onBeforeUnmount(() => {
 .obstacle-markers circle { fill: #d9e3e9; fill-opacity: 0.12; stroke: #d2dee7; stroke-width: 1.1; }
 .obstacle-markers path { fill: none; stroke: #d2dee7; stroke-width: 0.8; stroke-opacity: 0.75; }
 .vehicle-edge-visible { stroke: #70d7c3; stroke-width: 1.5; }
+.vehicle-edge-unverified { stroke: #e6c36b; stroke-width: 1.25; stroke-dasharray: 3 2; }
 .vehicle-edge-predicted { stroke: #e6c36b; stroke-width: 1.15; stroke-dasharray: 3 2; }
 .vehicle-edge-stale { stroke: #8795a2; stroke-width: 1; stroke-dasharray: 2 3; }
 .vehicle-top-visible { fill: #24645e; fill-opacity: 0.30; stroke: none; }
+.vehicle-top-unverified { fill: #80682e; fill-opacity: 0.24; stroke: none; }
 .vehicle-top-predicted { fill: #80682e; fill-opacity: 0.24; stroke: none; }
 .ego-side { fill: #30404d; fill-opacity: 0.92; stroke: #d7e5ee; stroke-width: 1.2; }
 .ego-top { fill: #d5e0e8; fill-opacity: 0.92; stroke: #f5fbff; stroke-width: 1.5; }
