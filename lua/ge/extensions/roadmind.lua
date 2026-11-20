@@ -7669,7 +7669,7 @@ function M.getPerceptionSnapshot()
     local observation = lidarObservations[i]
     local timestamp = tonumber(observation and observation.timestamp)
     local point = observation and asVec3(observation.position)
-    if point and timestamp and now - timestamp >= -0.1 and now - timestamp <= 3.0 then
+    if position and point and timestamp and now - timestamp >= -0.1 and now - timestamp <= 3.0 then
       local dx = point.x - position.x
       local dy = point.y - position.y
       local dz = point.z - position.z
