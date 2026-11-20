@@ -154,6 +154,10 @@ local state = {
   sessionStaticMap = {},
   sessionStaticObservationIds = {},
   sessionStaticObservationOrder = {},
+  sessionStaticObservationCursor = 1,
+  sessionStaticMapOutputCache = nil,
+  sessionStaticMapOutputCenter = nil,
+  sessionStaticMapLastRadius = nil,
   sessionStaticMapCount = 0,
   sessionStaticMapRevision = 0,
   sessionStaticMapDistance = 0,
@@ -4479,8 +4483,13 @@ buildWorldModel = function()
 
   local staticMapChanged = false
   local lastPrunePosition = asVec3(state.sessionStaticMapLastPrunePosition)
-  local shouldPrune = egoPosition and (not lastPrunePosition
+  local radiusChanged = tonumber(state.sessionStaticMapLastRadius) ~= mapRadius
+  local shouldPrune = egoPosition and (not lastPrunePosition or radiusChanged
     or (egoPosition - lastPrunePosition):length() >= SESSION_STATIC_MAP_PRUNE_STEP_M)
+  local staticCellCount = tonumber(state.sessionStaticMapCount) or 0
+  if staticCellCount == 0 and next(state.sessionStaticMap) ~= nil then
+    for _ in pairs(state.sessionStaticMap) do staticCellCount = staticCellCount + 1 end
+  end
   if shouldPrune then
     local radiusSquared = mapRadius * mapRadius
     local retained = 0
@@ -4497,11 +4506,14 @@ buildWorldModel = function()
         end
       else
         state.sessionStaticMap[key] = nil
+        staticMapChanged = true
       end
     end
+    staticCellCount = retained
     state.sessionStaticMapCount = retained
     state.sessionStaticMapLastPrunePosition = vectorToPlainTable(egoPosition)
   end
+  state.sessionStaticMapLastRadius = mapRadius
 
   local staticCells = state.sessionStaticMap
   local processedIds = state.sessionStaticObservationIds
@@ -4520,18 +4532,31 @@ buildWorldModel = function()
           or (sourceName .. ":" .. tostring(observation.timestamp or now) .. ":" .. tostring(i))
         if not processedIds[stableId] then
           processedIds[stableId] = true
+          local processedCursor = math.max(1, tonumber(state.sessionStaticObservationCursor) or 1)
           processedOrder[#processedOrder + 1] = stableId
-          if #processedOrder > SESSION_STATIC_MAP_MAX_IDS then
-            local expiredId = table.remove(processedOrder, 1)
+          if #processedOrder - processedCursor + 1 > SESSION_STATIC_MAP_MAX_IDS then
+            local expiredId = processedOrder[processedCursor]
+            processedOrder[processedCursor] = false
+            processedCursor = processedCursor + 1
             if expiredId then processedIds[expiredId] = nil end
           end
+          if processedCursor > 4096 and processedCursor > #processedOrder * 0.5 then
+            local compactOrder = {}
+            for orderIndex = processedCursor, #processedOrder do
+              local retainedId = processedOrder[orderIndex]
+              if retainedId then compactOrder[#compactOrder + 1] = retainedId end
+            end
+            processedOrder = compactOrder
+            state.sessionStaticObservationOrder = processedOrder
+            processedCursor = 1
+          end
+          state.sessionStaticObservationCursor = processedCursor
 
           local point = asVec3(observation.position)
           if point then
             local key = state._roadmindHelpers.worldObstacleCellKey(point)
             local cell = staticCells[key]
             local timestamp = tonumber(observation.timestamp) or now
-            staticMapChanged = true
             local confidence = tonumber(observation.confidence)
               or (sourceName == "ultrasonic" and 0.58 or 0.68)
             if not cell then
@@ -4545,8 +4570,12 @@ buildWorldModel = function()
                 confidence = confidence,
                 sourceMask = {[sourceName] = true}
               }
+              staticCellCount = staticCellCount + 1
+              staticMapChanged = true
             else
               local lastPosition = asVec3(cell.lastPosition or cell.position)
+              local previousCenter = asVec3(cell.position)
+              local hadSource = cell.sourceMask and cell.sourceMask[sourceName] == true
               local delta = lastPosition and (point - lastPosition):length() or math.huge
               if delta <= WORLD_MODEL_OBSTACLE_CELL_SIZE * 0.72 then
                 cell.hitCount = (cell.hitCount or 0) + 1
@@ -4563,6 +4592,11 @@ buildWorldModel = function()
                 cell.confidence = math.max(tonumber(cell.confidence) or 0, confidence)
                 cell.sourceMask = cell.sourceMask or {}
                 cell.sourceMask[sourceName] = true
+                local updatedCenter = asVec3(cell.position)
+                if not hadSource or not previousCenter or
+                    (updatedCenter - previousCenter):length() >= 0.05 then
+                  staticMapChanged = true
+                end
               elseif now - (cell.lastObservedAt or 0) > 1.25 then
                 staticCells[key] = {
                   hitCount = 1,
@@ -4575,6 +4609,7 @@ buildWorldModel = function()
                   confidence = confidence,
                   sourceMask = {[sourceName] = true}
                 }
+                staticMapChanged = true
               else
                 cell.conflictCount = (cell.conflictCount or 0) + 1
               end
@@ -4585,67 +4620,82 @@ buildWorldModel = function()
     end
   end
 
-  -- The radius and hard cell cap are independent safeguards.
-  local staticCellCount = 0
-  for _ in pairs(staticCells) do
-    staticCellCount = staticCellCount + 1
-  end
-
-  while staticCellCount > SESSION_STATIC_MAP_MAX_CELLS do
-    local oldestKey, oldestTimestamp = nil, math.huge
+  -- If the hard cap is exceeded, find the oldest cells in one batch.
+  -- This avoids a full 20,000-cell scan for every single eviction.
+  if staticCellCount > SESSION_STATIC_MAP_MAX_CELLS then
+    local oldest = {}
     for key, cell in pairs(staticCells) do
-      local timestamp = tonumber(cell.lastObservedAt) or -math.huge
-      if timestamp < oldestTimestamp then
-        oldestKey, oldestTimestamp = key, timestamp
-      end
+      oldest[#oldest + 1] = {
+        key = key,
+        timestamp = tonumber(cell.lastObservedAt) or -math.huge
+      }
     end
-    if not oldestKey then break end
-    staticCells[oldestKey] = nil
-    staticCellCount = staticCellCount - 1
+    table.sort(oldest, function(a, b) return a.timestamp < b.timestamp end)
+    local excess = staticCellCount - SESSION_STATIC_MAP_MAX_CELLS
+    for i = 1, math.min(excess, #oldest) do
+      staticCells[oldest[i].key] = nil
+      staticCellCount = staticCellCount - 1
+      staticMapChanged = true
+    end
   end
   state.sessionStaticMapCount = staticCellCount
   if staticMapChanged then
     state.sessionStaticMapRevision = (state.sessionStaticMapRevision or 0) + 1
   end
 
-  model.staticGeometry = {}
-  for key, cell in pairs(staticCells) do
-    local point = asVec3(cell.position)
-    local hits = tonumber(cell.hitCount) or 0
-    if point and hits >= 1 then
-      local distance = egoPosition and (point - egoPosition):length() or math.huge
-      if distance <= mapRadius then
-        local sourceSensors = {}
-        for sourceName in pairs(cell.sourceMask or {}) do
-          sourceSensors[#sourceSensors + 1] = sourceName
+  local outputCenter = asVec3(state.sessionStaticMapOutputCenter)
+  local outputCenterMoved = outputCenter and egoPosition
+    and (egoPosition - outputCenter):length() or math.huge
+  local outputNeedsRebuild = staticMapChanged or shouldPrune or radiusChanged
+    or type(state.sessionStaticMapOutputCache) ~= "table"
+    or outputCenterMoved >= SESSION_STATIC_MAP_PRUNE_STEP_M
+  if outputNeedsRebuild then
+    local staticGeometry = {}
+    for key, cell in pairs(staticCells) do
+      local point = asVec3(cell.position)
+      local hits = tonumber(cell.hitCount) or 0
+      if point and hits >= 1 then
+        local distance = egoPosition and (point - egoPosition):length() or math.huge
+        if distance <= mapRadius then
+          local sourceSensors = {}
+          for sourceName in pairs(cell.sourceMask or {}) do
+            sourceSensors[#sourceSensors + 1] = sourceName
+          end
+          table.sort(sourceSensors)
+          staticGeometry[#staticGeometry + 1] = {
+            geometryId = key,
+            position = vectorToPlainTable(point),
+            classification = "stable-static-candidate",
+            sourceKind = "session-map-multi-sensor",
+            sourceSensors = sourceSensors,
+            firstObservedAt = cell.firstObservedAt,
+            lastObservedAt = cell.lastObservedAt,
+            dataAge = round2(math.max(0, now - (cell.lastObservedAt or now))),
+            hitCount = hits,
+            conflictCount = cell.conflictCount or 0,
+            confidence = math.min(0.92, math.max(
+              tonumber(cell.confidence) or 0,
+              0.45 + math.min(hits, 8) * 0.055
+            ))
+          }
         end
-        table.sort(sourceSensors)
-        model.staticGeometry[#model.staticGeometry + 1] = {
-          geometryId = key,
-          position = vectorToPlainTable(point),
-          classification = "stable-static-candidate",
-          sourceKind = "session-map-multi-sensor",
-          sourceSensors = sourceSensors,
-          firstObservedAt = cell.firstObservedAt,
-          lastObservedAt = cell.lastObservedAt,
-          dataAge = round2(math.max(0, now - (cell.lastObservedAt or now))),
-          hitCount = hits,
-          conflictCount = cell.conflictCount or 0,
-          confidence = math.min(0.92, math.max(
-            tonumber(cell.confidence) or 0,
-            0.45 + math.min(hits, 8) * 0.055
-          ))
-        }
       end
     end
+    table.sort(staticGeometry, function(a, b)
+      local da = egoPosition and (asVec3(a.position) - egoPosition):length() or math.huge
+      local db = egoPosition and (asVec3(b.position) - egoPosition):length() or math.huge
+      return da < db
+    end)
+    while #staticGeometry > SESSION_STATIC_MAP_MAX_OUTPUT do
+      table.remove(staticGeometry)
+    end
+    state.sessionStaticMapOutputCache = staticGeometry
+    state.sessionStaticMapOutputCenter = egoPosition and vectorToPlainTable(egoPosition) or nil
   end
-  table.sort(model.staticGeometry, function(a, b)
-    local da = egoPosition and (asVec3(a.position) - egoPosition):length() or math.huge
-    local db = egoPosition and (asVec3(b.position) - egoPosition):length() or math.huge
-    return da < db
-  end)
-  while #model.staticGeometry > SESSION_STATIC_MAP_MAX_OUTPUT do
-    table.remove(model.staticGeometry)
+  model.staticGeometry = state.sessionStaticMapOutputCache or {}
+
+  if staticMapChanged or outputNeedsRebuild then
+    state.sessionStaticMapRevision = (state.sessionStaticMapRevision or 0) + 1
   end
 
   model.summary = {
@@ -8299,6 +8349,10 @@ function M.onClientStartMission()
   state.sessionStaticMap = {}
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
+  state.sessionStaticObservationCursor = 1
+  state.sessionStaticMapOutputCache = nil
+  state.sessionStaticMapOutputCenter = nil
+  state.sessionStaticMapLastRadius = nil
   state.sessionStaticMapCount = 0
   state.sessionStaticMapDistance = 0
   state.sessionStaticMapLastPosition = nil
@@ -8334,6 +8388,10 @@ function M.onClientEndMission()
   state.sessionStaticMap = {}
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
+  state.sessionStaticObservationCursor = 1
+  state.sessionStaticMapOutputCache = nil
+  state.sessionStaticMapOutputCenter = nil
+  state.sessionStaticMapLastRadius = nil
   state.sessionStaticMapCount = 0
   state.sessionStaticMapDistance = 0
   state.sessionStaticMapLastPosition = nil
@@ -8369,6 +8427,10 @@ function M.clearSessionMap()
   state.sessionStaticMap = {}
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
+  state.sessionStaticObservationCursor = 1
+  state.sessionStaticMapOutputCache = nil
+  state.sessionStaticMapOutputCenter = nil
+  state.sessionStaticMapLastRadius = nil
   state.sessionStaticMapCount = 0
   state.sessionStaticMapRevision = (state.sessionStaticMapRevision or 0) + 1
   state.sessionStaticMapDistance = 0
