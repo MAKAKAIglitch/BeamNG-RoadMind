@@ -44,6 +44,15 @@
           }
         }
 
+        // engineLua callbacks are wrapped as a single Lua expression by BeamNG.
+        // Keep extension initialization and the actual API call in separate requests:
+        // statement separators (;) are invalid inside onBNGAPICallback arguments.
+        function roadmindLua(command, callback) {
+          lua("extensions.roadmind or extensions.load('roadmind')", function () {
+            lua(command, callback);
+          });
+        }
+
         function unwrap(value) {
           if (typeof value === "string") {
             try { value = JSON.parse(value); } catch (error) { return null; }
@@ -68,8 +77,8 @@
             polling = false;
             schedulePoll(700);
           }, 1400);
-          lua(
-            "extensions.load('roadmind'); return extensions.roadmind.getMapSnapshot()",
+          roadmindLua(
+            "extensions.roadmind.getMapSnapshot()",
             function (result) {
               if (destroyed) return;
               if (pollWatchdog) $timeout.cancel(pollWatchdog);
@@ -89,8 +98,8 @@
         }
 
         function setMapEnabled(enabled) {
-          lua(
-            "extensions.load('roadmind'); return extensions.roadmind.setMapEnabled(" +
+          roadmindLua(
+            "extensions.roadmind.setMapEnabled(" +
               (enabled ? "true" : "false") + ")"
           );
         }
