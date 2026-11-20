@@ -4776,8 +4776,8 @@ state._roadmindHelpers.snapshotVehicleBounds = function(vehicle, vehicleId)
 
   -- Spawn OOBB dimensions and its local offset are static for a given
   -- vehicle object. Read the engine OOBB once, then rotate its cached local
-  -- basis with the live vehicle pose instead of querying 5 OOBB properties
-  -- for every vehicle on every registry refresh.
+  -- basis with the live vehicle pose instead of querying its properties on
+  -- every registry refresh.
   if not cached or cached.vehicleObject ~= vehicle then
     local box = safeCall(vehicle, "getSpawnWorldOOBB")
     if not box then return nil end
@@ -4819,59 +4819,83 @@ state._roadmindHelpers.snapshotVehicleBounds = function(vehicle, vehicleId)
     end
 
     local centerOffset = center - position
+    local centerOffsetLocal = {
+      forward = centerOffset:dot(forward),
+      right = centerOffset:dot(right),
+      up = centerOffset:dot(up)
+    }
+    local dimensions = {
+      length = projectedHalfExtent(forward) * 2,
+      width = projectedHalfExtent(right) * 2,
+      height = projectedHalfExtent(up) * 2
+    }
+    local halfValues = {hx, hy, hz}
+    local radius = math.sqrt(hx * hx + hy * hy + hz * hz)
+
+    -- Keep the live vector objects in the cache. Subsequent refreshes update
+    -- them in place with vec3:set(), avoiding a fresh center/axis set per car.
+    local entry = {
+      id = vehicleId,
+      vehicleObject = vehicle,
+      center = vec3(0, 0, 0),
+      position = vec3(0, 0, 0),
+      velocity = vec3(0, 0, 0),
+      forward = vec3(0, 1, 0),
+      right = vec3(1, 0, 0),
+      up = vec3(0, 0, 1),
+      centerOffsetLocal = centerOffsetLocal,
+      dimensions = dimensions,
+      axes = {
+        vec3(1, 0, 0),
+        vec3(0, 1, 0),
+        vec3(0, 0, 1)
+      },
+      half = halfValues,
+      radius = radius
+    }
     cached = {
       vehicleObject = vehicle,
-      centerOffsetLocal = {
-        forward = centerOffset:dot(forward),
-        right = centerOffset:dot(right),
-        up = centerOffset:dot(up)
-      },
+      centerOffsetLocal = centerOffsetLocal,
       axesLocal = axesLocal,
-      half = {hx, hy, hz},
-      radius = math.sqrt(hx * hx + hy * hy + hz * hz),
-      dimensions = {
-        length = projectedHalfExtent(forward) * 2,
-        width = projectedHalfExtent(right) * 2,
-        height = projectedHalfExtent(up) * 2
-      }
+      half = halfValues,
+      radius = radius,
+      dimensions = dimensions,
+      entry = entry
     }
     if cacheById then cacheById[cacheKey] = cached end
   end
 
+  local entry = cached.entry
   local offset = cached.centerOffsetLocal
-  local center = position
-    + forward * offset.forward
-    + right * offset.right
-    + up * offset.up
+  entry.id = vehicleId
+  entry.vehicleObject = vehicle
+  entry.position:set(position.x, position.y, position.z)
+  entry.velocity:set(velocity.x, velocity.y, velocity.z)
+  entry.forward:set(forward.x, forward.y, forward.z)
+  entry.right:set(right.x, right.y, right.z)
+  entry.up:set(up.x, up.y, up.z)
+  entry.center:set(
+    position.x + forward.x * offset.forward + right.x * offset.right + up.x * offset.up,
+    position.y + forward.y * offset.forward + right.y * offset.right + up.y * offset.up,
+    position.z + forward.z * offset.forward + right.z * offset.right + up.z * offset.up
+  )
 
-  local function worldAxis(axis)
-    return forward * axis.forward
-      + right * axis.right
-      + up * axis.up
-  end
   local axesLocal = cached.axesLocal
-  local axes = {
-    worldAxis(axesLocal[1]),
-    worldAxis(axesLocal[2]),
-    worldAxis(axesLocal[3])
-  }
+  for i = 1, 3 do
+    local localAxis = axesLocal[i]
+    entry.axes[i]:set(
+      forward.x * localAxis.forward + right.x * localAxis.right + up.x * localAxis.up,
+      forward.y * localAxis.forward + right.y * localAxis.right + up.y * localAxis.up,
+      forward.z * localAxis.forward + right.z * localAxis.right + up.z * localAxis.up
+    )
+  end
 
-  return {
-    id = vehicleId,
-    vehicleObject = vehicle,
-    center = center,
-    position = position,
-    velocity = velocity,
-    forward = forward,
-    right = right,
-    up = up,
-    centerOffsetLocal = offset,
-    dimensions = cached.dimensions,
-    axes = axes,
-    half = cached.half,
-    radius = cached.radius,
-    registryTimestamp = state.simulationTime
-  }
+  entry.centerOffsetLocal = offset
+  entry.dimensions = cached.dimensions
+  entry.half = cached.half
+  entry.radius = cached.radius
+  entry.registryTimestamp = state.simulationTime
+  return entry
 end
 
 
