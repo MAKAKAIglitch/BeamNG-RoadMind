@@ -5808,7 +5808,27 @@ updateLocalTrajectoryPlanner = function()
   end
 
   -- Lane offsets are defined relative to the directed NavGraph edge. Convert
-  -- them into the route's local right-vector frame before building candidates.
+  -- graph lane centre points into the route's local right-vector frame so curved
+  -- or slightly offset route corridors do not silently flip/shift lane choices.
+  local graphSegmentProgress = nil
+  if graphSegment then
+    local graphStart = asVec3(graphSegment.start)
+    local graphFinish = asVec3(graphSegment.finish)
+    if graphStart and graphFinish then
+      local graphDelta = vec3(graphFinish.x - graphStart.x, graphFinish.y - graphStart.y, 0)
+      local graphLengthSquared = graphDelta:dot(graphDelta)
+      if graphLengthSquared > 0.25 then
+        local toVehicle = vec3(
+          footprint.center.x - graphStart.x,
+          footprint.center.y - graphStart.y,
+          0
+        )
+        graphSegmentProgress = math.max(0, math.min(1,
+          toVehicle:dot(graphDelta) / graphLengthSquared))
+      end
+    end
+  end
+
   local laneOffsetSign = 1
   local graphForward = asVec3(state.roadState.roadDirection)
   if graphForward then
@@ -5820,15 +5840,22 @@ updateLocalTrajectoryPlanner = function()
   end
 
   local laneRecords = {}
-  local function addLaneRecord(laneId, laneIndex, laneOffset, laneWidth)
+  local function addLaneRecord(laneId, laneIndex, laneOffset, laneWidth, laneStartPoint, laneFinishPoint)
     laneIndex = tonumber(laneIndex)
     laneOffset = tonumber(laneOffset)
     laneWidth = tonumber(laneWidth)
     if laneIndex and laneOffset then
+      local routeOffset = laneOffset * laneOffsetSign
+      local laneStart = asVec3(laneStartPoint)
+      local laneFinish = asVec3(laneFinishPoint)
+      if laneStart and laneFinish and graphSegmentProgress ~= nil then
+        local lanePoint = laneStart + (laneFinish - laneStart) * graphSegmentProgress
+        routeOffset = (lanePoint - projection):dot(routeRight)
+      end
       laneRecords[#laneRecords + 1] = {
         id = laneId and tostring(laneId) or nil,
         index = laneIndex,
-        offset = laneOffset * laneOffsetSign,
+        offset = routeOffset,
         width = laneWidth
       }
     end
@@ -5838,7 +5865,7 @@ updateLocalTrajectoryPlanner = function()
     for i = 1, #graphSegment.lanes do
       local lane = graphSegment.lanes[i]
       if type(lane) == "table" then
-        addLaneRecord(lane.id, lane.index, lane.centerOffset, lane.width)
+        addLaneRecord(lane.id, lane.index, lane.centerOffset, lane.width, lane.start, lane.finish)
       end
     end
   end
