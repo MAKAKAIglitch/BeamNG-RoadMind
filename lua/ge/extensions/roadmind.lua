@@ -4639,9 +4639,6 @@ buildWorldModel = function()
     end
   end
   state.sessionStaticMapCount = staticCellCount
-  if staticMapChanged then
-    state.sessionStaticMapRevision = (state.sessionStaticMapRevision or 0) + 1
-  end
 
   local outputCenter = asVec3(state.sessionStaticMapOutputCenter)
   local outputCenterMoved = outputCenter and egoPosition
