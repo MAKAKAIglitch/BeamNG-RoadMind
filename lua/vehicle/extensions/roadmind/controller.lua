@@ -34,7 +34,11 @@ local state = {
   lastSteering = 0,
   lastThrottle = 0,
   lastBrake = 0,
-  lastTargetDistance = nil
+  lastTargetDistance = nil,
+  aebHazardLightsActive = false,
+  aebHazardLightsOwned = false,
+  aebHazardSavedLeft = false,
+  aebHazardSavedRight = false
 }
 
 local function clamp(value, minimum, maximum)
@@ -352,6 +356,48 @@ function M.setAebBrake(value)
   return true
 end
 
+function M.setAebHazardLights(enabled)
+  enabled = enabled == true
+  if enabled == state.aebHazardLightsActive then return true end
+
+  local values = type(electrics) == "table" and type(electrics.values) == "table"
+    and electrics.values or {}
+  if enabled then
+    local left = values.signal_left_input == 1 or values.signal_left_input == true
+    local right = values.signal_right_input == 1 or values.signal_right_input == true
+    local alreadyWarning = values.hazard_enabled == 1 or values.hazard_enabled == true
+      or (left and right)
+
+    state.aebHazardLightsActive = true
+    state.aebHazardLightsOwned = not alreadyWarning
+    state.aebHazardSavedLeft = left
+    state.aebHazardSavedRight = right
+
+    if state.aebHazardLightsOwned and type(electrics.set_warn_signal) == "function" then
+      pcall(electrics.set_warn_signal, true)
+    end
+  else
+    state.aebHazardLightsActive = false
+    if state.aebHazardLightsOwned then
+      if type(electrics.set_warn_signal) == "function" then
+        pcall(electrics.set_warn_signal, false)
+      end
+      -- Restore the driver's turn signal selection after the warning ends.
+      if state.aebHazardSavedLeft and type(electrics.set_left_signal) == "function" then
+        pcall(electrics.set_left_signal, true, false)
+      end
+      if state.aebHazardSavedRight and type(electrics.set_right_signal) == "function" then
+        pcall(electrics.set_right_signal, true, false)
+      end
+    end
+    state.aebHazardLightsOwned = false
+    state.aebHazardSavedLeft = false
+    state.aebHazardSavedRight = false
+  end
+
+  return true
+end
+
 function M.setSafetyStop(reason)
   if state.enabled then
     state.safetyLatched = true
@@ -395,6 +441,7 @@ function M.updateGFX(dt)
 end
 
 function M.onReset()
+  if state.aebHazardLightsActive then M.setAebHazardLights(false) end
   if state.adasBrakeActive then
     emit("brake", clamp(state.adasDriverBrake or 0, 0, 1))
   end
