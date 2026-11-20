@@ -6697,6 +6697,7 @@ function M.getPerceptionSnapshot()
     schemaVersion = 2,
     timestamp = state.simulationTime,
     frameAge = state.frameAge,
+    lidarTimestamp = latest.sensorTimestamps and latest.sensorTimestamps.lidar or nil,
     vehicle = vehicle,
     targets = targets,
     candidates = candidates,
