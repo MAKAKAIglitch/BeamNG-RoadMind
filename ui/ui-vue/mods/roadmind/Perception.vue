@@ -20,6 +20,10 @@
           </pattern>
         </defs>
         <rect width="480" height="520" fill="url(#roadmind-perception-grid)" />
+        <g class="lidar-mesh">
+          <polygon v-for="face in lidarMesh" :key="face.id" :points="face.points"
+            :fill="face.fill" stroke="#6dbeb4" stroke-opacity="0.24" stroke-width="0.65" />
+        </g>
         <path v-if="roadPath" :d="roadPath" fill="none" stroke="#526273" stroke-width="62" opacity="0.28" stroke-linecap="round" />
         <path v-if="roadPath" :d="roadPath" fill="none" stroke="#9aa8b5" stroke-width="1.5" stroke-dasharray="5 7" />
         <path v-if="routePath" :d="routePath" fill="none" stroke="#65cdbb" stroke-width="2.2" stroke-dasharray="7 5" />
@@ -28,10 +32,11 @@
         </g>
         <g v-for="car in vehicles" :key="car.id"
           :transform="'translate(' + car.x + ' ' + car.y + ') rotate(' + car.angle + ')'">
-          <rect :x="-car.w / 2" :y="-car.l / 2" :width="car.w" :height="car.l"
-            rx="3" :fill="car.fill" :stroke="car.stroke" stroke-width="1.4" />
-          <path d="M -4 -5 L 0 -11 L 4 -5" fill="none" stroke="#e6edf5" stroke-width="1" />
-          <text x="0" :y="car.l / 2 + 11" text-anchor="middle" class="object-label">{{ car.label }}</text>
+          <polygon :points="car.side" fill="#101b24" stroke="#7b918f" stroke-width="0.8" />
+          <polygon :points="car.body" :fill="car.fill" :stroke="car.stroke" stroke-width="1.2" stroke-linejoin="round" />
+          <polygon :points="car.cabin" fill="#183b48" stroke="#8bcfc5" stroke-width="0.8" stroke-linejoin="round" />
+          <path :d="car.heading" fill="none" stroke="#f0fff9" stroke-width="1.2" stroke-linecap="round" />
+          <text x="0" :y="car.l / 2 + 12" text-anchor="middle" class="object-label">{{ car.label }}</text>
         </g>
         <g transform="translate(240 430)">
           <rect x="-12" y="-25" width="24" height="50" rx="7" fill="#d9e6ef" stroke="#f4f8fb" stroke-width="1.6" />
@@ -145,7 +150,7 @@ const RU = {
 const locale = ref("en-US")
 const mode = ref("top")
 const loading = ref(false)
-const snapshot = ref({ vehicle: null, targets: [], obstacles: [], road: {}, route: [] })
+const snapshot = ref({ vehicle: null, targets: [], lidarPoints: [], obstacles: [], road: {}, route: [] })
 let timer = null
 
 function t(key) {
@@ -169,8 +174,8 @@ function project(p) {
   const dz = Number(p.z || 0) - Number(v.position.z || 0)
   const f = dx * v.forward.x + dy * v.forward.y + dz * (v.forward.z || 0)
   const r = dx * v.right.x + dy * v.right.y + dz * (v.right.z || 0)
-  const k = mode.value === "follow" ? Math.max(1.7, 5.2 - Math.max(0, f) * 0.035) : 4.0
-  return { x: 240 + r * k, y: 430 - f * k, f, r, k }
+  const k = mode.value === "follow" ? Math.max(1.7, 5.2 - Math.max(0, f) * 0.035) : 3.35
+  return { x: 240 + r * k, y: 448 - f * k, f, r, k }
 }
 function toPath(points) {
   const pts = (points || []).map(project).filter(Boolean)
@@ -198,17 +203,56 @@ const vehicles = computed(() => (snapshot.value.targets || []).map(track => {
     : (track.status === "stale" || age > 1 ? "stale" : "predicted")
   const sources = track.sourceSensors || []
   const source = sources.some(s => s.sensor === "camera") ? t("carCamera") : t("carSim")
+  const top = l * 0.27
+  const inset = w * 0.28
+  const lift = Math.max(2, w * 0.18)
   return {
     id: track.trackId || "vehicle",
     x: p.x, y: p.y, w, l, angle,
+    side: (-w/2)+","+(-l/2+lift)+" "+(w/2)+","+(-l/2+lift)+" "+(w/2)+","+ (l/2+lift)+" "+(-w/2)+","+(l/2+lift),
+    body: (-w/2)+","+(-l/2+lift)+" "+(w/2)+","+(-l/2+lift)+" "+(w/2)+","+ (l/2)+" "+(-w/2)+","+(l/2),
+    cabin: (-w/2+inset)+","+(-l/2+top)+" "+(w/2-inset)+","+(-l/2+top)+" "+(w/2-inset)+","+(l/2-top)+" "+(-w/2+inset)+","+(l/2-top),
+    heading: "0,"+(-l/2-2)+" 0,"+(-l/2-6),
     label: state === "visible" ? "CAR" : state === "stale" ? "STALE" : "PRED",
-    state: t(state),
-    source,
+    state: t(state), source,
     fill: state === "visible" ? "#245d59" : state === "stale" ? "#535d69" : "#65552f",
     stroke: state === "visible" ? "#71d8c5" : state === "stale" ? "#8b98a5" : "#e6c36b",
     distance: Math.sqrt(p.f * p.f + p.r * p.r).toFixed(1)
   }
 }).filter(Boolean))
+
+const lidarMesh = computed(() => {
+  const points = (snapshot.value.lidarPoints || []).map((point, index) => {
+    const p = project(point)
+    return p && p.x >= -20 && p.x <= 500 && p.y >= -20 && p.y <= 540
+      ? { ...p, z: Number(point.z) || 0, index } : null
+  }).filter(Boolean)
+  if (points.length < 3) return []
+  const faces = []
+  const used = new Set()
+  const maxEdge = 7.5
+  for (let i = 0; i < points.length && faces.length < 900; i++) {
+    const a = points[i]
+    const nearest = points.map((b, j) => ({ b, j, d: Math.hypot(a.f-b.f, a.r-b.r) }))
+      .filter(v => v.j !== i && v.d > 0.18 && v.d <= maxEdge)
+      .sort((x,y) => x.d-y.d).slice(0, 5)
+    for (let j = 0; j < nearest.length && faces.length < 900; j++) {
+      for (let k = j+1; k < nearest.length && faces.length < 900; k++) {
+        const b = nearest[j].b, d = nearest[k].b
+        if (Math.abs(a.z-b.z)>1.6 || Math.abs(a.z-d.z)>1.6 || Math.hypot(b.f-d.f,b.r-d.r)>maxEdge) continue
+        const key = [a.index, nearest[j].j, nearest[k].j].sort((x,y)=>x-y).join(":")
+        if (used.has(key)) continue
+        used.add(key)
+        faces.push({
+          id:key,
+          points:[a,b,d].map(v=>v.x.toFixed(1)+","+v.y.toFixed(1)).join(" "),
+          fill: Math.abs(a.z+b.z+d.z)/3 > 1.2 ? "#397f83" : "#315e6c"
+        })
+      }
+    }
+  }
+  return faces
+})
 const obstacles = computed(() => (snapshot.value.obstacles || []).map(o => {
   const p = project(o.position)
   if (!p || p.x < -30 || p.x > 510 || p.y < -30 || p.y > 550) return null
@@ -246,7 +290,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
-.perception { height: 78vh; min-height: 460px; display: flex; flex-direction: column; gap: 0.55rem; padding: 0.7rem; overflow: hidden; color: #d8e1e9; background: #10161d; }
+.perception { height: 78vh; min-height: 460px; display: flex; flex-direction: column; gap: 0.55rem; padding: 0.7rem; overflow: hidden; color: #d8e1e9; background: #10161d; border-radius: 14px; }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; }
 .kicker { color: #78cbbb; font-size: 0.65rem; letter-spacing: 0.16em; font-weight: 700; }
 .header h2 { margin: 0.1rem 0; font-size: 1.05rem; font-weight: 650; }
@@ -254,7 +298,7 @@ onBeforeUnmount(() => {
 .switcher { display: flex; gap: 0.35rem; }
 .switcher button, footer button { border: 1px solid #33414d; background: #18212a; color: #bfcbd4; border-radius: 4px; padding: 0.35rem 0.6rem; font: inherit; font-size: 0.72rem; }
 .switcher button.active { border-color: #66c5b4; background: #1c3b3a; color: #c8fff3; }
-.scene { position: relative; flex: 1 1 auto; min-height: 260px; overflow: hidden; border: 1px solid #293642; border-radius: 6px; background: #111a22; }
+.scene { position: relative; flex: 1 1 auto; min-height: 260px; overflow: hidden; border: 1px solid #293642; border-radius: 16px; background: #111a22; }
 .scene svg { display: block; width: 100%; height: 100%; }
 .overlay-label { fill: #8093a3; font-size: 9px; font-family: sans-serif; }
 .ego-label { fill: #a9bac8; font-size: 9px; font-weight: 700; }
