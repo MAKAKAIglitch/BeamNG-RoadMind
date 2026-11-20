@@ -369,10 +369,12 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 **Goal:** provide a lightweight in-game mini-application that visualizes the interpreted environment, similar in purpose to a modern vehicle perception display, without duplicating sensor simulation or rendering a second heavy scene.
 
 - [x] Add a separate compact **RoadMind Perception** application/window with a dark, restrained, high-contrast interface.
-- [x] Replace the flat map with a perspective 3D view, using a rear-follow camera offset behind/above the ego vehicle and a switchable elevated top view.
-- [x] Export a bounded local LiDAR point snapshot (up to 1,400 points), preferring the accumulated session cloud and falling back to the latest scan.
-- [x] Spatially sample up to 420 points and triangulate nearby returns into a Delaunay mesh; reject long edges, large height jumps and degenerate faces to limit false surfaces.
-- [x] Render the NavGraph corridor as a translucent estimated road surface, plus the active route, OBB vehicle geometry and generic obstacle clusters in the same perspective; lane boundaries are not fabricated.
+- [x] Replace the flat map with a perspective 3D view, using a modestly offset rear-follow camera and a separate elevated 360-degree overview.
+- [x] Export a bounded local LiDAR snapshot (up to 1,400 points); when persistent accumulation is off, keep a transient 14-second rolling window capped at 1,800 points.
+- [x] Voxel-sample up to 600 points while preserving height layers, triangulate horizontal/lateral/longitudinal slices and reject long or degenerate faces; generated geometry remains an approximation of actual returns.
+- [x] Render the NavGraph corridor as a translucent estimated road surface, the active route, generic obstacle clusters and OBB-derived miniature 3D cars; lane boundaries are not fabricated.
+- [x] Include recent in-frustum vehicle candidates before bounded occlusion confirmation, with a distinct unverified style; candidates remain outside the World Model, ADAS and planner until confirmed.
+- [x] Expose registry, camera-zone, candidate, track and rendered-car counts to diagnose missing traffic markers.
 - [x] Round the perception window and scene viewport corners.
 - [ ] Show traffic signs and traffic lights with concise text/state labels (for example, speed limit, STOP, parking restriction, turn warning, SIGNAL: RED) and their current camera/visibility status.
 - [ ] Show lane lines only when measured or supported by map geometry; render an explicit unknown/unavailable state when lane data is missing.
