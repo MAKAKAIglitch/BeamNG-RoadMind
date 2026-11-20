@@ -2463,7 +2463,9 @@ function M.setSetting(key, value)
   local candidate = state._roadmindHelpers.copySettings(state.settings)
   candidate[key] = value
   if key ~= "preset" and key ~= "performanceProfilerEnabled"
-      and not tostring(key):match("^adas") then candidate.preset = "custom" end
+      and not tostring(key):match("^adas") and not tostring(key):match("^map") then
+    candidate.preset = "custom"
+  end
   local normalized = state._roadmindHelpers.normalizeSettings(candidate)
 
   if type(DEFAULT_SETTINGS[key]) == "boolean" and type(value) ~= "boolean" then
