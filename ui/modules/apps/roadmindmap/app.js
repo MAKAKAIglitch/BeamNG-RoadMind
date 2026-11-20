@@ -370,49 +370,95 @@
           }
 
           var road = snapshotData.road || {};
+          var laneGraph = snapshotData.laneGraph || {};
+          var graphSegments = asArray(laneGraph.segments);
           var corridor = asArray(road.corridor).map(function (point) {
             return localPoint(point, ego);
           }).filter(Boolean);
-          var halfWidth = clamp(Number(road.roadHalfWidth) || 3.5, 2.2, 18);
-          for (var r = 0; r < corridor.length - 1; r++) {
-            var a = corridor[r];
-            var b = corridor[r + 1];
-            var dx = b.x - a.x;
-            var dy = b.y - a.y;
-            var magnitude = Math.sqrt(dx * dx + dy * dy);
-            if (magnitude < 0.2) continue;
-            var nx = -dy / magnitude;
-            var ny = dx / magnitude;
-            var leftA = {x: a.x + nx * halfWidth, y: a.y + ny * halfWidth, z: a.z - 0.10};
-            var rightA = {x: a.x - nx * halfWidth, y: a.y - ny * halfWidth, z: a.z - 0.10};
-            var leftB = {x: b.x + nx * halfWidth, y: b.y + ny * halfWidth, z: b.z - 0.10};
-            var rightB = {x: b.x - nx * halfWidth, y: b.y - ny * halfWidth, z: b.z - 0.10};
-            addPolygon([leftA, rightA, rightB, leftB], "#202b35", 0.97);
-            addLine([leftA, leftB], "#53616c", 1.05, 0.64);
-            addLine([rightA, rightB], "#53616c", 1.05, 0.64);
-          }
 
-          // Lane hints are shown only when the active NavGraph edge exposes
-          // lane-count and lane-width metadata; otherwise lane markings stay absent.
-          var laneModel = road.laneModel || {};
-          var laneBoundaries = laneModel.laneBoundaryOffsets || [];
-          if (laneModel.status === "metadata" && laneBoundaries.length > 0) {
-            for (var li = 0; li < laneBoundaries.length; li++) {
-              var laneOffset = Number(laneBoundaries[li]);
-              if (!isFinite(laneOffset)) continue;
-              for (var ls = 0; ls < corridor.length - 1; ls++) {
-                var la = corridor[ls];
-                var lb = corridor[ls + 1];
-                var ldx = lb.x - la.x;
-                var ldy = lb.y - la.y;
-                var llen = Math.sqrt(ldx * ldx + ldy * ldy);
-                if (llen < 0.2) continue;
-                var lnx = -ldy / llen;
-                var lny = ldx / llen;
-                addLine([
-                  {x: la.x + lnx * laneOffset, y: la.y + lny * laneOffset, z: la.z - 0.055},
-                  {x: lb.x + lnx * laneOffset, y: lb.y + lny * laneOffset, z: lb.z - 0.055}
-                ], "#77838c", 0.85, 0.52, [5, 7]);
+          if (graphSegments.length > 0) {
+            // Render the bounded connected road network, including branches.
+            // Lane marks appear only where NavGraph lane metadata exists.
+            for (var gs = 0; gs < Math.min(graphSegments.length, 96); gs++) {
+              var graphSegment = graphSegments[gs];
+              var graphStart = localPoint(graphSegment.start, ego);
+              var graphFinish = localPoint(graphSegment.finish, ego);
+              if (!graphStart || !graphFinish) continue;
+              var gx = graphFinish.x - graphStart.x;
+              var gy = graphFinish.y - graphStart.y;
+              var gl = Math.sqrt(gx * gx + gy * gy);
+              if (gl < 0.2) continue;
+              var gnx = -gy / gl;
+              var gny = gx / gl;
+              var ghw = clamp(Number(graphSegment.roadHalfWidth) || 3.5, 2.0, 18);
+              var gLeftA = {x: graphStart.x + gnx * ghw, y: graphStart.y + gny * ghw, z: graphStart.z - 0.10};
+              var gRightA = {x: graphStart.x - gnx * ghw, y: graphStart.y - gny * ghw, z: graphStart.z - 0.10};
+              var gLeftB = {x: graphFinish.x + gnx * ghw, y: graphFinish.y + gny * ghw, z: graphFinish.z - 0.10};
+              var gRightB = {x: graphFinish.x - gnx * ghw, y: graphFinish.y - gny * ghw, z: graphFinish.z - 0.10};
+              addPolygon([gLeftA, gRightA, gRightB, gLeftB],
+                graphSegment.current ? "#263b49" : "#202b35", graphSegment.current ? 0.98 : 0.91);
+              addLine([gLeftA, gLeftB], "#53616c", graphSegment.current ? 1.15 : 0.9, 0.66);
+              addLine([gRightA, gRightB], "#53616c", graphSegment.current ? 1.15 : 0.9, 0.66);
+
+              var graphLaneModel = graphSegment.laneModel || {};
+              var graphBoundaries = asArray(graphLaneModel.laneBoundaryOffsets);
+              if (graphLaneModel.status === "metadata") {
+                for (var gb = 0; gb < graphBoundaries.length; gb++) {
+                  var boundaryOffset = Number(graphBoundaries[gb]);
+                  if (!isFinite(boundaryOffset)) continue;
+                  addLine([
+                    {x: graphStart.x + gnx * boundaryOffset, y: graphStart.y + gny * boundaryOffset, z: graphStart.z - 0.055},
+                    {x: graphFinish.x + gnx * boundaryOffset, y: graphFinish.y + gny * boundaryOffset, z: graphFinish.z - 0.055}
+                  ], "#778b99", graphSegment.current ? 1.0 : 0.8,
+                    graphSegment.current ? 0.66 : 0.46, [5, 7]);
+                }
+              }
+
+              var graphLanes = asArray(graphSegment.lanes);
+              for (var gli = 0; gli < graphLanes.length; gli++) {
+                var graphLane = graphLanes[gli];
+                if (graphLane.id === laneGraph.currentLaneId) {
+                  var laneStart = localPoint(graphLane.start, ego);
+                  var laneFinish = localPoint(graphLane.finish, ego);
+                  if (laneStart && laneFinish) {
+                    addLine([laneStart, laneFinish], "#3c8fc8", 1.25, 0.72);
+                  }
+                }
+              }
+            }
+          } else {
+            var halfWidth = clamp(Number(road.roadHalfWidth) || 3.5, 2.2, 18);
+            for (var r = 0; r < corridor.length - 1; r++) {
+              var a = corridor[r], b = corridor[r + 1];
+              var dx = b.x - a.x, dy = b.y - a.y;
+              var magnitude = Math.sqrt(dx * dx + dy * dy);
+              if (magnitude < 0.2) continue;
+              var nx = -dy / magnitude, ny = dx / magnitude;
+              var leftA = {x: a.x + nx * halfWidth, y: a.y + ny * halfWidth, z: a.z - 0.10};
+              var rightA = {x: a.x - nx * halfWidth, y: a.y - ny * halfWidth, z: a.z - 0.10};
+              var leftB = {x: b.x + nx * halfWidth, y: b.y + ny * halfWidth, z: b.z - 0.10};
+              var rightB = {x: b.x - nx * halfWidth, y: b.y - ny * halfWidth, z: b.z - 0.10};
+              addPolygon([leftA, rightA, rightB, leftB], "#202b35", 0.97);
+              addLine([leftA, leftB], "#53616c", 1.05, 0.64);
+              addLine([rightA, rightB], "#53616c", 1.05, 0.64);
+            }
+            var fallbackModel = road.laneModel || {};
+            var fallbackBoundaries = asArray(fallbackModel.laneBoundaryOffsets);
+            if (fallbackModel.status === "metadata") {
+              for (var fli = 0; fli < fallbackBoundaries.length; fli++) {
+                var fallbackOffset = Number(fallbackBoundaries[fli]);
+                if (!isFinite(fallbackOffset)) continue;
+                for (var fls = 0; fls < corridor.length - 1; fls++) {
+                  var fa = corridor[fls], fb = corridor[fls + 1];
+                  var fdx = fb.x - fa.x, fdy = fb.y - fa.y;
+                  var fl = Math.sqrt(fdx * fdx + fdy * fdy);
+                  if (fl < 0.2) continue;
+                  var fnx = -fdy / fl, fny = fdx / fl;
+                  addLine([
+                    {x: fa.x + fnx * fallbackOffset, y: fa.y + fny * fallbackOffset, z: fa.z - 0.055},
+                    {x: fb.x + fnx * fallbackOffset, y: fb.y + fny * fallbackOffset, z: fb.z - 0.055}
+                  ], "#77838c", 0.85, 0.52, [5, 7]);
+                }
               }
             }
           }
