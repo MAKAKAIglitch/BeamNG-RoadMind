@@ -222,7 +222,9 @@ const vehicles = computed(() => (snapshot.value.targets || []).map(track => {
 }).filter(Boolean))
 
 const lidarMesh = computed(() => {
-  const points = (snapshot.value.lidarPoints || []).map((point, index) => {
+  const sourcePoints = snapshot.value.lidarPoints || []
+  const stride = Math.max(1, Math.ceil(sourcePoints.length / 320))
+  const points = sourcePoints.filter((_, index) => index % stride === 0).map((point, index) => {
     const p = project(point)
     return p && p.x >= -20 && p.x <= 500 && p.y >= -20 && p.y <= 540
       ? { ...p, z: Number(point.z) || 0, index } : null
