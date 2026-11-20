@@ -4993,7 +4993,7 @@ state._roadmindHelpers.loadLevelRoadGeometry = function(force)
   local totalRoadNodes = state.levelRoadCacheNodeCount or 0
   local cursor = state.levelRoadLoadCursor
   local processedObjects, addedRoads = 0, 0
-  local maxObjectsPerSnapshot = 192
+  local maxObjectsPerSnapshot = 128
 
   while processedObjects < maxObjectsPerSnapshot do
     local nextKey, item = next(objects, cursor)
@@ -5097,6 +5097,11 @@ state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleF
   local radiusChanged = tonumber(state.mapRoadGeometryCacheRange) ~= radiusM
   local roadsChanged = tonumber(state.mapRoadGeometryCacheRoadRevision or -1)
     ~= tonumber(state.levelRoadCacheRevision or 0)
+  if state.mapRoadGeometryCache and not movedEnough and not radiusChanged and roadsChanged
+      and state.levelRoadLoadActive == true
+      and state.simulationTime - (tonumber(state.mapRoadGeometryCacheTime) or -math.huge) < 1.5 then
+    return state.mapRoadGeometryCache, "loading"
+  end
   if state.mapRoadGeometryCache and not movedEnough and not radiusChanged and not roadsChanged then
     return state.mapRoadGeometryCache, "cached-" .. tostring(state.levelRoadCacheStatus or "available")
   end
@@ -8592,10 +8597,6 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
     schemaVersion = 1, status = "unavailable", segments = {}, junctions = {}, connections = {}
   })
   road.laneGraph = nil
-
-  local forwardRangeM = tonumber(state.settings and state.settings.mapForwardRangeM) or 120
-  local decalRoads, decalRoadStatus = state._roadmindHelpers.buildMapRoadGeometry(
-    vehiclePosition, vehicle and vehicle.forward or nil, forwardRangeM)
 
   local forwardRangeM = tonumber(state.settings and state.settings.mapForwardRangeM) or 120
   local decalRoads, decalRoadStatus = state._roadmindHelpers.buildMapRoadGeometry(
