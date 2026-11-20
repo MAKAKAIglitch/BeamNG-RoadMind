@@ -1193,6 +1193,36 @@
           }
           ctx.globalAlpha = 1;
 
+          // Compact sensor legend mirrors the source colours used in the scene.
+          // It reports scan state separately from the always-visible coverage cones.
+          var sensorStatus = snapshotData.sensorStatus || {};
+          var legendItems = [
+            {key: "lidar", label: "LIDAR", color: "#66d3e2"},
+            {key: "radar", label: "RADAR", color: "#f0a958"},
+            {key: "camera", label: "CAM", color: "#4c9ce2"},
+            {key: "ultrasonic", label: "USS", color: "#b7df92"}
+          ];
+          ctx.save();
+          ctx.font = "9px sans-serif";
+          ctx.textBaseline = "middle";
+          for (var legendIndex = 0; legendIndex < legendItems.length; legendIndex++) {
+            var legend = legendItems[legendIndex];
+            var legendStatus = sensorStatus[legend.key] || {};
+            var legendX = 9 + legendIndex * Math.max(64, (cssWidth - 18) / 4);
+            var legendLabel = legendStatus.enabled === false ? "OFF"
+              : (legendStatus.fresh === true
+                ? (legendStatus.returnCount !== undefined
+                  ? String(legendStatus.returnCount) : "FOV")
+                : "STALE");
+            ctx.globalAlpha = legendStatus.enabled === false ? 0.58 : 0.94;
+            ctx.fillStyle = legend.color;
+            ctx.fillRect(legendX, 13, 5, 5);
+            ctx.fillStyle = "#d5e0e7";
+            ctx.fillText(legend.label + " " + legendLabel, legendX + 8, 16);
+          }
+          ctx.restore();
+          ctx.globalAlpha = 1;
+
           // Pin the player's own vehicle above the 3D layers so dense surface
           // geometry cannot hide it.
           var egoX = cssWidth * 0.5;
