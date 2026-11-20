@@ -587,7 +587,7 @@
             // A road surface is rendered once per physical edge, while directional
             // lane data is kept on the corresponding NavGraph segment.
             var renderedSurfaceIds = Object.create(null);
-            for (var gs = 0; gs < Math.min(graphSegments.length, 96); gs++) {
+            for (var gs = 0; gs < Math.min(graphSegments.length, 192); gs++) {
               var graphSegment = graphSegments[gs];
               var graphStart = localPoint(graphSegment.start, ego);
               var graphFinish = localPoint(graphSegment.finish, ego);
@@ -1208,7 +1208,12 @@
           for (var legendIndex = 0; legendIndex < legendItems.length; legendIndex++) {
             var legend = legendItems[legendIndex];
             var legendStatus = sensorStatus[legend.key] || {};
-            var legendX = 9 + legendIndex * Math.max(64, (cssWidth - 18) / 4);
+            var narrowLegend = cssWidth < 270;
+            var legendColumn = narrowLegend ? legendIndex % 2 : legendIndex;
+            var legendRow = narrowLegend ? Math.floor(legendIndex / 2) : 0;
+            var legendStep = narrowLegend ? (cssWidth - 18) / 2 : (cssWidth - 18) / 4;
+            var legendX = 9 + legendColumn * legendStep;
+            var legendY = 13 + legendRow * 13;
             var legendLabel = legendStatus.enabled === false ? "OFF"
               : (legendStatus.fresh === true
                 ? (legendStatus.returnCount !== undefined
@@ -1216,9 +1221,9 @@
                 : "STALE");
             ctx.globalAlpha = legendStatus.enabled === false ? 0.58 : 0.94;
             ctx.fillStyle = legend.color;
-            ctx.fillRect(legendX, 13, 5, 5);
+            ctx.fillRect(legendX, legendY - 3, 5, 5);
             ctx.fillStyle = "#d5e0e7";
-            ctx.fillText(legend.label + " " + legendLabel, legendX + 8, 16);
+            ctx.fillText(legend.label + " " + legendLabel, legendX + 8, legendY);
           }
           ctx.restore();
           ctx.globalAlpha = 1;
