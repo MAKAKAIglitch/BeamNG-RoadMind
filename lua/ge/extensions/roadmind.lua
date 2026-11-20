@@ -6585,6 +6585,39 @@ function M.getPerceptionSnapshot()
     end
   end
 
+  local diagnostics = {
+    registryCount = #(state.vehicleRegistry or {}),
+    registryValid = state.vehicleRegistrySnapshotValid == true,
+    registryTruncated = state.vehicleRegistryTruncated == true,
+    cameraZoneCount = 0,
+    cameraCandidateCount = 0,
+    unverifiedCandidateCount = 0,
+    trackedTargetCount = #targets,
+    exportedCandidateCount = #candidates
+  }
+  local detectionZones = latest.detectionZones and latest.detectionZones.zones or {}
+  for i = 1, #detectionZones do
+    if detectionZones[i].sensor == "camera" then
+      diagnostics.cameraZoneCount = diagnostics.cameraZoneCount + 1
+    end
+  end
+  for i = 1, #(state.vehicleCandidates or {}) do
+    local candidate = state.vehicleCandidates[i]
+    local cameraSource = false
+    for j = 1, #(candidate.sensorSources or {}) do
+      if candidate.sensorSources[j].sensor == "camera" then
+        cameraSource = true
+        break
+      end
+    end
+    if cameraSource then
+      diagnostics.cameraCandidateCount = diagnostics.cameraCandidateCount + 1
+      if candidate.visibility ~= "visible" then
+        diagnostics.unverifiedCandidateCount = diagnostics.unverifiedCandidateCount + 1
+      end
+    end
+  end
+
   local obstacles = {}
   if model then
     for i = 1, math.min(#(model.obstacles or {}), 64) do
@@ -6667,6 +6700,7 @@ function M.getPerceptionSnapshot()
     vehicle = vehicle,
     targets = targets,
     candidates = candidates,
+    diagnostics = diagnostics,
     obstacles = obstacles,
     lidarPoints = lidarPoints,
     lidarPointSource = pointCloudSource,
