@@ -419,9 +419,17 @@ local function boolString(value)
   return value and "true" or "false"
 end
 
+local function readObjectField(object, key)
+  return object[key]
+end
+
+local function readVectorComponents(value)
+  return value.x, value.y, value.z
+end
+
 local function safeField(object, key)
   if not object then return nil end
-  local ok, value = pcall(function() return object[key] end)
+  local ok, value = pcall(readObjectField, object, key)
   if ok then return value end
   return nil
 end
@@ -451,9 +459,7 @@ local function asVec3(value)
   if value == nil then return nil end
   -- Read the three components in one protected access instead of creating
   -- three separate pcall closures for every vector conversion.
-  local ok, x, y, z = pcall(function()
-    return value.x, value.y, value.z
-  end)
+  local ok, x, y, z = pcall(readVectorComponents, value)
   if not ok or type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
     return nil
   end
@@ -2991,6 +2997,10 @@ function M.toggleVisualization()
   return state.visualizationEnabled
 end
 
+local function readRaycastHitFields(hit)
+  return hit.dist, hit.pt, hit.obj
+end
+
 local function raycastBeam(beam, fallbackOrigin, fallbackRange)
   if type(castRay) ~= "function" or type(beam) ~= "table" then return nil end
 
@@ -3021,9 +3031,8 @@ local function raycastBeam(beam, fallbackOrigin, fallbackRange)
   -- Read hit metadata in grouped protected accesses. The raycast result and
   -- point are engine tables/userdata; one pcall per group avoids several tiny
   -- closures for every successful beam while retaining the safe fallback.
-  local okHitData, distance, pointData, hitObject = pcall(function()
-    return hit.dist, hit.pt, hit.obj
-  end)
+  local okHitData, distance, pointData, hitObject =
+    pcall(readRaycastHitFields, hit)
   if not okHitData then
     distance = safeField(hit, "dist")
     pointData = safeField(hit, "pt")
@@ -3035,9 +3044,7 @@ local function raycastBeam(beam, fallbackOrigin, fallbackRange)
 
   local point = nil
   if pointData then
-    local okPoint, x, y, z = pcall(function()
-      return pointData.x, pointData.y, pointData.z
-    end)
+    local okPoint, x, y, z = pcall(readVectorComponents, pointData)
     if okPoint and type(x) == "number" and type(y) == "number" and type(z) == "number" then
       point = vec3(x, y, z)
     end
