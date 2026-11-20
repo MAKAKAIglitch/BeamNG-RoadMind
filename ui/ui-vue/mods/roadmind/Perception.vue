@@ -193,7 +193,6 @@ const snapshot = ref({ vehicle: null, targets: [], obstacles: [], road: {}, rout
 const lastError = ref("")
 let timer = null
 let disposed = false
-let lastSuccessfulAt = 0
 
 function t(key) {
   const dict = String(locale.value).toLowerCase().startsWith("ru") ? RU : EN
@@ -231,7 +230,10 @@ const predictionPath = computed(() => toPath(
   snapshot.value.motion && snapshot.value.motion.predictedPath || []
 ))
 const guidance = computed(() => snapshot.value.motion && snapshot.value.motion.guidance || {})
-const brakeMarker = computed(() => guidance.value.brakePoint ? project(guidance.value.brakePoint) : null)
+const brakeMarker = computed(() =>
+  (guidance.value.status === "prepare" || guidance.value.status === "brake_now")
+    && guidance.value.brakePoint ? project(guidance.value.brakePoint) : null
+)
 const motion = computed(() => snapshot.value.motion || {})
 const speedLabel = computed(() => Number.isFinite(Number(motion.value.speedKph))
   ? Math.round(Number(motion.value.speedKph)) + " km/h" : "—")
@@ -342,7 +344,6 @@ async function refresh() {
     if (result.language) locale.value = result.language
     snapshot.value = result
     lastError.value = ""
-    lastSuccessfulAt = Date.now()
   } catch (error) {
     if (!disposed) {
       lastError.value = String(error && error.message || error)
