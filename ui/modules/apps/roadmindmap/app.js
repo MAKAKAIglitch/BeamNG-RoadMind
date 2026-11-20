@@ -30,6 +30,8 @@
         var extensionLoading = false;
         var extensionWaiters = [];
         var renderErrorReported = false;
+        var cachedSurfaceKey = null;
+        var cachedSurfaceFaces = [];
 
         function lua(command, callback) {
           if (!window.bngApi || typeof window.bngApi.engineLua !== "function") {
@@ -512,6 +514,95 @@
             addMarker(staticPoint, "#718d9b",
               0.12 + Math.min(8, Number(staticItem.hitCount) || 0) * 0.012,
               clamp(0.82 - staticAge / 2400, 0.38, 0.82));
+          }
+
+          // Reconstruct a bounded local surface from actual World Model returns.
+          // The cache is rebuilt only when a new map snapshot arrives, not per animation frame.
+          var surfaceKey = String(snapshotData.timestamp || 0) + ":" +
+            geometry.length + ":" + staticGeometry.length;
+          if (surfaceKey !== cachedSurfaceKey) {
+            cachedSurfaceKey = surfaceKey;
+            cachedSurfaceFaces = [];
+            var surfacePoints = [];
+            var occupiedCells = Object.create(null);
+
+            function addSurfacePoint(worldPosition, confidence, age, stableHits) {
+              var local = localPoint(worldPosition, ego);
+              if (!local || Math.abs(local.x) > 38 || local.y < -18 || local.y > 92 ||
+                  local.z < -2.5 || local.z > 5.5) return;
+              if (!isFinite(age) || age > 45 || confidence < 0.25) return;
+              if (stableHits !== undefined && stableHits < 2) return;
+              var cellKey = Math.round(local.x / 0.55) + ":" +
+                Math.round(local.y / 0.55) + ":" + Math.round(local.z / 0.45);
+              var previous = occupiedCells[cellKey];
+              if (previous) {
+                if (confidence > previous.confidence || age < previous.age) {
+                  previous.x = local.x; previous.y = local.y; previous.z = local.z;
+                  previous.confidence = confidence; previous.age = age;
+                }
+                return;
+              }
+              var point = {x: local.x, y: local.y, z: local.z, confidence: confidence, age: age};
+              occupiedCells[cellKey] = point;
+              surfacePoints.push(point);
+            }
+
+            for (var sp = 0; sp < Math.min(staticGeometry.length, 180); sp++) {
+              var stable = staticGeometry[sp];
+              addSurfacePoint(stable.position, Number(stable.confidence) || 0,
+                Number(stable.dataAge), Number(stable.hitCount) || 0);
+            }
+            for (var gp = 0; gp < Math.min(geometry.length, 120); gp++) {
+              var measured = geometry[gp];
+              addSurfacePoint(measured.position, Number(measured.confidence) || 0,
+                Number(measured.age), undefined);
+            }
+
+            var usedFaces = Object.create(null);
+            var maxSurfaceEdge = 2.35;
+            for (var si2 = 0; si2 < surfacePoints.length && cachedSurfaceFaces.length < 260; si2++) {
+              var origin = surfacePoints[si2];
+              var neighbors = [];
+              for (var sj = 0; sj < surfacePoints.length; sj++) {
+                if (sj === si2) continue;
+                var candidate = surfacePoints[sj];
+                var dxs = candidate.x - origin.x;
+                var dys = candidate.y - origin.y;
+                var horizontal = Math.sqrt(dxs * dxs + dys * dys);
+                if (horizontal < 0.22 || horizontal > maxSurfaceEdge ||
+                    Math.abs(candidate.z - origin.z) > 0.85) continue;
+                neighbors.push({index: sj, point: candidate, distance: horizontal});
+              }
+              neighbors.sort(function (a, b) { return a.distance - b.distance; });
+              neighbors = neighbors.slice(0, 5);
+              for (var sj2 = 0; sj2 < neighbors.length && cachedSurfaceFaces.length < 260; sj2++) {
+                for (var sk = sj2 + 1; sk < neighbors.length && cachedSurfaceFaces.length < 260; sk++) {
+                  var second = neighbors[sj2];
+                  var third = neighbors[sk];
+                  var edge = Math.sqrt(
+                    Math.pow(second.point.x - third.point.x, 2) +
+                    Math.pow(second.point.y - third.point.y, 2));
+                  if (edge > maxSurfaceEdge ||
+                      Math.abs(second.point.z - third.point.z) > 0.85) continue;
+                  var twiceArea = Math.abs(
+                    (second.point.x - origin.x) * (third.point.y - origin.y) -
+                    (second.point.y - origin.y) * (third.point.x - origin.x));
+                  if (twiceArea < 0.12 || twiceArea > 4.8) continue;
+                  var faceKey = [si2, second.index, third.index].sort(function (a, b) { return a - b; }).join(":");
+                  if (usedFaces[faceKey]) continue;
+                  usedFaces[faceKey] = true;
+                  cachedSurfaceFaces.push({
+                    points: [origin, second.point, third.point],
+                    confidence: Math.min(origin.confidence, second.point.confidence, third.point.confidence)
+                  });
+                }
+              }
+            }
+          }
+          for (var sf = 0; sf < cachedSurfaceFaces.length; sf++) {
+            var surfaceFace = cachedSurfaceFaces[sf];
+            addPolygon(surfaceFace.points, "#397786",
+              clamp(0.18 + surfaceFace.confidence * 0.28, 0.18, 0.42), "#75b9c2");
           }
 
           var poiItems = asArray(snapshotData.poi && snapshotData.poi.items);
