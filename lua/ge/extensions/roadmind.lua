@@ -8655,10 +8655,26 @@ end
 
 
 function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
-  -- This method only reads the GE-owned world model. Copy the small fields
-  -- returned below instead of deep-cloning every observation on every UI poll.
+  -- Recenter the cached session-map output even after scanning has been stopped.
+  -- This exposes previously scanned cells around the new ego position without
+  -- requiring new sensor observations.
+  local latestPose = state.latestData
+    and (state.latestData.vehiclePose or state.latestData.localizationVehiclePose) or nil
+  local liveMapPosition = latestPose and asVec3(latestPose.position) or nil
+  liveMapPosition = liveMapPosition or asVec3(safeCall(state.activeVehicle, "getPosition"))
+  local configuredMapRadius = math.max(100, math.min(500,
+    tonumber(state.settings and state.settings.mapRadiusM) or 500))
+  local cachedOutputCenter = asVec3(state.sessionStaticMapOutputCenter)
+  local outputCenterMoved = cachedOutputCenter and liveMapPosition
+    and (liveMapPosition - cachedOutputCenter):length() or math.huge
+  local outputCacheNeedsRefresh = type(state.sessionStaticMapOutputCache) ~= "table"
+    or tonumber(state.sessionStaticMapLastRadius) ~= configuredMapRadius
+    or outputCenterMoved >= SESSION_STATIC_MAP_PRUNE_STEP_M
+
+  -- Sensor-driven updates keep their normal World Model cadence. While idle,
+  -- refresh only when the compact static-map output window moves or radius changes.
   local worldModel = state.worldModel
-  if not worldModel and buildWorldModel then
+  if buildWorldModel and (not worldModel or outputCacheNeedsRefresh) then
     worldModel = buildWorldModel()
     state.worldModel = worldModel
     state.worldModelDirty = false
