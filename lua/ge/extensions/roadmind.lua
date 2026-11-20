@@ -1221,10 +1221,18 @@ state._roadmindHelpers.updateObjectTracks = function(candidates)
     track.timestamp = track.lastObservedAt
     track.predictionHorizon = math.min(dataAge, 0.5)
 
-    local position = asVec3(track.position)
-    local velocity = asVec3(track.estimatedVelocity)
-    if position and velocity then
-      track.predictedPosition = vectorToPlainTable(position + velocity * track.predictionHorizon)
+    local position = track.position
+    local velocity = track.estimatedVelocity
+    if type(position) == "table" and type(velocity) == "table"
+        and type(position.x) == "number" and type(position.y) == "number"
+        and type(position.z) == "number" and type(velocity.x) == "number"
+        and type(velocity.y) == "number" and type(velocity.z) == "number" then
+      local horizon = track.predictionHorizon
+      track.predictedPosition = {
+        x = position.x + velocity.x * horizon,
+        y = position.y + velocity.y * horizon,
+        z = position.z + velocity.z * horizon
+      }
     else
       track.predictedPosition = track.position
     end
@@ -1258,13 +1266,15 @@ state._roadmindHelpers.updateObjectTracks = function(candidates)
   for i = 1, #result do
     local track = result[i]
     if track.position and track.dimensions then
-      local position = asVec3(track.position)
+      local position = track.position
       local dimensions = track.dimensions
       local length = tonumber(dimensions.length) or 0
       local width = tonumber(dimensions.width) or 0
       local height = tonumber(dimensions.height) or 0
       local radius = math.sqrt(length * length + width * width + height * height) * 0.5 + 0.5
-      if position and radius > 0 then
+      if type(position) == "table" and type(position.x) == "number"
+          and type(position.y) == "number" and type(position.z) == "number"
+          and radius > 0 then
         local minX, maxX = math.floor((position.x - radius) / cellSize), math.floor((position.x + radius) / cellSize)
         local minY, maxY = math.floor((position.y - radius) / cellSize), math.floor((position.y + radius) / cellSize)
         local minZ, maxZ = math.floor((position.z - radius) / cellSize), math.floor((position.z + radius) / cellSize)
@@ -1283,12 +1293,28 @@ state._roadmindHelpers.updateObjectTracks = function(candidates)
   end
   state.lidarTrackGrid = trackGrid
 
+  local sortOriginX = playerPosition and playerPosition.x or 0
+  local sortOriginY = playerPosition and playerPosition.y or 0
+  local sortOriginZ = playerPosition and playerPosition.z or 0
   table.sort(result, function(a, b)
-    local origin = playerPosition or vec3(0, 0, 0)
-    local aPosition = asVec3(a.position)
-    local bPosition = asVec3(b.position)
-    local aDistance = aPosition and (aPosition - origin):length() or math.huge
-    local bDistance = bPosition and (bPosition - origin):length() or math.huge
+    local aPosition = a.position
+    local bPosition = b.position
+    local aDistance = math.huge
+    local bDistance = math.huge
+    if type(aPosition) == "table" and type(aPosition.x) == "number"
+        and type(aPosition.y) == "number" and type(aPosition.z) == "number" then
+      local ax = aPosition.x - sortOriginX
+      local ay = aPosition.y - sortOriginY
+      local az = aPosition.z - sortOriginZ
+      aDistance = math.sqrt(ax * ax + ay * ay + az * az)
+    end
+    if type(bPosition) == "table" and type(bPosition.x) == "number"
+        and type(bPosition.y) == "number" and type(bPosition.z) == "number" then
+      local bx = bPosition.x - sortOriginX
+      local by = bPosition.y - sortOriginY
+      local bz = bPosition.z - sortOriginZ
+      bDistance = math.sqrt(bx * bx + by * by + bz * bz)
+    end
     if math.abs(aDistance - bDistance) < 0.001 then
       return a.trackId < b.trackId
     end
@@ -7404,10 +7430,15 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       end
       local relativeSpeed = nil
       if playerVelocity then
-        local relativeVelocity = target.velocity - playerVelocity
-        local delta = target.center - nearestZone.origin
-        if delta:length() > 0.001 then
-          relativeSpeed = round2(relativeVelocity:dot(delta:normalized()))
+        local dx = target.center.x - nearestZone.origin.x
+        local dy = target.center.y - nearestZone.origin.y
+        local dz = target.center.z - nearestZone.origin.z
+        local distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if distance > 0.001 then
+          local rvx = target.velocity.x - playerVelocity.x
+          local rvy = target.velocity.y - playerVelocity.y
+          local rvz = target.velocity.z - playerVelocity.z
+          relativeSpeed = round2((rvx * dx + rvy * dy + rvz * dz) / distance)
         end
       end
 
