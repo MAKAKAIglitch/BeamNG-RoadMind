@@ -166,6 +166,47 @@
     </section>
 
     <section class="roadmind-section">
+      <BngCardHeading>{{ t("mapView") }}</BngCardHeading>
+      <p class="roadmind-note">{{ t("mapViewNote") }}</p>
+      <BngRow :vertical="true">
+        <template #label>{{ t("mapCameraHeight") }}: {{ settings.mapCameraHeightM }} m</template>
+        <BngSlider :min="4" :max="18" :step="0.5" :modelValue="settings.mapCameraHeightM"
+          :with-input="true" :disabled="busy"
+          @update:modelValue="value => setSetting('mapCameraHeightM', Number(value))" />
+      </BngRow>
+      <BngRow :vertical="true">
+        <template #label>{{ t("mapCameraDistance") }}: {{ settings.mapCameraDistanceM }} m</template>
+        <BngSlider :min="8" :max="32" :step="1" :modelValue="settings.mapCameraDistanceM"
+          :with-input="true" :disabled="busy"
+          @update:modelValue="value => setSetting('mapCameraDistanceM', Number(value))" />
+      </BngRow>
+      <BngRow :vertical="true">
+        <template #label>{{ t("mapCameraLookAhead") }}: {{ settings.mapCameraLookAheadM }} m</template>
+        <BngSlider :min="6" :max="40" :step="1" :modelValue="settings.mapCameraLookAheadM"
+          :with-input="true" :disabled="busy"
+          @update:modelValue="value => setSetting('mapCameraLookAheadM', Number(value))" />
+      </BngRow>
+      <BngRow :vertical="true">
+        <template #label>{{ t("mapRadius") }}: {{ settings.mapRadiusM }} m</template>
+        <BngSlider :min="100" :max="500" :step="25" :modelValue="settings.mapRadiusM"
+          :with-input="true" :disabled="busy"
+          @update:modelValue="value => setSetting('mapRadiusM', Number(value))" />
+      </BngRow>
+      <BngRow :vertical="true">
+        <template #label>{{ t("mapPolygonLimit") }}: {{ settings.mapMaxPolygons }}</template>
+        <BngSlider :min="500" :max="8000" :step="500" :modelValue="settings.mapMaxPolygons"
+          :with-input="true" :disabled="busy"
+          @update:modelValue="value => setSetting('mapMaxPolygons', Number(value))" />
+      </BngRow>
+      <BngRow :vertical="true">
+        <template #label>{{ t("mapRenderFps") }}: {{ settings.mapRenderFps }} FPS</template>
+        <BngSlider :min="15" :max="60" :step="5" :modelValue="settings.mapRenderFps"
+          :with-input="true" :disabled="busy"
+          @update:modelValue="value => setSetting('mapRenderFps', Number(value))" />
+      </BngRow>
+    </section>
+
+    <section class="roadmind-section">
       <BngCardHeading>{{ t("lidar") }}</BngCardHeading>
       <BngRow>
         <template #label>{{ t("enabled") }}</template>
@@ -357,6 +398,14 @@ const EN = {
   autoScanOnVehicleSpawnNote: "Off by default. When enabled, scanning resumes after the active player vehicle is replaced or respawned, but only if scanning was already running. Newly spawned traffic vehicles are not given separate scanners.",
   performance: "Performance",
   performanceNote: "Economy runs only the forward LiDAR. Radar and ultrasonic start off; Balanced enables all three sensor groups. Changing a setting switches to Custom.",
+  mapView: "RoadMind Map",
+  mapViewNote: "The map uses a moving circular memory area. Roads from NavGraph are preferred; traffic-inferred lanes are shown as estimates until enough independent vehicles confirm them. Polygon and FPS limits apply only to map drawing.",
+  mapCameraHeight: "Camera height",
+  mapCameraDistance: "Camera follow distance",
+  mapCameraLookAhead: "Camera look-ahead",
+  mapRadius: "Map memory radius",
+  mapPolygonLimit: "Maximum map polygons",
+  mapRenderFps: "Map render limit",
   adaptivePerformance: "Experimental load control",
   adaptivePerformanceNote: "RoadMind adjusts sensor ray count and scan rates to approach the target FPS. It cannot make the game reach an FPS that the rest of the scene, traffic or hardware cannot sustain.",
   adaptiveFpsEnabled: "Automatically adapt sensor quality",
@@ -543,6 +592,14 @@ const RU = {
   autoScanOnVehicleSpawnNote: "По умолчанию выключено. При включении сканирование возобновится после смены или повторного спавна активной машины игрока, только если до этого оно уже работало. Для новых машин трафика отдельные сканеры не запускаются.",
   performance: "Производительность",
   performanceNote: "В режиме «Экономный» работает только передний LiDAR. Радар и ультразвук выключены; «Сбалансированный» включает все три группы. Изменение параметра переключает профиль на свои настройки.",
+  mapView: "Карта RoadMind",
+  mapViewNote: "Карта хранит данные в движущемся круге вокруг машины. Приоритет у NavGraph; полосы, выведенные по траекториям трафика, помечаются как оценочные. Лимиты полигонов и FPS относятся только к отрисовке карты.",
+  mapCameraHeight: "Высота камеры",
+  mapCameraDistance: "Дистанция камеры",
+  mapCameraLookAhead: "Смещение камеры вперёд",
+  mapRadius: "Радиус памяти карты",
+  mapPolygonLimit: "Максимум полигонов",
+  mapRenderFps: "Лимит FPS карты",
   adaptivePerformance: "Экспериментальная подстройка нагрузки",
   adaptivePerformanceNote: "RoadMind меняет число лучей и частоту датчиков, пытаясь приблизиться к целевому FPS. Он не сможет обеспечить FPS, недостижимый для самой игры, сцены, трафика или оборудования.",
   adaptiveFpsEnabled: "Автоматически менять качество датчиков",
@@ -764,6 +821,12 @@ const settings = ref({
   visualizationInertiaEnabled: true,
   adaptiveFpsEnabled: false,
   targetFps: 60,
+  mapCameraHeightM: 7.5,
+  mapCameraDistanceM: 10.5,
+  mapCameraLookAheadM: 13,
+  mapRadiusM: 500,
+  mapMaxPolygons: 3000,
+  mapRenderFps: 30,
   speedAdaptiveRateEnabled: true,
   adasEnabled: false,
   adasFCWEnabled: true,
