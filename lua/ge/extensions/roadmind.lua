@@ -7188,8 +7188,8 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
   local playerVelocity = safeCall(state.activeVehicle, "getVelocity")
   for i = 1, #state.vehicleRegistry do
     local target = state.vehicleRegistry[i]
-    local sources = {}
-    local cameraSources = {}
+    local sourceZones = nil
+    local cameraZones = nil
     local nearestDistance = math.huge
     local nearestZone = nil
     local nearestCameraDistance = math.huge
@@ -7203,10 +7203,11 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       local zone = zones[zoneIndex]
       local inside, distance, near, far = state._roadmindHelpers.targetInsideSensorZone(target, zone)
       if inside then
-        local source = {sensor = zone.sensor, name = zone.name}
-        sources[#sources + 1] = source
+        sourceZones = sourceZones or {}
+        sourceZones[#sourceZones + 1] = zone
         if zone.sensor == "camera" then
-          cameraSources[#cameraSources + 1] = source
+          cameraZones = cameraZones or {}
+          cameraZones[#cameraZones + 1] = zone
           if distance < nearestCameraDistance then
             nearestCameraDistance = distance
             nearestCameraZone = zone
@@ -7226,16 +7227,26 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
     -- When a target is inside any camera frustum, create a camera-only
     -- observation. Radar/LiDAR/ultrasonic remain independent obstacle sensors
     -- and must not steal the vehicle-detection source attribution.
-    local hasCameraSource = #cameraSources > 0
+    local hasCameraSource = cameraZones ~= nil
+    local selectedSourceZones = hasCameraSource and cameraZones or sourceZones
     if hasCameraSource then
-      sources = cameraSources
       nearestDistance = nearestCameraDistance
       nearestZone = nearestCameraZone
       nearDistance = cameraNearDistance
       farDistance = cameraFarDistance
     end
 
-    if #sources > 0 and nearestZone then
+    if selectedSourceZones and #selectedSourceZones > 0 and nearestZone then
+      -- Keep only the compact source metadata required by tracking. Zone
+      -- geometry is referenced during filtering, not copied per hit.
+      local sources = {}
+      for sourceIndex = 1, #selectedSourceZones do
+        local sourceZone = selectedSourceZones[sourceIndex]
+        sources[sourceIndex] = {
+          sensor = sourceZone.sensor,
+          name = sourceZone.name
+        }
+      end
       local relativeSpeed = nil
       if playerVelocity then
         local relativeVelocity = target.velocity - playerVelocity
