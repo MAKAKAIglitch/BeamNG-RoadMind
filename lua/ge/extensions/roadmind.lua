@@ -5145,8 +5145,8 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
   local function roadEdgeHalfWidth(fromNode, toNode, edge)
     local radiusA = tonumber(safeField(fromNode, "radius"))
     local radiusB = tonumber(safeField(toNode, "radius"))
-    local validA = radiusA and radiusA >= 1 and radiusA <= 30
-    local validB = radiusB and radiusB >= 1 and radiusB <= 30
+    local validA = radiusA and radiusA >= 0.5 and radiusA <= 30
+    local validB = radiusB and radiusB >= 0.5 and radiusB <= 30
     if validA and validB then
       return (radiusA + radiusB) * 0.5, "navgraph-node-radius"
     elseif validA then
@@ -5156,11 +5156,12 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     end
 
     -- NavGraph lane counts are authoritative even when node radius is absent.
-    -- Use a conservative standard lane width plus a small total edge allowance.
+    -- Match BeamNG traffic's narrow-road / normal-lane width convention.
     local laneCount = countNavGraphLanes(edge)
     if laneCount > 0 then
-      local estimatedFullWidth = laneCount * 3.5 + 0.6
-      return math.max(2.2, math.min(18, estimatedFullWidth * 0.5)),
+      local estimatedLaneWidth = laneCount == 1 and 2.4 or 3.05
+      local estimatedFullWidth = laneCount * estimatedLaneWidth
+      return math.max(1.2, math.min(18, estimatedFullWidth * 0.5)),
         "navgraph-lane-count-estimate"
     end
     return PLANNER_ROAD_HALF_WIDTH_M, "conservative-navgraph-heuristic"
