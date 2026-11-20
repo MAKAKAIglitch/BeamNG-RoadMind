@@ -991,7 +991,8 @@
             drawPolyline(predictedLocal, "#62dec2", 2.1, 0.96, [5, 4]);
           }
           var guidance = motion.guidance || {};
-          if (guidance.brakePoint) {
+          if (guidance.brakePoint
+              && (guidance.status === "prepare" || guidance.status === "brake_now")) {
             var brakePointLocal = localPoint(guidance.brakePoint, ego);
             if (brakePointLocal) {
               var brakeColor = guidance.status === "brake_now" ? "#ff655f"
