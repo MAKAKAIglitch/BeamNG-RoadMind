@@ -3007,6 +3007,11 @@ local function readRaycastHitFields(hit)
   return hit.dist, hit.pt, hit.obj
 end
 
+-- castRay consumes vectors synchronously. Reuse these scratch objects for
+-- every beam rather than allocating origin/direction/target vec3 objects.
+local raycastOriginScratch = vec3(0, 0, 0)
+local raycastTargetScratch = vec3(0, 0, 0)
+
 local function raycastBeam(beam, fallbackOrigin, fallbackRange)
   if type(castRay) ~= "function" or type(beam) ~= "table" then return nil end
 
@@ -3023,20 +3028,26 @@ local function raycastBeam(beam, fallbackOrigin, fallbackRange)
     return nil
   end
 
-  local origin = vec3(originData.x, originData.y, originData.z)
-  local direction = vec3(directionData.x, directionData.y, directionData.z)
-  local directionLength = direction:length()
+  local ox, oy, oz = originData.x, originData.y, originData.z
+  local dx, dy, dz = directionData.x, directionData.y, directionData.z
+  local directionLength = math.sqrt(dx * dx + dy * dy + dz * dz)
   if directionLength < 0.00001 then return nil end
 
-  direction = direction / directionLength
-  local target = origin + direction * maxRange
+  local inverseLength = 1 / directionLength
+  dx, dy, dz = dx * inverseLength, dy * inverseLength, dz * inverseLength
+  raycastOriginScratch:set(ox, oy, oz)
+  raycastTargetScratch:set(
+    ox + dx * maxRange,
+    oy + dy * maxRange,
+    oz + dz * maxRange
+  )
+
   -- Game Engine Lua castRay returns nil on a miss or a hit with dist/pt.
-  local ok, hit = pcall(castRay, origin, target, true, true)
+  local ok, hit = pcall(castRay, raycastOriginScratch, raycastTargetScratch, true, true)
   if not ok or not hit then return nil end
 
-  -- Read hit metadata in grouped protected accesses. The raycast result and
-  -- point are engine tables/userdata; one pcall per group avoids several tiny
-  -- closures for every successful beam while retaining the safe fallback.
+  -- Read hit metadata in grouped protected accesses. Fall back to individual
+  -- reads if an unusual engine hit object rejects a grouped field access.
   local okHitData, distance, pointData, hitObject =
     pcall(readRaycastHitFields, hit)
   if not okHitData then
@@ -3048,19 +3059,23 @@ local function raycastBeam(beam, fallbackOrigin, fallbackRange)
     return nil
   end
 
-  local point = nil
+  local pointX, pointY, pointZ
   if pointData then
     local okPoint, x, y, z = pcall(readVectorComponents, pointData)
     if okPoint and type(x) == "number" and type(y) == "number" and type(z) == "number" then
-      point = vec3(x, y, z)
+      pointX, pointY, pointZ = x, y, z
     end
   end
-  if not point then point = origin + direction * distance end
+  if pointX == nil then
+    pointX = ox + dx * distance
+    pointY = oy + dy * distance
+    pointZ = oz + dz * distance
+  end
 
   return {
-    x = round2(point.x),
-    y = round2(point.y),
-    z = round2(point.z),
+    x = round2(pointX),
+    y = round2(pointY),
+    z = round2(pointZ),
     distance = round2(distance),
     hitObjectId = getVehicleId(hitObject)
   }
