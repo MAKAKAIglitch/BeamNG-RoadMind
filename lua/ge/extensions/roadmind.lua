@@ -297,7 +297,8 @@ local state = {
     status = "disabled"
   },
   adasLastBrakeCommand = 0,
-  adasLastCruiseCommand = nil
+  adasLastCruiseCommand = nil,
+  adasHazardLightsCommandActive = false
 }
 
 local checkTimer = 0
@@ -1436,6 +1437,9 @@ state._roadmindHelpers.resetFrame = function()
 end
 
 state._roadmindHelpers.detachPreviousVehicle = function()
+  if state.adasHazardLightsCommandActive then
+    state._roadmindHelpers.setAEBHazardLights(false)
+  end
   if state.activeVehicle then
     if (state.adasLastBrakeCommand or 0) > 0 then
       queueVehicleCommand(state.activeVehicle,
@@ -8057,6 +8061,18 @@ state._roadmindHelpers.setADASBrakeOutput = function(brake)
   queueVehicleCommand(state.activeVehicle, command)
 end
 
+state._roadmindHelpers.setAEBHazardLights = function(enabled)
+  enabled = enabled == true
+  if enabled == state.adasHazardLightsCommandActive then return end
+  state.adasHazardLightsCommandActive = enabled
+  if not state.activeVehicle then return end
+
+  local command = "if not roadmind_controller and not roadmind_controller_load_attempted then roadmind_controller_load_attempted = true; extensions.load('roadmind_controller') end; " ..
+    "if roadmind_controller then roadmind_controller.setAebHazardLights(" ..
+    (enabled and "true" or "false") .. ") end"
+  queueVehicleCommand(state.activeVehicle, command)
+end
+
 state._roadmindHelpers.getADASLeadVehicle = function(data, forward, right, origin)
   local ownLength = state.vehicleGeometry and tonumber(state.vehicleGeometry.length) or 4.5
   local ownWidth = state.vehicleGeometry and tonumber(state.vehicleGeometry.width) or 2.0
@@ -8108,6 +8124,7 @@ end
 state._roadmindHelpers.updateADAS = function(dt)
   local settings = state.settings or DEFAULT_SETTINGS
   if settings.adasEnabled ~= true then
+    state._roadmindHelpers.setAEBHazardLights(false)
     if (state.adasLastBrakeCommand or 0) > 0 then state._roadmindHelpers.setADASBrakeOutput(0) end
     if state.routePilotEnabled and state.activeVehicle
         and state.adasLastCruiseCommand ~= ROUTE_MAX_SPEED_MPS then
@@ -8133,6 +8150,7 @@ state._roadmindHelpers.updateADAS = function(dt)
   local data = state.latestData
   if not state.visualizationEnabled or state.frameAge > MAX_FRAME_AGE or type(data) ~= "table"
       or not state.activeVehicle then
+    state._roadmindHelpers.setAEBHazardLights(false)
     if (state.adasLastBrakeCommand or 0) > 0 then state._roadmindHelpers.setADASBrakeOutput(0) end
     state.adas = {
       available = false, fcw = false, aeb = false, leftBlindSpot = false,
@@ -8148,6 +8166,7 @@ state._roadmindHelpers.updateADAS = function(dt)
   local right = forward and up and normalizedVec3(forward:cross(up)) or nil
   local velocity = asVec3(safeCall(state.activeVehicle, "getVelocity"))
   if not position or not forward or not right or not up or not velocity then
+    state._roadmindHelpers.setAEBHazardLights(false)
     if (state.adasLastBrakeCommand or 0) > 0 then state._roadmindHelpers.setADASBrakeOutput(0) end
     state.adas = {available = false, status = "vehicle_state_unavailable"}
     return
@@ -8197,6 +8216,7 @@ state._roadmindHelpers.updateADAS = function(dt)
   local aeb = settings.adasAEBEnabled == true and forwardSensorAvailable
     and speed >= 1.5 and nearest < math.huge
     and (distanceTrigger or ttcTrigger)
+  state._roadmindHelpers.setAEBHazardLights(aeb)
   local brakeLevel = 0
   if aeb then
     local distanceUrgency = (aebThreshold - nearest) / math.max(1, aebThreshold)
