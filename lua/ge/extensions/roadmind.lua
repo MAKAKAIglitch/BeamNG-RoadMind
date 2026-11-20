@@ -4821,6 +4821,7 @@ buildWorldModel = function()
       end
     end
   end
+  end
 
   -- If the hard cap is exceeded, find the oldest cells in one batch.
   -- This avoids a full 20,000-cell scan for every single eviction.
