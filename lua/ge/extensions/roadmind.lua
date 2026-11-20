@@ -135,7 +135,7 @@ local SESSION_STATIC_MAP_MAX_CELLS = 3000
 local SESSION_STATIC_MAP_MAX_IDS = 8192
 local SESSION_STATIC_MAP_MAX_AGE = 3600
 local SESSION_STATIC_MAP_RADIUS_M = 125
-local SESSION_STATIC_MAP_MAX_OUTPUT = 700
+local SESSION_STATIC_MAP_MAX_OUTPUT = 3000
 
 local state = {
   activeVehicleId = nil,
@@ -7721,7 +7721,7 @@ function M.getMapSnapshot()
   end
 
   local geometry = {}
-  for i = 1, math.min(#(worldModel.obstacles or {}), 384) do
+  for i = 1, #(worldModel.obstacles or {}) do
     local obstacle = worldModel.obstacles[i]
     local position = obstacle and obstacle.position
     local point = asVec3(position)
