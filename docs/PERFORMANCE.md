@@ -144,7 +144,7 @@ The fallback road and lane graph is sourced from the cached local NavGraph (map.
 - **Connected road surface:** build one strip per physical NavGraph edge, share mitered corner offsets across degree-two nodes, and add bounded surface patches at nodes with three or more road connections. Degenerate or very sharp joins fall back to the local segment normal to avoid long spikes.
 - **Lane separators:** use NavGraph forward/reverse lane counts to position separators across the entire road, including the centre divider on two-way roads. Precompute their world-space endpoints from the same joined corner geometry so markings continue through bends.
 - **Traffic fallback:** confirmed, direction-aligned traffic trajectories can infer provisional lane centres only where NavGraph lane metadata is missing. Their boundaries retain a visually distinct provisional style and are not promoted to authoritative metadata.
-- **Bounds:** the fallback NavGraph renderer keeps a 192-segment cap and bounded traversal. Primary DecalRoad sampling is separately capped at 128 visible runs and 1,800 samples, with the configured look-ahead and cached road-object bounds. Both paths reuse level data instead of rebuilding the complete level graph each UI frame.
+- **Bounds:** the fallback NavGraph renderer keeps a 192-segment cap and bounded traversal; the UI fallback renderer consumes the same 192-segment ceiling. Primary DecalRoad sampling is separately capped at 128 visible runs and 1,800 samples, with the configured look-ahead and cached road-object bounds. Both paths reuse level data instead of rebuilding the complete level graph each UI frame.
 
 These are static geometry and source-selection checks. Road width estimates and junction appearance still require visual validation on several BeamNG levels, especially roads with missing radius/lane metadata, unusual lane widths, and complex intersections.
 
@@ -169,7 +169,7 @@ DecalRoad is a road-surface decal projected onto terrain or static surfaces, not
 - **LiDAR:** fresh hit points are displayed as a cyan point cloud.
 - **Radar:** fresh radar hits are shown in amber; the source mount-to-hit ray is retained when available.
 - **Ultrasonic:** nearby hits are shown in green with short source-to-hit proximity rays.
-- **Cameras:** geometric field-of-view wedges are drawn in blue. Vehicles with a current camera visibility source receive a separate vehicle tint.
+- **Cameras:** geometric field-of-view wedges are drawn in blue. Vehicles with a current camera visibility source receive a separate vehicle tint. Sensor volumes remain visible but dimmed while their source is disabled; their presence does not start a scan.
 - **Freshness and bounds:** map snapshots only publish returns from enabled sensors whose source timestamp is no more than 1.6 s old. Snapshot caps are 180 LiDAR, 64 radar, 32 ultrasonic returns, and 40 geometric zones. These are display limits, not sensor scan-rate changes.
 - **Camera limitation:** the regular Drive camera model supplies geometric frustums and simulator-assisted visibility candidates. It does not supply RGB frames or semantic segmentation. The map must not label these overlays as image recognition.
 
