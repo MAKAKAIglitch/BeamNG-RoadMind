@@ -1021,6 +1021,28 @@
                  Math.round(Number(world.z) / 0.24));
               var cachedPoint = cachedSurfacePointByKey[pointKey];
               if (cachedPoint) {
+                var nextPosition = {
+                  x: Number(world.x), y: Number(world.y), z: Number(world.z)
+                };
+                var oldPointBucketKey = surfacePointBucket(
+                  cachedPoint.position.x, cachedPoint.position.y);
+                var nextPointBucketKey = surfacePointBucket(nextPosition.x, nextPosition.y);
+                if (oldPointBucketKey !== nextPointBucketKey) {
+                  var oldPointBucket = cachedSurfacePointBuckets[oldPointBucketKey] || [];
+                  var cachedPointIndex = cachedSurfacePoints.indexOf(cachedPoint);
+                  for (var oldBucketIndex = oldPointBucket.length - 1;
+                      oldBucketIndex >= 0; oldBucketIndex--) {
+                    if (oldPointBucket[oldBucketIndex] === cachedPointIndex) {
+                      oldPointBucket.splice(oldBucketIndex, 1);
+                      break;
+                    }
+                  }
+                  if (!cachedSurfacePointBuckets[nextPointBucketKey]) {
+                    cachedSurfacePointBuckets[nextPointBucketKey] = [];
+                  }
+                  cachedSurfacePointBuckets[nextPointBucketKey].push(cachedPointIndex);
+                }
+                cachedPoint.position = nextPosition;
                 cachedPoint.confidence = Math.max(cachedPoint.confidence,
                   Number(sourcePoint.confidence) || 0.45);
                 cachedPoint.hits = Math.max(cachedPoint.hits,
