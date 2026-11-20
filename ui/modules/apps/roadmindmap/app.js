@@ -39,6 +39,8 @@
         var cachedSurfaceFaces = [];
         var cachedSurfaceEdges = [];
         var cachedSurfaceRenderBuckets = Object.create(null);
+        var cachedSurfacePruneCenter = null;
+        var cachedSurfacePruneRadius = null;
         var surfacePointCellSize = 2.0;
         var surfaceRenderCellSize = 20.0;
 
@@ -195,18 +197,19 @@
           };
         }
 
-        function makeProjection(ego, width, height) {
+        function makeProjection(ego, width, height, mapSettings) {
+          mapSettings = mapSettings || {};
           var speed = clamp(Number(ego.speedMps) || 0, 0, 45);
-          var distance = clamp(10.5 + speed * 0.25, 10.5, 22);
-          var cameraHeight = clamp(6.7 + speed * 0.11, 6.7, 10.5);
-          var lookAhead = clamp(13 + speed * 0.58, 13, 34);
+          var distance = clamp((Number(mapSettings.cameraDistanceM) || 10.5) + speed * 0.15, 8, 40);
+          var cameraHeight = clamp((Number(mapSettings.cameraHeightM) || 7.5) + speed * 0.05, 4, 18);
+          var lookAhead = clamp((Number(mapSettings.cameraLookAheadM) || 13) + speed * 0.25, 6, 45);
           var camera = {x: 0, y: -distance, z: cameraHeight};
           var target = {x: 0, y: lookAhead, z: -0.3};
           var forward = normalize(sub(target, camera));
           var right = normalize(cross(forward, {x: 0, y: 0, z: 1}));
           var up = right && normalize(cross(right, forward));
           if (!forward || !right || !up) return null;
-          var focal = Math.min(width, height) * 1.22;
+          var focal = Math.min(width, height) * 1.22 * clamp(11.5 / distance, 0.62, 1.24);
           return function (point) {
             var relative = sub(point, camera);
             var depth = dot(relative, forward);
@@ -255,17 +258,43 @@
           ctx.fillRect(0, 0, cssWidth, cssHeight);
 
           var ego = snapshotData && snapshotData.vehicle;
+          var mapSettings = snapshotData && snapshotData.mapSettings || {};
+          var polygonLimit = clamp(Number(mapSettings.maxPolygons) || 3000, 500, 8000);
+          var lineLimit = polygonLimit * 2;
+          var markerLimit = Math.min(5000, polygonLimit);
           if (!ego || !ego.position || !ego.forward || !ego.right || !ego.up) {
+            // Keep a dark perspective grid while pose data is unavailable.
+            // No road or vehicle is fabricated from missing observations.
+            ctx.save();
+            ctx.strokeStyle = "rgba(75, 96, 112, 0.36)";
+            ctx.lineWidth = 0.7;
+            var vanishingX = cssWidth * 0.5;
+            var vanishingY = cssHeight * 0.20;
+            for (var gx = -8; gx <= 8; gx++) {
+              ctx.beginPath();
+              ctx.moveTo(vanishingX + gx * 2, vanishingY);
+              ctx.lineTo(vanishingX + gx * cssWidth * 0.095, cssHeight);
+              ctx.stroke();
+            }
+            for (var gy = 0; gy < 9; gy++) {
+              var gridY = vanishingY + Math.pow((gy + 1) / 9, 1.7) * cssHeight * 0.82;
+              ctx.beginPath();
+              ctx.moveTo(0, gridY);
+              ctx.lineTo(cssWidth, gridY);
+              ctx.stroke();
+            }
+            ctx.restore();
             return;
           }
 
-          var project = makeProjection(ego, cssWidth, cssHeight);
+          var project = makeProjection(ego, cssWidth, cssHeight, mapSettings);
           if (!project) return;
           var polygons = [];
           var lines = [];
           var markers = [];
 
           function addPolygon(points, fill, alpha, stroke) {
+            if (polygons.length >= polygonLimit) return;
             var projected = [];
             var depth = 0;
             for (var i = 0; i < points.length; i++) {
@@ -284,6 +313,7 @@
           }
 
           function addLine(points, color, lineWidth, alpha, dash) {
+            if (lines.length >= lineLimit) return;
             var projected = [];
             var depth = 0;
             for (var i = 0; i < points.length; i++) {
@@ -304,6 +334,7 @@
           }
 
           function addMarker(point, color, radius, alpha) {
+            if (markers.length >= markerLimit) return;
             var projected = project(point);
             if (!projected) return;
             markers.push({
@@ -430,14 +461,14 @@
           addPolygon([
             {x: -90, y: -35, z: -1.1}, {x: 90, y: -35, z: -1.1},
             {x: 90, y: 125, z: -1.1}, {x: -90, y: 125, z: -1.1}
-          ], "#0b131b", 1);
+          ], "#070c12", 1);
           for (var gy = -20; gy <= 100; gy += 10) {
             addLine([{x: -55, y: gy, z: -1.08}, {x: 55, y: gy, z: -1.08}],
-              "#1c2a35", 0.7, 0.38, [2, 8]);
+              "#263441", 0.8, 0.58, [2, 8]);
           }
           for (var gx = -50; gx <= 50; gx += 10) {
             addLine([{x: gx, y: -20, z: -1.08}, {x: gx, y: 100, z: -1.08}],
-              "#1c2a35", 0.7, 0.28, [2, 8]);
+              "#263441", 0.8, 0.48, [2, 8]);
           }
 
           var road = snapshotData.road || {};
@@ -467,33 +498,43 @@
               var gLeftB = {x: graphFinish.x + gnx * ghw, y: graphFinish.y + gny * ghw, z: graphFinish.z - 0.10};
               var gRightB = {x: graphFinish.x - gnx * ghw, y: graphFinish.y - gny * ghw, z: graphFinish.z - 0.10};
               addPolygon([gLeftA, gRightA, gRightB, gLeftB],
-                graphSegment.current ? "#263b49" : "#202b35", graphSegment.current ? 0.98 : 0.91);
-              addLine([gLeftA, gLeftB], "#53616c", graphSegment.current ? 1.15 : 0.9, 0.66);
-              addLine([gRightA, gRightB], "#53616c", graphSegment.current ? 1.15 : 0.9, 0.66);
+                graphSegment.current ? "#263644" : "#202a34", graphSegment.current ? 0.99 : 0.94,
+                graphSegment.current ? "#657e8d" : "#50616e");
+              addLine([gLeftA, gLeftB], "#667b89", graphSegment.current ? 1.25 : 1.0, 0.78);
+              addLine([gRightA, gRightB], "#667b89", graphSegment.current ? 1.25 : 1.0, 0.78);
 
               var graphLaneModel = graphSegment.laneModel || {};
               var graphBoundaries = asArray(graphLaneModel.laneBoundaryOffsets);
-              if (graphLaneModel.status === "metadata") {
+              var laneModelKnown = graphLaneModel.status === "metadata";
+              var laneModelInferred = graphLaneModel.status === "traffic-inferred"
+                || graphLaneModel.status === "traffic-provisional";
+              if (laneModelKnown || laneModelInferred) {
                 for (var gb = 0; gb < graphBoundaries.length; gb++) {
                   var boundaryOffset = Number(graphBoundaries[gb]);
                   if (!isFinite(boundaryOffset)) continue;
                   addLine([
                     {x: graphStart.x + gnx * boundaryOffset, y: graphStart.y + gny * boundaryOffset, z: graphStart.z - 0.055},
                     {x: graphFinish.x + gnx * boundaryOffset, y: graphFinish.y + gny * boundaryOffset, z: graphFinish.z - 0.055}
-                  ], "#778b99", graphSegment.current ? 1.0 : 0.8,
-                    graphSegment.current ? 0.66 : 0.46, [5, 7]);
+                  ], laneModelKnown ? "#8799a7" : "#b18b56",
+                    graphSegment.current ? 1.05 : 0.85,
+                    laneModelKnown ? (graphSegment.current ? 0.72 : 0.54) : 0.65,
+                    laneModelKnown ? [5, 7] : [2, 5]);
                 }
               }
 
               var graphLanes = asArray(graphSegment.lanes);
               for (var gli = 0; gli < graphLanes.length; gli++) {
                 var graphLane = graphLanes[gli];
-                if (graphLane.id === laneGraph.currentLaneId) {
-                  var laneStart = localPoint(graphLane.start, ego);
-                  var laneFinish = localPoint(graphLane.finish, ego);
-                  if (laneStart && laneFinish) {
-                    addLine([laneStart, laneFinish], "#3c8fc8", 1.25, 0.72);
-                  }
+                var laneStart = localPoint(graphLane.start, ego);
+                var laneFinish = localPoint(graphLane.finish, ego);
+                if (laneStart && laneFinish) {
+                  var currentLane = graphLane.id === laneGraph.currentLaneId;
+                  var inferredLane = graphLane.source === "tracked-traffic-trajectories";
+                  addLine([laneStart, laneFinish],
+                    currentLane ? "#55b4f3" : (inferredLane ? "#b18b56" : "#718896"),
+                    currentLane ? 1.45 : 0.95,
+                    currentLane ? 0.88 : (inferredLane ? 0.56 : 0.46),
+                    inferredLane ? [3, 5] : [7, 8]);
                 }
               }
             }
@@ -561,29 +602,6 @@
             }
           }
           drawPolyline(routeLocal, "#48a8ff", 2.5, 0.96);
-
-          // Spatial returns are a bounded point cloud, not per-return 3D boxes.
-          var geometry = asArray(snapshotData.geometry);
-          for (var gi = 0; gi < geometry.length; gi++) {
-            var geometryItem = geometry[gi];
-            var geometryPoint = localPoint(geometryItem.position, ego);
-            var geometryAge = Number(geometryItem.age);
-            if (!geometryPoint || !isFinite(geometryAge) || geometryAge > 2.5) continue;
-            addMarker(geometryPoint, "#91aeba",
-              0.10 + (Number(geometryItem.observationCount) || 1) * 0.018,
-              clamp(0.92 - geometryAge * 0.18, 0.38, 0.9));
-          }
-
-          var staticGeometry = asArray(snapshotData.staticGeometry);
-          for (var si = 0; si < staticGeometry.length; si++) {
-            var staticItem = staticGeometry[si];
-            var staticPoint = localPoint(staticItem.position, ego);
-            if (!staticPoint || Number(staticItem.hitCount || 0) < 2) continue;
-            var staticAge = Number(staticItem.dataAge) || 0;
-            addMarker(staticPoint, "#718d9b",
-              0.12 + Math.min(8, Number(staticItem.hitCount) || 0) * 0.012,
-              clamp(0.82 - staticAge / 2400, 0.38, 0.82));
-          }
 
           // Moving returns are a transient layer. Static geometry is cached in
           // BEAMNG WORLD coordinates so driving does not erase already mapped areas.
@@ -657,12 +675,77 @@
             return result;
           }
 
+          // Maintain a moving circular 500 m cache around the player.
+          // Reindex retained data only after 25 m of movement or a radius change.
+          var mapRadiusM = clamp(Number(sessionMap.radiusM || mapSettings.radiusM) || 500, 100, 500);
+          var cacheCenterX = Number(ego.position.x);
+          var cacheCenterY = Number(ego.position.y);
+          var centerDeltaX = cachedSurfacePruneCenter
+            ? cacheCenterX - cachedSurfacePruneCenter.x : Infinity;
+          var centerDeltaY = cachedSurfacePruneCenter
+            ? cacheCenterY - cachedSurfacePruneCenter.y : Infinity;
+          if (!cachedSurfacePruneCenter || cachedSurfacePruneRadius !== mapRadiusM
+              || centerDeltaX * centerDeltaX + centerDeltaY * centerDeltaY >= 625) {
+            var radiusSquared = mapRadiusM * mapRadiusM;
+            cachedSurfacePoints = cachedSurfacePoints.filter(function (point) {
+              var dx = point.position.x - cacheCenterX;
+              var dy = point.position.y - cacheCenterY;
+              return dx * dx + dy * dy <= radiusSquared;
+            });
+            cachedSurfacePointByKey = Object.create(null);
+            cachedSurfacePointBuckets = Object.create(null);
+            for (var cp = 0; cp < cachedSurfacePoints.length; cp++) {
+              var keptPoint = cachedSurfacePoints[cp];
+              cachedSurfacePointByKey[keptPoint.key] = keptPoint;
+              var keptBucketKey = surfacePointBucket(keptPoint.position.x, keptPoint.position.y);
+              if (!cachedSurfacePointBuckets[keptBucketKey]) cachedSurfacePointBuckets[keptBucketKey] = [];
+              cachedSurfacePointBuckets[keptBucketKey].push(cp);
+            }
+            cachedSurfaceEdges = cachedSurfaceEdges.filter(function (edgeItem) {
+              if (!edgeItem || !edgeItem.a || !edgeItem.b) return false;
+              var adx = edgeItem.a.position.x - cacheCenterX;
+              var ady = edgeItem.a.position.y - cacheCenterY;
+              var bdx = edgeItem.b.position.x - cacheCenterX;
+              var bdy = edgeItem.b.position.y - cacheCenterY;
+              return adx * adx + ady * ady <= radiusSquared
+                && bdx * bdx + bdy * bdy <= radiusSquared;
+            });
+            cachedSurfaceFaces = cachedSurfaceFaces.filter(function (faceItem) {
+              if (!faceItem || !faceItem.a || !faceItem.b || !faceItem.c) return false;
+              var vertices = [faceItem.a.position, faceItem.b.position, faceItem.c.position];
+              for (var vi = 0; vi < vertices.length; vi++) {
+                var dx = vertices[vi].x - cacheCenterX;
+                var dy = vertices[vi].y - cacheCenterY;
+                if (dx * dx + dy * dy > radiusSquared) return false;
+              }
+              return true;
+            });
+            cachedSurfaceEdgeKeys = Object.create(null);
+            cachedSurfaceRenderBuckets = Object.create(null);
+            for (var ce = 0; ce < cachedSurfaceEdges.length; ce++) {
+              var keptEdge = cachedSurfaceEdges[ce];
+              cachedSurfaceEdgeKeys[keptEdge.key] = true;
+              addSurfaceRenderItem(keptEdge,
+                (keptEdge.a.position.x + keptEdge.b.position.x) * 0.5,
+                (keptEdge.a.position.y + keptEdge.b.position.y) * 0.5);
+            }
+            for (var cf = 0; cf < cachedSurfaceFaces.length; cf++) {
+              var keptFace = cachedSurfaceFaces[cf];
+              addSurfaceRenderItem(keptFace,
+                (keptFace.a.position.x + keptFace.b.position.x + keptFace.c.position.x) / 3,
+                (keptFace.a.position.y + keptFace.b.position.y + keptFace.c.position.y) / 3);
+            }
+            cachedSurfacePruneCenter = {x: cacheCenterX, y: cacheCenterY};
+            cachedSurfacePruneRadius = mapRadiusM;
+          }
+
           // Snapshot timestamps change only when new sensor/world-model data arrives,
           // not every animation frame. Merge each snapshot once.
           var surfaceSnapshotTime = Number(snapshotData.timestamp) || 0;
           if (cachedSurfaceSnapshotTime !== surfaceSnapshotTime) {
             cachedSurfaceSnapshotTime = surfaceSnapshotTime;
-            for (var sp = 0; sp < staticGeometry.length; sp++) {
+            for (var sp = 0; sp < staticGeometry.length
+                && cachedSurfacePoints.length < 12000; sp++) {
               var sourcePoint = staticGeometry[sp];
               var world = sourcePoint && sourcePoint.position;
               if (!world || !isFinite(Number(world.x)) ||
@@ -955,6 +1038,44 @@
           }
           ctx.globalAlpha = 1;
 
+          // Pin the player's own vehicle above the 3D layers so dense surface
+          // geometry cannot hide it.
+          var egoX = cssWidth * 0.5;
+          var egoY = cssHeight * 0.83;
+          ctx.save();
+          ctx.translate(egoX, egoY);
+          ctx.shadowColor = "rgba(70, 190, 220, 0.42)";
+          ctx.shadowBlur = 10;
+          ctx.fillStyle = "#d9e6ec";
+          ctx.strokeStyle = "#8bc7d5";
+          ctx.lineWidth = 1.1;
+          ctx.beginPath();
+          ctx.moveTo(0, -15);
+          ctx.quadraticCurveTo(7, -14, 8, -5);
+          ctx.lineTo(7, 10);
+          ctx.quadraticCurveTo(6, 15, 0, 15);
+          ctx.quadraticCurveTo(-6, 15, -7, 10);
+          ctx.lineTo(-8, -5);
+          ctx.quadraticCurveTo(-7, -14, 0, -15);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = "#294653";
+          ctx.beginPath();
+          ctx.moveTo(-5, -5);
+          ctx.lineTo(-4, -10);
+          ctx.quadraticCurveTo(0, -12, 4, -10);
+          ctx.lineTo(5, -5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = "#1b2932";
+          ctx.fillRect(-9, -7, 2, 7);
+          ctx.fillRect(7, -7, 2, 7);
+          ctx.fillRect(-9, 6, 2, 6);
+          ctx.fillRect(7, 6, 2, 6);
+          ctx.restore();
+
           // A small forward glow keeps the map readable without adding telemetry panels.
           var glow = ctx.createRadialGradient(cssWidth * 0.5, cssHeight * 0.46, 2,
             cssWidth * 0.5, cssHeight * 0.46, cssWidth * 0.58);
@@ -967,7 +1088,10 @@
 
         function frame(timestamp) {
           if (destroyed) return;
-          if (!lastRenderedAt || timestamp - lastRenderedAt >= 83) {
+          var renderFps = clamp(Number(snapshot && snapshot.mapSettings
+            && snapshot.mapSettings.renderFps) || 30, 15, 60);
+          var frameInterval = 1000 / renderFps;
+          if (!lastRenderedAt || timestamp - lastRenderedAt >= frameInterval) {
             lastRenderedAt = timestamp;
             try {
               draw(snapshot);
