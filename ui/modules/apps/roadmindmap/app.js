@@ -510,7 +510,7 @@
               if (gl < 0.2) continue;
               var gnx = -gy / gl;
               var gny = gx / gl;
-              var ghw = clamp(Number(graphSegment.roadHalfWidth) || 3.5, 2.0, 18);
+              var ghw = clamp(Number(graphSegment.roadHalfWidth) || 3.5, 1.2, 18);
               var gLeftA = localPoint(graphSegment.surfaceStartLeft, ego);
               var gRightA = localPoint(graphSegment.surfaceStartRight, ego);
               var gLeftB = localPoint(graphSegment.surfaceFinishLeft, ego);
@@ -586,7 +586,7 @@
               }
             }
           } else {
-            var halfWidth = clamp(Number(road.roadHalfWidth) || 3.5, 2.2, 18);
+            var halfWidth = clamp(Number(road.roadHalfWidth) || 3.5, 1.2, 18);
             for (var r = 0; r < corridor.length - 1; r++) {
               var a = corridor[r], b = corridor[r + 1];
               var dx = b.x - a.x, dy = b.y - a.y;
