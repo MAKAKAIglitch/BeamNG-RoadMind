@@ -7662,6 +7662,24 @@ function M.getPerceptionSnapshot()
     end
   end
 
+  local lidarPoints = {}
+  local lidarObservations = model and model.observations and model.observations.lidar or {}
+  local now = tonumber(state.simulationTime) or 0
+  for i = #lidarObservations, 1, -1 do
+    local observation = lidarObservations[i]
+    local timestamp = tonumber(observation and observation.timestamp)
+    local point = observation and asVec3(observation.position)
+    if point and timestamp and now - timestamp >= -0.1 and now - timestamp <= 3.0 then
+      local dx = point.x - position.x
+      local dy = point.y - position.y
+      local dz = point.z - position.z
+      if dx * dx + dy * dy + dz * dz <= 65 * 65 then
+        lidarPoints[#lidarPoints + 1] = vectorToPlainTable(point)
+        if #lidarPoints >= 1400 then break end
+      end
+    end
+  end
+
   local obstacles = {}
   if model then
     for i = 1, math.min(#(model.obstacles or {}), 64) do
@@ -7690,6 +7708,7 @@ function M.getPerceptionSnapshot()
     frameAge = state.frameAge,
     vehicle = vehicle,
     targets = targets,
+    lidarPoints = lidarPoints,
     obstacles = obstacles,
     road = state._roadmindHelpers.cloneWorldModelValue(state.roadState or {
       valid = false, quality = "unavailable", corridor = {}
