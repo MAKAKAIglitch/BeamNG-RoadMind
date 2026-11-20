@@ -138,12 +138,43 @@ The local surface reconstruction still uses triangles internally to connect meas
 
 ## 12. NavGraph road surface and lane rendering
 
-Road and lane geometry are sourced from the cached local NavGraph (map.getMap()), the same navigation graph BeamNG uses for AI and traffic routing. RoadMind does not scan every DecalRoad node on every update and does not add sensor raycasts for map rendering.
+The fallback road and lane graph is sourced from the cached local NavGraph (map.getMap()), the same navigation graph BeamNG uses for AI and traffic routing. The primary FSD-style surface is now sourced from cached DecalRoad splines in items.level.json; see section 13. RoadMind does not add sensor raycasts for map rendering.
 
 - **Width priority:** use the NavGraph node radius directly as road half-width. If radius is absent but directional lane counts are present, estimate total width as 2.4 m for a single-lane segment or 3.05 m per lane for segments with two or more lanes, then use half as the edge half-width. These are BeamNG Traffic-style lane-width estimates, not exact measured widths. If neither source exists, use the conservative planner-width fallback. The widthSource field preserves which path was used. The renderer accepts road half-widths down to 1.2 m so narrow roads are not artificially widened.
 - **Connected road surface:** build one strip per physical NavGraph edge, share mitered corner offsets across degree-two nodes, and add bounded surface patches at nodes with three or more road connections. Degenerate or very sharp joins fall back to the local segment normal to avoid long spikes.
 - **Lane separators:** use NavGraph forward/reverse lane counts to position separators across the entire road, including the centre divider on two-way roads. Precompute their world-space endpoints from the same joined corner geometry so markings continue through bends.
 - **Traffic fallback:** confirmed, direction-aligned traffic trajectories can infer provisional lane centres only where NavGraph lane metadata is missing. Their boundaries retain a visually distinct provisional style and are not promoted to authoritative metadata.
-- **Bounds:** the map continues to use the configured local radius, the 96-segment graph cap, bounded branch traversal, and existing polygon/line budgets. Surface and lane geometry are generated from the already-cached graph; no per-frame full-level graph rebuild is introduced.
+- **Bounds:** the fallback NavGraph renderer keeps a 192-segment cap and bounded traversal. Primary DecalRoad sampling is separately capped at 128 visible runs and 1,800 samples, with the configured look-ahead and cached road-object bounds. Both paths reuse level data instead of rebuilding the complete level graph each UI frame.
 
 These are static geometry and source-selection checks. Road width estimates and junction appearance still require visual validation on several BeamNG levels, especially roads with missing radius/lane metadata, unusual lane widths, and complex intersections.
+
+
+## 13. FSD-style road and sensor preview
+
+The map uses the same basic visual hierarchy as an FSD-style perception display: the ego vehicle stays in the foreground, the road extends ahead in perspective, lane boundaries remain visible, and sensor-derived objects are separated by source.
+
+### Road geometry source and sampling
+
+- **Primary source:** cached `DecalRoad` objects from the active level's `items.level.json`. Each accepted node uses the documented `[x, y, z, width]` format. Road-level fields include `lanesLeft`, `lanesRight`, `autoLanes`, `oneWay`, `flipDirection` and `smoothness`.
+- **Curve:** sample consecutive control-node pairs at about 2.5 m spacing. Use centripetal Catmull–Rom interpolation and blend from linear interpolation according to the road's smoothness value. Width is interpolated along the same curve.
+- **Lane markings:** manual left/right lane counts take priority. When automatic lanes are enabled and counts are absent, estimate lane count from road width. The center divider is styled separately; `flipDirection` swaps the two manual side counts.
+- **Preview window:** the default forward preview is 120 m (configurable 100–180 m); a short rear window and lateral margin keep the road under and around the car connected. This road preview is level data and is visible before sensor scans have discovered the surface.
+- **Performance:** level road objects are cached once per level. Candidate road bounds are checked before sampling and nearer road objects are processed first. The sampled world-space geometry is reused for up to 0.8 s and refreshed after about 5 m of movement, a meaningful heading change, or a preview-range change. Hard limits are 128 road runs and 1,800 samples.
+- **Fallback:** if DecalRoad data is unavailable, use the connected NavGraph geometry and its lane metadata/traffic inference. The map should expose the source/status so missing level road data is diagnosable.
+
+DecalRoad is a road-surface decal projected onto terrain or static surfaces, not a standalone elevated road mesh. The map therefore reconstructs a smooth ribbon from its node positions and widths; it does not copy BeamNG's clipped material texture or the exact generated terrain/static-mesh edge geometry. Bridges depend on the stored node heights and may need in-game validation.
+
+### Sensor and perception layers
+
+- **LiDAR:** fresh hit points are displayed as a cyan point cloud.
+- **Radar:** fresh radar hits are shown in amber; the source mount-to-hit ray is retained when available.
+- **Ultrasonic:** nearby hits are shown in green with short source-to-hit proximity rays.
+- **Cameras:** geometric field-of-view wedges are drawn in blue. Vehicles with a current camera visibility source receive a separate vehicle tint.
+- **Freshness and bounds:** map snapshots only publish returns from enabled sensors whose source timestamp is no more than 1.6 s old. Snapshot caps are 180 LiDAR, 64 radar, 32 ultrasonic returns, and 40 geometric zones. These are display limits, not sensor scan-rate changes.
+- **Camera limitation:** the regular Drive camera model supplies geometric frustums and simulator-assisted visibility candidates. It does not supply RGB frames or semantic segmentation. The map must not label these overlays as image recognition.
+
+### Perspective defaults
+
+The default FSD-style camera uses 14 m height, 20 m follow distance and a 20 m look-ahead target. The road preview distance is a separate 120 m setting: it controls how much road is available to draw, not where the virtual camera aims. These defaults provide a low foreground ego-car view while preserving enough road depth to show upcoming bends.
+
+All geometry and sensor overlays are projected from world coordinates around the live ego pose. The UI only draws cached snapshots; road file parsing, spline sampling, sensor acquisition and World Model fusion stay in Lua/backend paths.

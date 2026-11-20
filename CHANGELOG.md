@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Tesla FSD-style 3D perception map
+
+- Set a forward-looking FSD-style perspective with the ego vehicle low in the foreground, a 120 m default road preview, and independent camera height, follow distance and look-ahead controls.
+- Build the primary road ribbon from cached `DecalRoad` nodes in `items.level.json`, including per-node width, lane counts and direction settings; sample the spline at approximately 2.5 m intervals with Catmull–Rom interpolation blended by road smoothness.
+- Render continuous road ribbons and lane separators from the precomputed spline points, with a distinct opposing-flow divider; retain the expanded NavGraph network as a fallback when DecalRoad data is not available.
+- Cache world-space road samples and refresh them on movement, heading changes or cache expiry; reject distant road objects by bounding box and prioritize nearby roads within fixed run/sample budgets.
+- Publish fresh LiDAR, radar and ultrasonic hit points with their sensor origins/directions, plus geometric camera/radar/LiDAR/ultrasonic coverage zones.
+- Render sensor-specific point colours, proximity rays and translucent coverage wedges; distinguish vehicles confirmed by camera visibility from other tracked traffic.
+- State explicitly that regular BeamNG camera models provide geometric frustums and vehicle visibility candidates, not RGB image recognition or semantic segmentation.
+
 ## Unreleased — NavGraph road surface and lane geometry
 
 - Build connected road strips from the local BeamNG NavGraph using shared miter joins at degree-two nodes and filled surface patches at graph junctions.
