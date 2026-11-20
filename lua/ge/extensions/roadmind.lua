@@ -4017,7 +4017,26 @@ state._roadmindHelpers.updateVisualizationRenderState = function(dt)
       -- eased in world space before the ego-pose re-anchor. Doing so would
       -- introduce a visible lag even after converting back to vehicle-local
       -- coordinates. LiDAR object returns have their own track-local renderer.
-      if ATTACHED_VISUAL_FIELDS[key] then
+      if key == "lidar" and type(value) == "table" then
+        -- LiDAR hit returns are immutable after publication and the renderer
+        -- only reads them. Share this large array instead of recursively
+        -- copying every return on every graphics frame; keep a separate copy
+        -- only for the mount/pose fields that are re-anchored below.
+        local renderLidar = type(renderFrame.lidar) == "table" and renderFrame.lidar or {}
+        for lidarKey, lidarValue in pairs(value) do
+          if lidarKey == "rays" then
+            renderLidar.rays = lidarValue
+          else
+            renderLidar[lidarKey] = state._roadmindHelpers.copyVisualizationValueInto(
+              lidarValue, renderLidar[lidarKey]
+            )
+          end
+        end
+        for lidarKey in pairs(renderLidar) do
+          if value[lidarKey] == nil then renderLidar[lidarKey] = nil end
+        end
+        renderFrame.lidar = renderLidar
+      elseif ATTACHED_VISUAL_FIELDS[key] then
         renderFrame[key] = state._roadmindHelpers.copyVisualizationValueInto(value, renderFrame[key])
       else
         renderFrame[key] = state._roadmindHelpers.smoothVisualizationValue(
