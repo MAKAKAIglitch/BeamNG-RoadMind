@@ -4,7 +4,14 @@
   angular.module("beamng.apps").directive("roadmindMap", ["$timeout", function ($timeout) {
     var template =
       '<div class="roadmind-map-app" aria-label="RoadMind Map">' +
-        '<canvas class="roadmind-map-canvas"></canvas>' +
+        '<canvas class="roadmind-map-canvas" tabindex="0" aria-label="Open RoadMind map"></canvas>' +
+        '<button class="roadmind-map-expand" type="button" title="Open large map" aria-label="Open large map">⤢</button>' +
+        '<div class="roadmind-map-toolbar" hidden>' +
+          '<button class="roadmind-map-control roadmind-map-close" type="button" data-action="close" title="Close map">×</button>' +
+          '<button class="roadmind-map-control" type="button" data-action="recenter" title="Recenter map">◎</button>' +
+          '<span class="roadmind-map-help">Drag to pan · scroll to zoom</span>' +
+          '<span class="roadmind-map-range">500 m</span>' +
+        '</div>' +
       '</div>';
 
     return {
@@ -15,7 +22,23 @@
         var root = element[0];
         var canvas = root.querySelector("canvas");
         var ctx = canvas && canvas.getContext("2d");
+        var expandButton = root.querySelector(".roadmind-map-expand");
+        var toolbar = root.querySelector(".roadmind-map-toolbar");
+        var closeButton = root.querySelector("[data-action='close']");
+        var recenterButton = root.querySelector("[data-action='recenter']");
         var snapshot = null;
+        var expanded = false;
+        var drawDirty = true;
+        var roadRevision = -1;
+        var surfaceRevision = -1;
+        var sessionGeneration = null;
+        var cachedRoadNetwork = [];
+        var cachedStaticGeometry = [];
+        var mapView = {panX: 0, panY: 0, zoom: 1};
+        var dragState = null;
+        var movedDuringPointer = false;
+        var lastCanvasWidth = 0;
+        var lastCanvasHeight = 0;
         var pollTimer = null;
         var pollWatchdog = null;
         var rafId = 0;
@@ -123,22 +146,50 @@
           pollWatchdog = $timeout(function () {
             polling = false;
             schedulePoll(700);
-          }, 1400);
-          roadmindLua(
-            "jsonEncode(extensions.roadmind.getMapSnapshot())",
-            function (result) {
-              if (destroyed) return;
-              if (pollWatchdog) $timeout.cancel(pollWatchdog);
-              polling = false;
-              var next = unwrap(result);
-              if (next) {
-                snapshot = next;
-                lastSnapshotAt = Date.now();
+          }, 1800);
+          var command = "jsonEncode(extensions.roadmind.getMapSnapshot(" +
+            roadRevision + "," + surfaceRevision + "," + (expanded ? "true" : "false") + "))";
+          roadmindLua(command, function (result) {
+            if (destroyed) return;
+            if (pollWatchdog) $timeout.cancel(pollWatchdog);
+            polling = false;
+            var next = unwrap(result);
+            if (next) {
+              var generation = Number(next.sessionMap && next.sessionMap.generation) || 1;
+              if (sessionGeneration !== null && generation !== sessionGeneration) {
+                roadRevision = -1;
+                surfaceRevision = -1;
+                cachedRoadNetwork = [];
+                cachedStaticGeometry = [];
+                cachedSurfaceGeneration = null;
+                cachedSurfaceSnapshotTime = null;
+                cachedSurfacePoints = [];
+                cachedSurfacePointByKey = Object.create(null);
+                cachedSurfacePointBuckets = Object.create(null);
+                cachedSurfaceFaces = [];
+                cachedSurfaceRenderBuckets = Object.create(null);
               }
-              scope.$evalAsync();
-              schedulePoll(300);
+              sessionGeneration = generation;
+              if (Array.isArray(next.decalRoads)) {
+                cachedRoadNetwork = next.decalRoads;
+                roadRevision = Number(next.roadRevision) || 0;
+              }
+              if (Array.isArray(next.staticGeometry)) {
+                cachedStaticGeometry = next.staticGeometry;
+                surfaceRevision = Number(next.sessionMap && next.sessionMap.revision) || 0;
+              }
+              snapshot = Object.assign({}, next, {
+                decalRoads: cachedRoadNetwork,
+                staticGeometry: cachedStaticGeometry
+              });
+              lastSnapshotAt = Date.now();
+              drawDirty = true;
             }
-          );
+            scope.$evalAsync();
+            var loadingRoads = snapshot && snapshot.roadGeometryStatus
+              && snapshot.roadGeometryStatus.loadActive === true;
+            schedulePoll(expanded ? (loadingRoads ? 220 : 300) : (loadingRoads ? 260 : 350));
+          });
         }
 
         function setMapEnabled(enabled) {
@@ -146,6 +197,81 @@
             "jsonEncode(extensions.roadmind.setMapEnabled(" +
               (enabled ? "true" : "false") + "))"
           );
+        }
+
+        function setExpanded(open) {
+          if (expanded === (open === true)) return;
+          expanded = open === true;
+          root.classList.toggle("roadmind-map-expanded", expanded);
+          if (toolbar) toolbar.hidden = !expanded;
+          if (expandButton) expandButton.hidden = expanded;
+          drawDirty = true;
+          lastCanvasWidth = 0;
+          lastCanvasHeight = 0;
+          schedulePoll(40);
+        }
+
+        function recenterMap() {
+          mapView.panX = 0;
+          mapView.panY = 0;
+          mapView.zoom = 1;
+          drawDirty = true;
+        }
+
+        function onMapPointerDown(event) {
+          if (!expanded || event.button !== 0) return;
+          dragState = {
+            x: event.clientX, y: event.clientY,
+            panX: mapView.panX, panY: mapView.panY
+          };
+          movedDuringPointer = false;
+          if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
+          root.classList.add("is-panning");
+          event.preventDefault();
+        }
+
+        function onMapPointerMove(event) {
+          if (!expanded || !dragState) return;
+          var dx = event.clientX - dragState.x;
+          var dy = event.clientY - dragState.y;
+          if (Math.abs(dx) + Math.abs(dy) > 2) movedDuringPointer = true;
+          var radius = clamp(Number(snapshot && snapshot.mapSettings
+            && snapshot.mapSettings.radiusM) || 500, 100, 500);
+          var scale = Math.min(canvas.clientWidth || 1, canvas.clientHeight || 1)
+            * 0.92 / (radius * 2) * clamp(mapView.zoom, 0.65, 8);
+          mapView.panX = dragState.panX - dx / Math.max(scale, 0.0001);
+          mapView.panY = dragState.panY + dy / Math.max(scale, 0.0001);
+          drawDirty = true;
+        }
+
+        function onMapPointerUp(event) {
+          if (!dragState) return;
+          dragState = null;
+          root.classList.remove("is-panning");
+          if (canvas.releasePointerCapture && canvas.hasPointerCapture
+              && canvas.hasPointerCapture(event.pointerId)) {
+            canvas.releasePointerCapture(event.pointerId);
+          }
+          if (movedDuringPointer) event.preventDefault();
+        }
+
+        function onMapWheel(event) {
+          if (!expanded) return;
+          event.preventDefault();
+          var factor = event.deltaY < 0 ? 1.18 : (1 / 1.18);
+          mapView.zoom = clamp(mapView.zoom * factor, 0.65, 8);
+          drawDirty = true;
+        }
+
+        function onCanvasClick() {
+          if (!expanded && !movedDuringPointer) setExpanded(true);
+        }
+
+        function onMapKeyDown(event) {
+          if (expanded && (event.key === "Escape" || event.key === "Esc")) {
+            setExpanded(false);
+            drawDirty = true;
+          }
         }
 
         function enableMap() {
@@ -195,8 +321,21 @@
           };
         }
 
-        function makeProjection(ego, width, height, mapSettings) {
+        function makeProjection(ego, width, height, mapSettings, expandedView, viewState) {
           mapSettings = mapSettings || {};
+          if (expandedView) {
+            var radius = clamp(Number(mapSettings.radiusM) || 500, 100, 500);
+            var zoom = clamp(Number(viewState && viewState.zoom) || 1, 0.65, 8);
+            var scale = Math.min(width, height) * 0.92 / (radius * 2) * zoom;
+            var panX = Number(viewState && viewState.panX) || 0;
+            var panY = Number(viewState && viewState.panY) || 0;
+            return function (point) {
+              var sx = width * 0.5 + (point.x - panX) * scale;
+              var sy = height * 0.5 - (point.y - panY) * scale;
+              if (!isFinite(sx) || !isFinite(sy)) return null;
+              return {x: sx, y: sy, depth: 10000 - (Number(point.z) || 0)};
+            };
+          }
           var speed = clamp(Number(ego.speedMps) || 0, 0, 45);
           var distance = clamp((Number(mapSettings.cameraDistanceM) || 20) + speed * 0.12, 16, 40);
           var cameraHeight = clamp((Number(mapSettings.cameraHeightM) || 14) + speed * 0.04, 10, 22);
@@ -257,9 +396,10 @@
 
           var ego = snapshotData && snapshotData.vehicle;
           var mapSettings = snapshotData && snapshotData.mapSettings || {};
-          var polygonLimit = clamp(Number(mapSettings.maxPolygons) || 3000, 500, 8000);
-          var lineLimit = polygonLimit * 2;
-          var markerLimit = Math.min(5000, polygonLimit);
+          var isExpanded = expanded;
+          var polygonLimit = isExpanded ? 8000 : 650;
+          var lineLimit = isExpanded ? 12000 : 1200;
+          var markerLimit = isExpanded ? 900 : 32;
           if (!ego || !ego.position || !ego.forward || !ego.right || !ego.up) {
             // Keep a dark perspective grid while pose data is unavailable.
             // No road or vehicle is fabricated from missing observations.
@@ -285,7 +425,7 @@
             return;
           }
 
-          var project = makeProjection(ego, cssWidth, cssHeight, mapSettings);
+          var project = makeProjection(ego, cssWidth, cssHeight, mapSettings, isExpanded, mapView);
           if (!project) return;
           var polygons = [];
           var lines = [];
@@ -463,7 +603,7 @@
             if (!points || points.length < 2) return;
             var run = [];
             for (var i = 0; i < points.length; i++) {
-              if (project(points[i])) {
+              if (points[i] && project(points[i])) {
                 run.push(points[i]);
               } else {
                 if (run.length >= 2) addLine(run, color, width, alpha, dash);
@@ -473,19 +613,33 @@
             if (run.length >= 2) addLine(run, color, width, alpha, dash);
           }
 
-          // A restrained ground plane and reference grid establish depth without
-          // inventing road markings or revealing hidden level geometry.
-          addPolygon([
-            {x: -90, y: -35, z: -1.1}, {x: 90, y: -35, z: -1.1},
-            {x: 90, y: 125, z: -1.1}, {x: -90, y: 125, z: -1.1}
-          ], "#070c12", 1);
-          for (var gy = -20; gy <= 100; gy += 10) {
-            addLine([{x: -55, y: gy, z: -1.08}, {x: 55, y: gy, z: -1.08}],
-              "#263441", 0.8, 0.58, [2, 8]);
-          }
-          for (var gx = -50; gx <= 50; gx += 10) {
-            addLine([{x: gx, y: -20, z: -1.08}, {x: gx, y: 100, z: -1.08}],
-              "#263441", 0.8, 0.48, [2, 8]);
+          if (isExpanded) {
+            var overviewRadius = clamp(Number(mapSettings.radiusM) || 500, 100, 500);
+            addPolygon([
+              {x: -overviewRadius, y: -overviewRadius, z: -1.1},
+              {x: overviewRadius, y: -overviewRadius, z: -1.1},
+              {x: overviewRadius, y: overviewRadius, z: -1.1},
+              {x: -overviewRadius, y: overviewRadius, z: -1.1}
+            ], "#070c12", 1);
+            for (var grid = -overviewRadius; grid <= overviewRadius; grid += 50) {
+              addLine([{x: -overviewRadius, y: grid, z: -1.08},
+                {x: overviewRadius, y: grid, z: -1.08}], "#263441", 0.8, 0.26);
+              addLine([{x: grid, y: -overviewRadius, z: -1.08},
+                {x: grid, y: overviewRadius, z: -1.08}], "#263441", 0.8, 0.26);
+            }
+          } else {
+            addPolygon([
+              {x: -90, y: -35, z: -1.1}, {x: 90, y: -35, z: -1.1},
+              {x: 90, y: 125, z: -1.1}, {x: -90, y: 125, z: -1.1}
+            ], "#070c12", 1);
+            for (var gy = -20; gy <= 100; gy += 10) {
+              addLine([{x: -55, y: gy, z: -1.08}, {x: 55, y: gy, z: -1.08}],
+                "#263441", 0.8, 0.58, [2, 8]);
+            }
+            for (var gx = -50; gx <= 50; gx += 10) {
+              addLine([{x: gx, y: -20, z: -1.08}, {x: gx, y: 100, z: -1.08}],
+                "#263441", 0.8, 0.48, [2, 8]);
+            }
           }
 
           var road = snapshotData.road || {};
@@ -511,7 +665,13 @@
               for (var rp = 0; rp < roadSamples.length; rp++) {
                 var sample = roadSamples[rp];
                 var center = localPoint(sample, ego);
-                if (!center) continue;
+                if (!center || (!isExpanded &&
+                    (Math.abs(center.x) > 72 || center.y < -48 || center.y > 155))) {
+                  centers.push(null);
+                  leftEdge.push(null);
+                  rightEdge.push(null);
+                  continue;
+                }
                 var previous = localPoint(roadSamples[Math.max(0, rp - 1)], ego);
                 var next = localPoint(roadSamples[Math.min(roadSamples.length - 1, rp + 1)], ego);
                 if (!previous || !next) continue;
@@ -532,6 +692,7 @@
               var roadFill = decalRoad.drivability !== undefined
                 && Number(decalRoad.drivability) <= 0 ? "#202a32" : "#2b3944";
               for (var rs = 0; rs < centers.length - 1; rs++) {
+                if (!leftEdge[rs] || !rightEdge[rs] || !leftEdge[rs + 1] || !rightEdge[rs + 1]) continue;
                 addPolygon([
                   leftEdge[rs], rightEdge[rs],
                   rightEdge[rs + 1], leftEdge[rs + 1]
@@ -546,6 +707,10 @@
                 if (!isFinite(fraction)) continue;
                 var lanePath = [];
                 for (var lp = 0; lp < centers.length; lp++) {
+                  if (!centers[lp] || !leftEdge[lp]) {
+                    lanePath.push(null);
+                    continue;
+                  }
                   var dx = leftEdge[lp].x - centers[lp].x;
                   var dy = leftEdge[lp].y - centers[lp].y;
                   lanePath.push({
@@ -738,34 +903,10 @@
           }
           drawPolyline(routeLocal, "#48a8ff", 2.5, 0.96);
 
-          // Moving returns are a transient layer. Static geometry is cached in
-          // BEAMNG WORLD coordinates so driving does not erase already mapped areas.
-          var geometry = asArray(snapshotData.geometry);
-          for (var gi = 0; gi < geometry.length; gi++) {
-            var geometryItem = geometry[gi];
-            var geometryPoint = localPoint(geometryItem.position, ego);
-            var geometryAge = Number(geometryItem.age);
-            if (!geometryPoint || !isFinite(geometryAge) || geometryAge > 2.5) continue;
-            addMarker(geometryPoint, "#91aeba",
-              0.10 + (Number(geometryItem.observationCount) || 1) * 0.018,
-              clamp(0.92 - geometryAge * 0.18, 0.38, 0.9));
-          }
-
+          // The mini-map stays clean; expensive scanned-surface triangulation
+          // is only built for the large overview and only near the ego vehicle.
+          if (isExpanded) {
           var staticGeometry = asArray(snapshotData.staticGeometry);
-          for (var si = 0; si < staticGeometry.length; si++) {
-            var staticItem = staticGeometry[si];
-            var staticPoint = localPoint(staticItem.position, ego);
-            if (!staticPoint) continue;
-            var staticAge = Number(staticItem.dataAge) || 0;
-            var staticSources = asArray(staticItem.sourceSensors);
-            var staticColor = staticSources.indexOf("lidar") >= 0 ? "#6abfce"
-              : (staticSources.indexOf("radar") >= 0 ? "#bd986c"
-                : (staticSources.indexOf("ultrasonic") >= 0 ? "#91b77d" : "#718d9b"));
-            addMarker(staticPoint, staticColor,
-              0.12 + Math.min(8, Number(staticItem.hitCount) || 0) * 0.012,
-              clamp(0.82 - staticAge / 2400, 0.38, 0.82));
-          }
-
           var sessionMap = snapshotData.sessionMap || {};
           var mapGeneration = Number(sessionMap.generation) || 1;
           if (cachedSurfaceGeneration !== mapGeneration) {
@@ -860,15 +1001,18 @@
 
           // Snapshot timestamps change only when new sensor/world-model data arrives,
           // not every animation frame. Merge each snapshot once.
-          var surfaceSnapshotTime = Number(snapshotData.timestamp) || 0;
+          var surfaceSnapshotTime = Number(sessionMap.revision) || 0;
           if (cachedSurfaceSnapshotTime !== surfaceSnapshotTime) {
             cachedSurfaceSnapshotTime = surfaceSnapshotTime;
             for (var sp = 0; sp < staticGeometry.length
-                && cachedSurfacePoints.length < 12000; sp++) {
+                && cachedSurfacePoints.length < 2500; sp++) {
               var sourcePoint = staticGeometry[sp];
               var world = sourcePoint && sourcePoint.position;
               if (!world || !isFinite(Number(world.x)) ||
                   !isFinite(Number(world.y)) || !isFinite(Number(world.z))) continue;
+              var worldDx = Number(world.x) - ego.position.x;
+              var worldDy = Number(world.y) - ego.position.y;
+              if (worldDx * worldDx + worldDy * worldDy > 8100) continue;
 
               var pointKey = sourcePoint.geometryId ||
                 (Math.round(Number(world.x) / 0.26) + ":" +
@@ -1017,84 +1161,14 @@
             var faceB = localPoint(face.b.position, ego);
             var faceC = localPoint(face.c.position, ego);
             if (!faceA || !faceB || !faceC) continue;
-            if (Math.abs(faceA.x) > 58 || Math.abs(faceB.x) > 58 || Math.abs(faceC.x) > 58 ||
-                faceA.y < -45 || faceA.y > 130 || faceB.y < -45 || faceB.y > 130 ||
-                faceC.y < -45 || faceC.y > 130) continue;
+            if (Math.abs(faceA.x) > 90 || Math.abs(faceB.x) > 90 || Math.abs(faceC.x) > 90 ||
+                faceA.y < -90 || faceA.y > 90 || faceB.y < -90 || faceB.y > 90 ||
+                faceC.y < -90 || faceC.y > 90) continue;
             // The internal triangle mesh is only a fill tessellation. Use one
             // opaque graphite tone and no borders so the scanned area reads as a
             // completed continuous surface rather than a mint wireframe.
-            addPolygon([faceA, faceB, faceC], "#343a40", 1);
+            if (vf < 1800) addPolygon([faceA, faceB, faceC], "#343a40", 1);
           }
-
-          // Sensor coverage cones: blue camera volumes, cyan LiDAR, amber radar,
-          // and green ultrasonic proximity fields. These are geometric sensor
-          // frustums, not fabricated camera pixels or semantic segmentation.
-          var sensorZones = asArray(snapshotData.sensorZones);
-          for (var zoneIndex = 0; zoneIndex < Math.min(sensorZones.length, 40); zoneIndex++) {
-            var zone = sensorZones[zoneIndex];
-            if (!zone || !zone.origin || !zone.forward || !zone.right) continue;
-            var zoneRange = clamp(Number(zone.range) || 0, 1, 140);
-            var horizontalFov = clamp(Number(zone.horizontalFov) || 35, 5, 170);
-            var halfSpread = zoneRange * Math.tan(horizontalFov * Math.PI / 360);
-            var farLeftWorld = {
-              x: zone.origin.x + zone.forward.x * zoneRange - zone.right.x * halfSpread,
-              y: zone.origin.y + zone.forward.y * zoneRange - zone.right.y * halfSpread,
-              z: zone.origin.z + zone.forward.z * zoneRange
-            };
-            var farRightWorld = {
-              x: zone.origin.x + zone.forward.x * zoneRange + zone.right.x * halfSpread,
-              y: zone.origin.y + zone.forward.y * zoneRange + zone.right.y * halfSpread,
-              z: zone.origin.z + zone.forward.z * zoneRange
-            };
-            var zoneOrigin = localPoint(zone.origin, ego);
-            var farLeft = localPoint(farLeftWorld, ego);
-            var farRight = localPoint(farRightWorld, ego);
-            if (!zoneOrigin || !farLeft || !farRight) continue;
-            var zoneColor = zone.sensor === "camera" ? "#4c9ce2"
-              : (zone.sensor === "lidar" ? "#58cbdc"
-                : (zone.sensor === "radar" ? "#e8a451"
-                  : (zone.sensor === "ultrasonic" ? "#8fcf9c" : "#71818d")));
-            var zoneAlpha = zone.sensor === "camera" ? 0.105
-              : (zone.sensor === "lidar" ? 0.075
-                : (zone.sensor === "radar" ? 0.085
-                  : (zone.sensor === "ultrasonic" ? 0.10 : 0.07)));
-            var zoneEnabled = zone.enabled !== false;
-            if (!zoneEnabled) {
-              zoneColor = "#71818d";
-              zoneAlpha *= 0.30;
-            }
-            addPolygon([zoneOrigin, farLeft, farRight], zoneColor, zoneAlpha);
-            addLine([zoneOrigin, farLeft], zoneColor, 0.75, zoneEnabled ? 0.28 : 0.12, [3, 5]);
-            addLine([zoneOrigin, farRight], zoneColor, 0.75, zoneEnabled ? 0.28 : 0.12, [3, 5]);
-            addLine([farLeft, farRight], zoneColor, 0.85, zoneEnabled ? 0.34 : 0.14, [3, 5]);
-          }
-
-          // Actual sensor returns use their own layer and source colour.
-          // LiDAR returns are point-cloud samples; radar and ultrasonic returns
-          // retain their individual mount-to-hit direction where available.
-          var sensorReturns = asArray(snapshotData.sensorReturns);
-          for (var returnIndex = 0; returnIndex < Math.min(sensorReturns.length, 280); returnIndex++) {
-            var sensorReturn = sensorReturns[returnIndex];
-            if (!sensorReturn || !sensorReturn.position) continue;
-            var returnPoint = localPoint(sensorReturn.position, ego);
-            if (!returnPoint) continue;
-            var returnSensor = sensorReturn.sensor;
-            var returnColor = returnSensor === "lidar" ? "#66d3e2"
-              : (returnSensor === "radar" ? "#f0a958" : "#b7df92");
-            var returnAge = Number(sensorReturn.age) || 0;
-            var returnAlpha = clamp(0.88 - returnAge * 0.34, 0.30, 0.88);
-            if (sensorReturn.origin && returnSensor !== "lidar") {
-              var sensorOrigin = localPoint(sensorReturn.origin, ego);
-              if (sensorOrigin) {
-                addLine([sensorOrigin, returnPoint], returnColor,
-                  returnSensor === "ultrasonic" ? 1.0 : 0.75,
-                  returnAlpha * 0.48,
-                  returnSensor === "ultrasonic" ? null : [2, 4]);
-              }
-            }
-            addMarker(returnPoint, returnColor,
-              returnSensor === "lidar" ? 0.13 : (returnSensor === "radar" ? 0.22 : 0.28),
-              returnAlpha);
           }
 
           var poiItems = asArray(snapshotData.poi && snapshotData.poi.items);
@@ -1139,16 +1213,18 @@
               };
               yaw = Math.atan2(localHeading.x, localHeading.y);
             }
-            if (point.y > -30 && point.y < 120 && Math.abs(point.x) < 50) {
-              var confirmedTraffic = track.status === "confirmed" && age < 0.6;
-              var visualState = confirmedTraffic
-                ? (track.cameraVisible === true ? "camera-confirmed" : "confirmed")
-                : "predicted";
+            var trafficVisible = isExpanded
+              ? (Math.abs(point.x) <= Number(mapSettings.radiusM || 500)
+                && Math.abs(point.y) <= Number(mapSettings.radiusM || 500))
+              : (point.y > -30 && point.y < 120 && Math.abs(point.x) < 50);
+            if (trafficVisible) {
+              var visualState = track.status === "confirmed" && age < 0.6
+                ? "confirmed" : "predicted";
               addVehicle(point, track.dimensions || {}, yaw, false, visualState);
             }
           }
 
-          polygons.sort(function (a, b) { return b.depth - a.depth; });
+          if (!isExpanded) polygons.sort(function (a, b) { return b.depth - a.depth; });
           for (var pi = 0; pi < polygons.length; pi++) {
             var poly = polygons[pi];
             ctx.globalAlpha = poly.alpha;
@@ -1167,7 +1243,7 @@
             }
           }
 
-          lines.sort(function (a, b) { return b.depth - a.depth; });
+          if (!isExpanded) lines.sort(function (a, b) { return b.depth - a.depth; });
           for (var li2 = 0; li2 < lines.length; li2++) {
             var line = lines[li2];
             ctx.globalAlpha = line.alpha;
@@ -1184,7 +1260,7 @@
             ctx.stroke();
           }
           ctx.setLineDash([]);
-          markers.sort(function (a, b) { return b.depth - a.depth; });
+          if (!isExpanded) markers.sort(function (a, b) { return b.depth - a.depth; });
           for (var mi = 0; mi < markers.length; mi++) {
             var marker = markers[mi];
             ctx.globalAlpha = marker.alpha;
@@ -1195,45 +1271,11 @@
           }
           ctx.globalAlpha = 1;
 
-          // Compact sensor legend mirrors the source colours used in the scene.
-          // It reports scan state separately from the always-visible coverage cones.
-          var sensorStatus = snapshotData.sensorStatus || {};
-          var legendItems = [
-            {key: "lidar", label: "LIDAR", color: "#66d3e2"},
-            {key: "radar", label: "RADAR", color: "#f0a958"},
-            {key: "camera", label: "CAM", color: "#4c9ce2"},
-            {key: "ultrasonic", label: "USS", color: "#b7df92"}
-          ];
-          ctx.save();
-          ctx.font = "9px sans-serif";
-          ctx.textBaseline = "middle";
-          for (var legendIndex = 0; legendIndex < legendItems.length; legendIndex++) {
-            var legend = legendItems[legendIndex];
-            var legendStatus = sensorStatus[legend.key] || {};
-            var narrowLegend = cssWidth < 270;
-            var legendColumn = narrowLegend ? legendIndex % 2 : legendIndex;
-            var legendRow = narrowLegend ? Math.floor(legendIndex / 2) : 0;
-            var legendStep = narrowLegend ? (cssWidth - 18) / 2 : (cssWidth - 18) / 4;
-            var legendX = 9 + legendColumn * legendStep;
-            var legendY = 13 + legendRow * 13;
-            var legendLabel = legendStatus.enabled === false ? "OFF"
-              : (legendStatus.fresh === true
-                ? (legendStatus.returnCount !== undefined
-                  ? String(legendStatus.returnCount) : "FOV")
-                : "STALE");
-            ctx.globalAlpha = legendStatus.enabled === false ? 0.58 : 0.94;
-            ctx.fillStyle = legend.color;
-            ctx.fillRect(legendX, legendY - 3, 5, 5);
-            ctx.fillStyle = "#d5e0e7";
-            ctx.fillText(legend.label + " " + legendLabel, legendX + 8, legendY);
-          }
-          ctx.restore();
-          ctx.globalAlpha = 1;
-
           // Pin the player's own vehicle above the 3D layers so dense surface
           // geometry cannot hide it.
-          var egoX = cssWidth * 0.5;
-          var egoY = cssHeight * 0.83;
+          var egoScreen = isExpanded ? project({x: 0, y: 0, z: 0}) : null;
+          var egoX = egoScreen ? egoScreen.x : cssWidth * 0.5;
+          var egoY = egoScreen ? egoScreen.y : cssHeight * 0.83;
           ctx.save();
           ctx.translate(egoX, egoY);
           ctx.shadowColor = "rgba(70, 190, 220, 0.42)";
@@ -1280,11 +1322,17 @@
 
         function frame(timestamp) {
           if (destroyed) return;
-          var renderFps = clamp(Number(snapshot && snapshot.mapSettings
-            && snapshot.mapSettings.renderFps) || 30, 15, 60);
-          var frameInterval = 1000 / renderFps;
-          if (!lastRenderedAt || timestamp - lastRenderedAt >= frameInterval) {
+          var width = canvas ? canvas.clientWidth : 0;
+          var height = canvas ? canvas.clientHeight : 0;
+          if (width !== lastCanvasWidth || height !== lastCanvasHeight) {
+            lastCanvasWidth = width;
+            lastCanvasHeight = height;
+            drawDirty = true;
+          }
+          var frameInterval = expanded ? 45 : 75;
+          if (drawDirty && (!lastRenderedAt || timestamp - lastRenderedAt >= frameInterval)) {
             lastRenderedAt = timestamp;
+            drawDirty = false;
             try {
               draw(snapshot);
               renderErrorReported = false;
@@ -1298,6 +1346,23 @@
           rafId = window.requestAnimationFrame(frame);
         }
 
+        function onExpandClick(event) {
+          event.stopPropagation();
+          setExpanded(true);
+        }
+        function onCloseClick() { setExpanded(false); }
+        function onRecenterClick() { recenterMap(); }
+        if (expandButton) expandButton.addEventListener("click", onExpandClick);
+        if (closeButton) closeButton.addEventListener("click", onCloseClick);
+        if (recenterButton) recenterButton.addEventListener("click", onRecenterClick);
+        canvas.addEventListener("click", onCanvasClick);
+        canvas.addEventListener("pointerdown", onMapPointerDown);
+        canvas.addEventListener("pointermove", onMapPointerMove);
+        canvas.addEventListener("pointerup", onMapPointerUp);
+        canvas.addEventListener("pointercancel", onMapPointerUp);
+        canvas.addEventListener("wheel", onMapWheel, {passive: false});
+        window.addEventListener("keydown", onMapKeyDown);
+
         enableMap();
         schedulePoll(250);
         rafId = window.requestAnimationFrame(frame);
@@ -1307,6 +1372,16 @@
           if (pollTimer) $timeout.cancel(pollTimer);
           if (pollWatchdog) $timeout.cancel(pollWatchdog);
           if (rafId) window.cancelAnimationFrame(rafId);
+          window.removeEventListener("keydown", onMapKeyDown);
+          if (expandButton) expandButton.removeEventListener("click", onExpandClick);
+          if (closeButton) closeButton.removeEventListener("click", onCloseClick);
+          if (recenterButton) recenterButton.removeEventListener("click", onRecenterClick);
+          canvas.removeEventListener("click", onCanvasClick);
+          canvas.removeEventListener("pointerdown", onMapPointerDown);
+          canvas.removeEventListener("pointermove", onMapPointerMove);
+          canvas.removeEventListener("pointerup", onMapPointerUp);
+          canvas.removeEventListener("pointercancel", onMapPointerUp);
+          canvas.removeEventListener("wheel", onMapWheel);
           if (extensionReady) lua("jsonEncode(extensions.roadmind.setMapEnabled(false))");
         });
       }
