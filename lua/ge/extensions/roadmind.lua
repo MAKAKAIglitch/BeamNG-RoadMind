@@ -8565,7 +8565,8 @@ function M.getWorldModel()
   return state._roadmindHelpers.cloneWorldModelValue(state.worldModel)
 end
 
-function M.getPerceptionSnapshot(worldModelOverride)
+function M.getPerceptionSnapshot(worldModelOverride, snapshotOptions)
+  local options = type(snapshotOptions) == "table" and snapshotOptions or {}
   local latest = state.latestData or {}
   local pose = latest.vehiclePose or latest.localizationVehiclePose
   local position = pose and asVec3(pose.position) or nil
@@ -8625,26 +8626,39 @@ function M.getPerceptionSnapshot(worldModelOverride)
     end
   end
 
-  local obstacles = {}
-  if model then
-    for i = 1, math.min(#(model.obstacles or {}), 64) do
-      local obstacle = model.obstacles[i]
-      obstacles[#obstacles + 1] = {
-        obstacleId = obstacle.obstacleId,
-        position = state._roadmindHelpers.cloneWorldModelValue(obstacle.position),
-        dataAge = obstacle.dataAge,
-        confidence = obstacle.confidence,
-        sourceSensors = state._roadmindHelpers.copySensorSources(obstacle.sourceSensors)
-      }
+  local obstacles = nil
+  if options.skipObstacles ~= true then
+    obstacles = {}
+    if model then
+      for i = 1, math.min(#(model.obstacles or {}), 64) do
+        local obstacle = model.obstacles[i]
+        obstacles[#obstacles + 1] = {
+          obstacleId = obstacle.obstacleId,
+          position = state._roadmindHelpers.cloneWorldModelValue(obstacle.position),
+          dataAge = obstacle.dataAge,
+          confidence = obstacle.confidence,
+          sourceSensors = state._roadmindHelpers.copySensorSources(obstacle.sourceSensors)
+        }
+      end
     end
   end
 
-  local route = {}
-  for i = 1, math.min(#(state.routePath or {}), 48) do
-    local point = state.routePath[i]
-    if type(point) == "table" then
-      route[#route + 1] = {x = point.x, y = point.y, z = point.z}
+  local route = nil
+  if options.skipRoute ~= true then
+    route = {}
+    for i = 1, math.min(#(state.routePath or {}), 48) do
+      local point = state.routePath[i]
+      if type(point) == "table" then
+        route[#route + 1] = {x = point.x, y = point.y, z = point.z}
+      end
     end
+  end
+
+  local road = nil
+  if options.skipRoad ~= true then
+    road = state._roadmindHelpers.cloneWorldModelValue(state.roadState or {
+      valid = false, quality = "unavailable", corridor = {}
+    })
   end
 
   return {
@@ -8654,9 +8668,7 @@ function M.getPerceptionSnapshot(worldModelOverride)
     vehicle = vehicle,
     targets = targets,
     obstacles = obstacles,
-    road = state._roadmindHelpers.cloneWorldModelValue(state.roadState or {
-      valid = false, quality = "unavailable", corridor = {}
-    }),
+    road = road,
     route = route,
     status = {
       scanning = state.visualizationEnabled == true,
@@ -8691,14 +8703,29 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
   -- Sensor-driven updates keep their normal World Model cadence. While idle,
   -- refresh only when the compact static-map output window moves or radius changes.
   local worldModel = state.worldModel
-  if buildWorldModel and (not worldModel or outputCacheNeedsRefresh) then
+  if buildWorldModel and not worldModel then
     worldModel = buildWorldModel()
     state.worldModel = worldModel
     state.worldModelDirty = false
     state.worldModelUpdateTimer = 0
+  elseif buildWorldModel and outputCacheNeedsRefresh then
+    if state.visualizationEnabled then
+      -- While scanning, let the regular 5 Hz World Model scheduler rebuild the
+      -- recentered surface. A map poll must not start a second fusion pass.
+      state.worldModelDirty = true
+    else
+      -- No sensor update loop runs while scanning is idle, so refresh the
+      -- persistent map window here only when its center/radius actually changes.
+      worldModel = buildWorldModel()
+      state.worldModel = worldModel
+      state.worldModelDirty = false
+      state.worldModelUpdateTimer = 0
+    end
   end
   worldModel = worldModel or {targets = {}, obstacles = {}, staticGeometry = {}}
-  local perception = M.getPerceptionSnapshot(worldModel)
+  local perception = M.getPerceptionSnapshot(worldModel, {
+    skipObstacles = true, skipRoad = true, skipRoute = true
+  })
   local routeState = M.getRouteState()
   local vehicle = perception and perception.vehicle or nil
   local vehiclePosition = vehicle and asVec3(vehicle.position) or nil
@@ -8708,19 +8735,27 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
     vehicle.speedMps = velocity and round2(velocity:length()) or 0
   end
 
-  local road = state._roadmindHelpers.cloneWorldModelValue(state.roadState or {
+  local roadSource = type(state.roadState) == "table" and state.roadState or {
     valid = false, quality = "unavailable", corridor = {}
-  })
+  }
+  local laneGraphSource = roadSource.laneGraph
+  local road = {}
+  -- Copy road fields without first deep-copying laneGraph: the graph is returned
+  -- separately below and can be substantially larger than the road summary.
+  for key, value in pairs(roadSource) do
+    if key ~= "laneGraph" then
+      road[key] = state._roadmindHelpers.cloneWorldModelValue(value)
+    end
+  end
   road.roadHalfWidth = tonumber(road.roadHalfWidth) or PLANNER_ROAD_HALF_WIDTH_M
   road.widthSource = road.widthSource or "conservative-navgraph-heuristic"
   road.laneModel = road.laneModel or {
     status = "unknown",
     source = "No verified lane metadata is available on the current road edge"
   }
-  local laneGraph = state._roadmindHelpers.cloneWorldModelValue(road.laneGraph or {
+  local laneGraph = state._roadmindHelpers.cloneWorldModelValue(laneGraphSource or {
     schemaVersion = 1, status = "unavailable", segments = {}, junctions = {}, connections = {}
   })
-  road.laneGraph = nil
 
   local forwardRangeM = tonumber(state.settings and state.settings.mapForwardRangeM) or 120
   local decalRoads, decalRoadStatus = state._roadmindHelpers.buildMapRoadGeometry(
@@ -8813,7 +8848,8 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
     timestamp = state.simulationTime,
     coordinateFrame = "beamng-world",
     coordinateUnits = "meters",
-    vehicle = state._roadmindHelpers.cloneWorldModelValue(vehicle),
+    -- These perception values are already detached snapshots, not GE-owned tables.
+    vehicle = vehicle,
     road = road,
     laneGraph = laneGraph,
     roadRevision = roadRevision,
@@ -8826,7 +8862,8 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
       cacheNodeCount = state.levelRoadCacheNodeCount or 0,
       loadActive = state.levelRoadLoadActive == true
     },
-    vehicles = state._roadmindHelpers.cloneWorldModelValue(perception.targets or {}),
+    -- getPerceptionSnapshot already copied each target into this map-owned array.
+    vehicles = perception.targets or {},
     staticGeometry = staticGeometry,
     sessionMap = {
       cellCount = state.sessionStaticMapCount or 0,
