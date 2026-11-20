@@ -8929,6 +8929,7 @@ local function buildCurveGuidance(position, speedMps, path, roadQuality)
   local a, b = projection, second
   local travelled = distance(projection, second)
   local bestTargetSpeed, bestCurveDistance, bestCurvePoint = math.huge, nil, nil
+  local bestTurnDirection = nil
   local maxLateralAcceleration = 2.1
 
   for i = nearestIndex + 2, #points do
@@ -8944,6 +8945,7 @@ local function buildCurveGuidance(position, speedMps, path, roadQuality)
           bestTargetSpeed = targetSpeed
           bestCurveDistance = travelled
           bestCurvePoint = b
+          bestTurnDirection = cross >= 0 and "left" or "right"
         end
       end
     end
@@ -9005,6 +9007,7 @@ local function buildCurveGuidance(position, speedMps, path, roadQuality)
     stoppingDistanceM = round2(stoppingDistance),
     distanceToBrakePointM = round2(distanceToBrakePoint),
     brakePoint = brakePoint,
+    turnDirection = bestTurnDirection,
     maxLateralAccelerationMps2 = maxLateralAcceleration,
     comfortableDecelerationMps2 = comfortableDeceleration,
     reactionTimeS = reactionTime,
