@@ -5105,12 +5105,20 @@ state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleF
     local t3 = t2 + math.sqrt(math.max(0.0001, distance3(p2, p3)))
     local t = t1 + (t2 - t1) * amount
 
+    local blend = math.max(0, math.min(1, smooth))
+    local linearX = p1.x + (p2.x - p1.x) * amount
+    local linearY = p1.y + (p2.y - p1.y) * amount
+    local linearZ = p1.z + (p2.z - p1.z) * amount
+    local linearWidth = p1.width + (p2.width - p1.width) * amount
+    local curveX = catmullScalar(p0.x, p1.x, p2.x, p3.x, t0, t1, t2, t3, t)
+    local curveY = catmullScalar(p0.y, p1.y, p2.y, p3.y, t0, t1, t2, t3, t)
+    local curveZ = catmullScalar(p0.z, p1.z, p2.z, p3.z, t0, t1, t2, t3, t)
+    local curveWidth = catmullScalar(p0.width, p1.width, p2.width, p3.width, t0, t1, t2, t3, t)
     return {
-      x = catmullScalar(p0.x, p1.x, p2.x, p3.x, t0, t1, t2, t3, t),
-      y = catmullScalar(p0.y, p1.y, p2.y, p3.y, t0, t1, t2, t3, t),
-      z = catmullScalar(p0.z, p1.z, p2.z, p3.z, t0, t1, t2, t3, t),
-      width = math.max(2.2, math.min(60,
-        catmullScalar(p0.width, p1.width, p2.width, p3.width, t0, t1, t2, t3, t)))
+      x = linearX + (curveX - linearX) * blend,
+      y = linearY + (curveY - linearY) * blend,
+      z = linearZ + (curveZ - linearZ) * blend,
+      width = math.max(2.2, math.min(60, linearWidth + (curveWidth - linearWidth) * blend))
     }
   end
 
@@ -5128,6 +5136,7 @@ state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleF
     leftCount = math.max(0, math.min(8, math.floor(leftCount or 0)))
     rightCount = math.max(0, math.min(8, math.floor(rightCount or 0)))
 
+    if road.flipDirection then leftCount, rightCount = rightCount, leftCount end
     if leftCount + rightCount == 0 and road.autoLanes ~= false then
       local estimatedTotal = math.max(1, math.min(8,
         math.floor(averageWidth / 3.5 + 0.5)))
@@ -5171,14 +5180,33 @@ state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleF
 
   local reachX = rangeAhead + rangeBehind + sideRange
   local reachY = rangeAhead + rangeBehind + sideRange
+  local nearbyRoads = {}
   for roadIndex = 1, #roads do
-    if #output >= maxRuns or totalSamples >= maxSamples then break end
     local road = roads[roadIndex]
     local roadMayIntersect = not road.minX
       or (road.maxX >= vehiclePosition.x - reachX and road.minX <= vehiclePosition.x + reachX
         and road.maxY >= vehiclePosition.y - reachY and road.minY <= vehiclePosition.y + reachY)
+    if roadMayIntersect then
+      local nearestX = road.minX and math.max(road.minX, math.min(road.maxX, vehiclePosition.x))
+        or vehiclePosition.x
+      local nearestY = road.minY and math.max(road.minY, math.min(road.maxY, vehiclePosition.y))
+        or vehiclePosition.y
+      local dx, dy = nearestX - vehiclePosition.x, nearestY - vehiclePosition.y
+      nearbyRoads[#nearbyRoads + 1] = {
+        road = road, distanceSquared = dx * dx + dy * dy
+      }
+    end
+  end
+  table.sort(nearbyRoads, function(a, b)
+    if a.distanceSquared == b.distanceSquared then return tostring(a.road.id) < tostring(b.road.id) end
+    return a.distanceSquared < b.distanceSquared
+  end)
+
+  for roadIndex = 1, #nearbyRoads do
+    if #output >= maxRuns or totalSamples >= maxSamples then break end
+    local road = nearbyRoads[roadIndex].road
     local nodes = road.nodes or {}
-    if roadMayIntersect and #nodes >= 2 then
+    if #nodes >= 2 then
       local averageWidth = 0
       for nodeIndex = 1, #nodes do averageWidth = averageWidth + nodes[nodeIndex].width end
       averageWidth = averageWidth / #nodes
