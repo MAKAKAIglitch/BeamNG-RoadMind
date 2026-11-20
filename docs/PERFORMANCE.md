@@ -186,3 +186,16 @@ The map no longer performs a full draw on every animation frame. It marks the ca
 - **Surface limits:** the mini-map omits the surface reconstruction pass entirely. The large map uses the nearby-point, face submission and persistent-face limits described in section 13.
 - **Validation status:** these limits and update paths are statically checked. They do not establish a measured FPS improvement. Final performance still needs an in-game comparison using the same vehicle, level, weather, traffic density and scan settings.
 
+
+## 15. Live ego-motion prediction and curve advisory
+
+The map and the perception panel maintain a lightweight player-vehicle motion sample while either view is open, even when the sensor suite is stopped. This view-only path reads the active player's position, forward direction and velocity from the BeamNG vehicle object. It does not start LiDAR/RADAR/ultrasonic acquisition, issue scene raycasts, or control vehicle inputs.
+
+- **Motion inputs:** current world position, forward vector and velocity. Longitudinal acceleration is estimated from signed forward-speed changes; yaw rate is estimated from consecutive forward vectors. Both derivatives are bounded and smoothed.
+- **Predicted ego path:** a four-second preview with 0.20 s point spacing. The short-horizon model integrates current forward speed, filtered longitudinal acceleration and yaw rate; the yaw contribution gradually decays with prediction time. It is a kinematic preview, not a full tire, suspension, friction or steering model.
+- **Curve-speed advisory:** when a sufficiently long NavGraph corridor, route or selected safe local trajectory is available, the map estimates curvature and a target speed using a conservative 2.1 m/s² lateral-acceleration budget. The suggested braking point uses a 3.2 m/s² comfortable-deceleration assumption and 0.55 s reaction-time allowance. These are explicit heuristics, not vehicle-specific braking-distance guarantees.
+- **Obstacle warnings:** FCW/AEB state is shown separately from curve guidance. Object avoidance and the selected safe trajectory still depend on fresh sensor/World Model data; a live ego-motion path remains available without scanning.
+- **UI recovery:** the map verifies that the GE extension is registered before invoking it, guards each call, times out stalled loads, retries with bounded backoff and retains the last valid map snapshot while reconnecting. The perception panel uses the same protected extension API and preserves its last valid snapshot on polling errors.
+- **Lifecycle:** ego-motion history is reset when the active vehicle changes, a level is loaded/unloaded, or the final map/perception view closes. Opening either view does not enable the sensor suite.
+
+**Validation status:** code-level inspection only. These additions have not yet been exercised in a live BeamNG session, and no FPS or braking-performance improvement is claimed. In-game verification is still needed for extension callbacks, vehicle swaps, reversed driving, sharp turns, ramps/bridges, map loading and frame-time impact.
