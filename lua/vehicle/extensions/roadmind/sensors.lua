@@ -824,7 +824,7 @@ local function buildEmptyFrame()
   }
 end
 
-local function publish()
+local function publish(selectedJob)
   local frame = state.frame
   if not frame or not obj
       or type(obj.queueGameEngineLua) ~= "function"
@@ -843,19 +843,28 @@ local function publish()
     sourceVehicleId = state.sourceVehicleId,
     sequence = state.sequence,
     updatedSensors = updates,
-    vehiclePose = frame.vehiclePose,
-    -- Mounts/coverage volumes are cheap pose-only data. Publish separately
-    -- from scan returns so GE can re-anchor them without triggering raycasts.
-    attachedVisuals = {
+    vehiclePose = frame.vehiclePose
+  }
+
+  -- Sensor jobs 1-3 do not change the attached display geometry. Sending the
+  -- full mounts/camera/zones payload on every LiDAR/radar/ultrasonic update
+  -- duplicated large JSON blocks. GE keeps the previous attached state when
+  -- this optional field is absent, so send it only when pose/zones are refreshed.
+  if selectedJob == nil or selectedJob == 4 or selectedJob == 5 then
+    local attached = {
       lidarOrigin = frame.lidar and frame.lidar.origin,
       radarMounts = frame.radar and frame.radar.mounts or {},
-      ultrasonicMounts = frame.ultrasonic and frame.ultrasonic.mounts or {},
-      cameras = frame.cameras or {},
-      mounts = frame.mounts or {},
-      geometryDebug = frame.geometryDebug,
-      detectionZones = frame.detectionZones or {}
+      ultrasonicMounts = frame.ultrasonic and frame.ultrasonic.mounts or {}
     }
-  }
+
+    -- Pose jobs already publish these through their dedicated top-level fields.
+    if selectedJob ~= 4 then
+      attached.cameras = frame.cameras or {}
+      attached.mounts = frame.mounts or {}
+      attached.geometryDebug = frame.geometryDebug
+    end
+    payload.attachedVisuals = attached
+  end
 
   if updates.lidar then payload.lidar = frame.lidar end
   if updates.radar then payload.radar = frame.radar end
@@ -1248,7 +1257,7 @@ function M.updateGFX(dt)
     refreshAttachedVisuals(frame, selectedJob)
     state.frame.enabled = true
     state.frame.updatedSensors = updatedSensors
-    publish()
+    publish(selectedJob)
     state.frame.updatedSensors = {}
   end
 end
