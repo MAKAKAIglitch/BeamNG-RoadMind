@@ -7715,6 +7715,12 @@ function M.onClientStartMission()
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
   state.sessionStaticMapCount = 0
+  state.sessionStaticMapDistance = 0
+  state.sessionStaticMapLastPosition = nil
+  state.sessionStaticMapLastPrunePosition = nil
+  state.sessionStaticMapGeneration = (state.sessionStaticMapGeneration or 0) + 1
+  state.trafficLaneEvidence = {}
+  if state.worldModel then state.worldModel.staticGeometry = {} end
   state.levelMetadataLoaded = false
   state.levelMetadataName = nil
   state.levelDirectory = nil
@@ -7728,6 +7734,12 @@ function M.onClientEndMission()
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
   state.sessionStaticMapCount = 0
+  state.sessionStaticMapDistance = 0
+  state.sessionStaticMapLastPosition = nil
+  state.sessionStaticMapLastPrunePosition = nil
+  state.sessionStaticMapGeneration = (state.sessionStaticMapGeneration or 0) + 1
+  state.trafficLaneEvidence = {}
+  if state.worldModel then state.worldModel.staticGeometry = {} end
   state.levelMetadataLoaded = false
   state.levelMetadataName = nil
   state.levelDirectory = nil
