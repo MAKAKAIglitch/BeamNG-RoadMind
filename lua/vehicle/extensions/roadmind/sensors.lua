@@ -770,11 +770,10 @@ end
 local function refreshAttachedVisuals(frame, selectedJob)
   if not state.frame then return end
 
-  -- Scan/pose/zone jobs already build their own geometry. Rebuilding every
-  -- mount, camera frustum and detection zone after every job duplicated most
-  -- of that work. Refresh only the live mount transforms on the existing
-  -- pose/zone cadence; sensor measurements and their ray counts are untouched.
-  if selectedJob == 4 or selectedJob == 5 then
+  -- Scan/pose/zone jobs already build their measurement geometry. Refresh
+  -- display mounts on the slower pose/zone cadence instead of after every
+  -- sensor job; raycasts and measurement timestamps remain unchanged.
+  if selectedJob == nil or selectedJob == 4 or selectedJob == 5 then
     local lidar = currentSensorLayout().lidar
     local lidarMount = makeLevelledLidarMount(
       frame, lidar.forwardOffset, lidar.lateralOffset, lidar.upOffset
@@ -787,6 +786,19 @@ local function refreshAttachedVisuals(frame, selectedJob)
     end
     state.frame.radar.mounts = buildAttachedRadarMounts(frame)
     state.frame.ultrasonic.mounts = buildAttachedUltrasonicMounts(frame)
+
+    -- The pose job already builds the camera frustums. Zone/reset jobs need
+    -- to refresh them separately so their display stays attached to the car.
+    if selectedJob ~= 4 then
+      state.frame.cameras = buildCameras(frame)
+    end
+
+    -- Calibration jobs already create these. Preserve the normal sensor-mount
+    -- and vehicle-geometry display without rebuilding it on every scan job.
+    if selectedJob ~= 4 or not sensorSettings.calibrationDebugEnabled then
+      state.frame.mounts = buildSensorMountDebug(frame)
+      state.frame.geometryDebug = buildGeometryDebug(frame)
+    end
   end
 
   -- This compact pose is needed by GE for every published sensor update.
