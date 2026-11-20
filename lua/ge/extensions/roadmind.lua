@@ -8747,6 +8747,253 @@ state._roadmindHelpers.updateAdaptivePerformance = function(dt)
   end
 end
 
+
+local function updateMapMotion(dt)
+  local vehicle = state.activeVehicle
+  if not vehicle then
+    state.mapMotion = nil
+    return
+  end
+
+  local position = asVec3(safeCall(vehicle, "getPosition"))
+  local forward = normalizedVec3(safeCall(vehicle, "getDirectionVector"))
+  local velocity = asVec3(safeCall(vehicle, "getVelocity"))
+  if not position or not forward or not velocity then return end
+
+  local speed = velocity:length()
+  local forwardSpeed = velocity:dot(forward)
+  if not finite(speed) or not finite(forwardSpeed) then return end
+
+  local sampleDt = tonumber(dt) or 0
+  if sampleDt < 0.001 or sampleDt > 0.25 then sampleDt = 0 end
+  local previous = state.mapMotion
+  local acceleration, yawRate, sampleCount = 0, 0, 1
+
+  if previous then
+    sampleCount = (tonumber(previous.sampleCount) or 1) + 1
+    acceleration = tonumber(previous.accelerationMps2) or 0
+    yawRate = tonumber(previous.yawRateRadS) or 0
+
+    if sampleDt > 0 then
+      local rawAcceleration = clamp(
+        (forwardSpeed - (tonumber(previous.forwardSpeedMps) or forwardSpeed)) / sampleDt,
+        -12, 8
+      )
+      local accelerationAlpha = clamp(sampleDt * 4.5, 0, 0.8)
+      acceleration = acceleration + (rawAcceleration - acceleration) * accelerationAlpha
+
+      if previous.forward then
+        local oldForward = previous.forward
+        local crossZ = oldForward.x * forward.y - oldForward.y * forward.x
+        local headingDot = clamp(oldForward.x * forward.x + oldForward.y * forward.y, -1, 1)
+        local rawYawRate = clamp(math.atan2(crossZ, headingDot) / sampleDt, -1.6, 1.6)
+        local yawAlpha = clamp(sampleDt * 5.0, 0, 0.8)
+        yawRate = yawRate + (rawYawRate - yawRate) * yawAlpha
+      end
+    end
+  end
+
+  state.mapMotionTime = (tonumber(state.mapMotionTime) or 0) + (tonumber(dt) or 0)
+  state.mapMotion = {
+    position = {x = position.x, y = position.y, z = position.z},
+    forward = {x = forward.x, y = forward.y, z = forward.z},
+    speedMps = speed,
+    forwardSpeedMps = forwardSpeed,
+    accelerationMps2 = acceleration,
+    yawRateRadS = yawRate,
+    lateralAccelerationMps2 = speed * yawRate,
+    lateralG = speed * yawRate / 9.81,
+    timestamp = state.mapMotionTime,
+    sampleCount = math.min(sampleCount, 100000)
+  }
+end
+
+
+local function buildMapMotionSnapshot(position, forward)
+  local sample = state.mapMotion
+  if not sample or not position or not forward then return nil end
+
+  local speed = tonumber(sample.speedMps) or 0
+  local forwardSpeed = tonumber(sample.forwardSpeedMps) or 0
+  local acceleration = tonumber(sample.accelerationMps2) or 0
+  local yawRate = tonumber(sample.yawRateRadS) or 0
+  local horizon, step = 4.0, 0.20
+  local heading = math.atan2(forward.y, forward.x)
+  local x, y, z = position.x, position.y, position.z
+  local predictedPath = {}
+
+  for index = 0, math.floor(horizon / step) do
+    local time = index * step
+    if index > 0 then
+      local previousTime = time - step
+      local turnFade = clamp(1 - math.max(0, previousTime - 1.0) * 0.20, 0.40, 1)
+      heading = heading + yawRate * turnFade * step
+      local predictedSpeed = clamp(
+        forwardSpeed + acceleration * math.min(time, 1.5), -55, 55
+      )
+      x = x + math.cos(heading) * predictedSpeed * step
+      y = y + math.sin(heading) * predictedSpeed * step
+    end
+    predictedPath[#predictedPath + 1] = {
+      x = x, y = y, z = z, timeS = time
+    }
+  end
+
+  return {
+    source = "BeamNG vehicle pose and velocity",
+    confidence = (tonumber(sample.sampleCount) or 0) >= 4 and "measured" or "warming",
+    speedMps = round2(speed),
+    speedKph = round2(speed * 3.6),
+    forwardSpeedMps = round2(forwardSpeed),
+    accelerationMps2 = round2(acceleration),
+    yawRateRadS = round2(yawRate),
+    lateralAccelerationMps2 = round2(speed * yawRate),
+    lateralG = round2(speed * yawRate / 9.81),
+    predictionHorizonS = horizon,
+    predictionStepS = step,
+    predictedPath = predictedPath,
+    sampleCount = tonumber(sample.sampleCount) or 0,
+    timestamp = tonumber(sample.timestamp) or 0
+  }
+end
+
+
+local function buildCurveGuidance(position, speedMps, path, roadQuality)
+  local unavailable = {
+    status = "unavailable",
+    reason = "road_path_unavailable",
+    source = "NavGraph / selected trajectory",
+    confidence = "none"
+  }
+  if not position or type(path) ~= "table" or #path < 3
+      or not finite(tonumber(speedMps) or 0) then
+    return unavailable
+  end
+
+  local speed = math.max(0, tonumber(speedMps) or 0)
+  local points = {}
+  for i = 1, #path do points[i] = asVec3(path[i]) end
+
+  local nearestIndex, nearestT, nearestDistance = nil, 0, math.huge
+  for i = 1, #points - 1 do
+    local a, b = points[i], points[i + 1]
+    if a and b then
+      local dx, dy = b.x - a.x, b.y - a.y
+      local lengthSquared = dx * dx + dy * dy
+      if lengthSquared > 0.04 then
+        local t = clamp(((position.x - a.x) * dx + (position.y - a.y) * dy)
+          / lengthSquared, 0, 1)
+        local px, py = a.x + dx * t, a.y + dy * t
+        local ex, ey = position.x - px, position.y - py
+        local distanceSquared = ex * ex + ey * ey
+        if distanceSquared < nearestDistance then
+          nearestIndex, nearestT, nearestDistance = i, t, distanceSquared
+        end
+      end
+    end
+  end
+  if not nearestIndex then return unavailable end
+
+  local first, second = points[nearestIndex], points[nearestIndex + 1]
+  if not first or not second then return unavailable end
+  local projection = {
+    x = first.x + (second.x - first.x) * nearestT,
+    y = first.y + (second.y - first.y) * nearestT,
+    z = first.z or position.z
+  }
+  local function distance(a, b)
+    local dx, dy = a.x - b.x, a.y - b.y
+    local dz = (a.z or 0) - (b.z or 0)
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+  end
+
+  local a, b = projection, second
+  local travelled = distance(projection, second)
+  local bestTargetSpeed, bestCurveDistance, bestCurvePoint = math.huge, nil, nil
+  local maxLateralAcceleration = 2.1
+
+  for i = nearestIndex + 2, #points do
+    local c = points[i]
+    if not c then break end
+    local ab, bc, ca = distance(a, b), distance(b, c), distance(c, a)
+    if ab > 0.15 and bc > 0.15 and ca > 0.15 and travelled <= 90 then
+      local cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+      local curvature = math.abs(2 * cross / (ab * bc * ca))
+      if curvature > 0.003 then
+        local targetSpeed = clamp(math.sqrt(maxLateralAcceleration / curvature), 4.0, 33.0)
+        if targetSpeed < bestTargetSpeed then
+          bestTargetSpeed = targetSpeed
+          bestCurveDistance = travelled
+          bestCurvePoint = b
+        end
+      end
+    end
+    travelled = travelled + bc
+    a, b = b, c
+  end
+
+  local confidence = (roadQuality == "high" or roadQuality == "medium")
+    and roadQuality or "low"
+  if not bestCurveDistance then
+    return {
+      status = "clear",
+      reason = "no_curve_speed_reduction",
+      source = "NavGraph / selected trajectory",
+      confidence = confidence,
+      currentSpeedMps = round2(speed)
+    }
+  end
+
+  local comfortableDeceleration = 3.2
+  local reactionTime = 0.55
+  local stoppingDistance = math.max(0,
+    (speed * speed - bestTargetSpeed * bestTargetSpeed)
+      / (2 * comfortableDeceleration)) + speed * reactionTime
+  local distanceToBrakePoint = math.max(0, bestCurveDistance - stoppingDistance)
+  local status = speed > bestTargetSpeed + 0.75
+    and (distanceToBrakePoint <= 5 and "brake_now" or "prepare") or "clear"
+
+  local brakePoint, remaining = bestCurvePoint, distanceToBrakePoint
+  local segmentStart = projection
+  for i = nearestIndex + 1, #points do
+    local segmentEnd = points[i]
+    if segmentEnd then
+      local segmentLength = distance(segmentStart, segmentEnd)
+      if segmentLength > 0.001 then
+        if remaining <= segmentLength then
+          local t = clamp(remaining / segmentLength, 0, 1)
+          brakePoint = {
+            x = segmentStart.x + (segmentEnd.x - segmentStart.x) * t,
+            y = segmentStart.y + (segmentEnd.y - segmentStart.y) * t,
+            z = segmentStart.z + ((segmentEnd.z or segmentStart.z) - segmentStart.z) * t
+          }
+          break
+        end
+        remaining = remaining - segmentLength
+      end
+      segmentStart = segmentEnd
+    end
+  end
+
+  return {
+    status = status,
+    reason = "curve_speed",
+    source = "NavGraph / selected trajectory",
+    confidence = confidence,
+    currentSpeedMps = round2(speed),
+    targetSpeedMps = round2(bestTargetSpeed),
+    curveDistanceM = round2(bestCurveDistance),
+    stoppingDistanceM = round2(stoppingDistance),
+    distanceToBrakePointM = round2(distanceToBrakePoint),
+    brakePoint = brakePoint,
+    maxLateralAccelerationMps2 = maxLateralAcceleration,
+    comfortableDecelerationMps2 = comfortableDeceleration,
+    reactionTimeS = reactionTime,
+    curvePoint = bestCurvePoint
+  }
+end
+
+
 function M.onUpdate(dt)
   dt = tonumber(dt) or 0
   if dt < 0 then dt = 0 end
