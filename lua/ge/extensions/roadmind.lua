@@ -2010,22 +2010,27 @@ local function drawPredictedTrajectory(drawer, trajectory)
   -- Trace all four corners of the actual vehicle footprint. This draws the
   -- swept body corridor, not just a centreline, so both wheelbase and width
   -- are visible when threading a narrow gap or reversing.
+  -- The path still contains all prediction samples. For rendering, connect
+  -- every second sample to lower per-frame debugDrawer work without changing
+  -- the underlying steering/footprint calculation.
   for cornerIndex = 1, #PREDICTED_TRAJECTORY_CORNERS do
     local cornerKey = PREDICTED_TRAJECTORY_CORNERS[cornerIndex]
-    local previous = points[1] and points[1][cornerKey]
-    for pointIndex = 2, #points do
-      local current = points[pointIndex] and points[pointIndex][cornerKey]
-      if previous and current then
-        drawLine(drawer, toPoint3F(previous), toPoint3F(current), color)
+    for pointIndex = 1, #points - 1, 2 do
+      local nextIndex = math.min(#points, pointIndex + 2)
+      local first = points[pointIndex] and points[pointIndex][cornerKey]
+      local last = points[nextIndex] and points[nextIndex][cornerKey]
+      if first and last then
+        drawLine(drawer, toPoint3F(first), toPoint3F(last), color)
       end
-      previous = current
     end
   end
 
   -- A few cross-sections make the predicted vehicle length and swept width
   -- readable without filling the world with a dense mesh.
+  local lastCrossSection = nil
   for pointIndex = 1, #points, 4 do
     local point = points[pointIndex]
+    lastCrossSection = pointIndex
     if point.frontLeft and point.frontRight then
       drawLine(drawer, toPoint3F(point.frontLeft), toPoint3F(point.frontRight), color)
     end
@@ -2033,8 +2038,8 @@ local function drawPredictedTrajectory(drawer, trajectory)
       drawLine(drawer, toPoint3F(point.rearLeft), toPoint3F(point.rearRight), color)
     end
   end
-  local last = points[#points]
-  if last then
+  if lastCrossSection ~= #points then
+    local last = points[#points]
     if last.frontLeft and last.frontRight then
       drawLine(drawer, toPoint3F(last.frontLeft), toPoint3F(last.frontRight), color)
     end
