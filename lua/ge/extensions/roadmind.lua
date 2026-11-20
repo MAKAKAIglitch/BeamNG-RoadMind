@@ -39,6 +39,7 @@ local DEFAULT_SETTINGS = {
   driverTakeoverEnabled = true,
   showLidar = true, showRadar = false, showUltrasonic = false,
   showCameras = false, showLocalization = false, showDetectedVehicles = true,
+  showPredictedTrajectory = true,
   showCalibration = false
 }
 
@@ -1983,6 +1984,58 @@ local function drawDetectedVehicles(drawer, candidates, tracks)
   end
 end
 
+local PREDICTED_TRAJECTORY_CORNERS = {
+  "frontLeft", "frontRight", "rearLeft", "rearRight"
+}
+
+local function drawPredictedTrajectory(drawer, trajectory)
+  if type(trajectory) ~= "table" or trajectory.valid ~= true
+      or type(trajectory.points) ~= "table" or #trajectory.points < 2 then
+    return
+  end
+
+  local points = trajectory.points
+  local color = trajectory.reverse == true
+    and ColorF(1.0, 0.58, 0.12, 0.82)
+    or ColorF(0.12, 0.82, 1.0, 0.78)
+
+  -- Trace all four corners of the actual vehicle footprint. This draws the
+  -- swept body corridor, not just a centreline, so both wheelbase and width
+  -- are visible when threading a narrow gap or reversing.
+  for cornerIndex = 1, #PREDICTED_TRAJECTORY_CORNERS do
+    local cornerKey = PREDICTED_TRAJECTORY_CORNERS[cornerIndex]
+    local previous = points[1] and points[1][cornerKey]
+    for pointIndex = 2, #points do
+      local current = points[pointIndex] and points[pointIndex][cornerKey]
+      if previous and current then
+        drawLine(drawer, toPoint3F(previous), toPoint3F(current), color)
+      end
+      previous = current
+    end
+  end
+
+  -- A few cross-sections make the predicted vehicle length and swept width
+  -- readable without filling the world with a dense mesh.
+  for pointIndex = 1, #points, 4 do
+    local point = points[pointIndex]
+    if point.frontLeft and point.frontRight then
+      drawLine(drawer, toPoint3F(point.frontLeft), toPoint3F(point.frontRight), color)
+    end
+    if point.rearLeft and point.rearRight then
+      drawLine(drawer, toPoint3F(point.rearLeft), toPoint3F(point.rearRight), color)
+    end
+  end
+  local last = points[#points]
+  if last then
+    if last.frontLeft and last.frontRight then
+      drawLine(drawer, toPoint3F(last.frontLeft), toPoint3F(last.frontRight), color)
+    end
+    if last.rearLeft and last.rearRight then
+      drawLine(drawer, toPoint3F(last.rearLeft), toPoint3F(last.rearRight), color)
+    end
+  end
+end
+
 local function drawRoutePath(drawer, renderPath)
   local path = renderPath or state.routePath
   if not state.routePilotEnabled or type(path) ~= "table" then return end
@@ -2181,6 +2234,9 @@ local function drawFrame()
   if settings.showDetectedVehicles then
     drawDetectedVehicles(drawer, frame.vehicles or state.vehicleCandidates, frame.tracks or {})
   end
+  if settings.showPredictedTrajectory then
+    drawPredictedTrajectory(drawer, frame.predictedTrajectory)
+  end
 
   if settings.showCameras then
     local cameras = frame.cameras or {}
@@ -2229,7 +2285,7 @@ state._roadmindHelpers.normalizeSettings = function(source)
     "autoScanOnVehicleSpawn", "driverTakeoverEnabled",
     "lidarPersistenceEnabled", "visualizationInertiaEnabled",
     "showLidar", "showRadar", "showUltrasonic", "showCameras",
-    "showLocalization", "showDetectedVehicles", "showCalibration",
+    "showLocalization", "showDetectedVehicles", "showPredictedTrajectory", "showCalibration",
     "performanceProfilerEnabled",
     "adasEnabled", "adasFCWEnabled", "adasAEBEnabled", "adasACCEnabled",
     "adasBSMEnabled", "adasParkingEnabled", "adasLDWEnabled"
@@ -4036,6 +4092,10 @@ state._roadmindHelpers.updateVisualizationRenderState = function(dt)
           if value[lidarKey] == nil then renderLidar[lidarKey] = nil end
         end
         renderFrame.lidar = renderLidar
+      elseif key == "predictedTrajectory" then
+        -- Vehicle prediction points are immutable world-space snapshots.
+        -- Share the array instead of recursively smoothing/copying it every frame.
+        renderFrame.predictedTrajectory = value
       elseif ATTACHED_VISUAL_FIELDS[key] then
         renderFrame[key] = state._roadmindHelpers.copyVisualizationValueInto(value, renderFrame[key])
       else
@@ -8396,6 +8456,10 @@ state._roadmindHelpers.mergeSensorFrame = function(frame)
     latest.detectionZones = type(frame.detectionZones) == "table"
       and frame.detectionZones or {timestamp = 0, zones = {}}
     latest.sensorTimestamps.detectionZones = state.simulationTime
+  end
+  if updates.trajectory == true then
+    latest.predictedTrajectory = type(frame.predictedTrajectory) == "table"
+      and frame.predictedTrajectory or {points = {}, valid = false}
   end
   if updates.pose == true then
     latest.cameras = type(frame.cameras) == "table" and frame.cameras or {}
