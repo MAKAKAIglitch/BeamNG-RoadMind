@@ -5685,6 +5685,48 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
       laneEvidenceBySegment[segmentId] = nil
     end
   end
+  -- Precompute mitered endpoints for every lane separator so markings
+  -- remain connected at curved NavGraph edges just like the road surface.
+  for i = 1, #laneGraph.segments do
+    local segment = laneGraph.segments[i]
+    local laneInfo = segment.laneModel or {}
+    local boundaries = laneInfo.laneBoundaryOffsets or {}
+    local p1, p2 = asVec3(segment.start), asVec3(segment.finish)
+    local leftA, leftB = asVec3(segment.surfaceStartLeft), asVec3(segment.surfaceFinishLeft)
+    local halfWidth = tonumber(segment.roadHalfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+    segment.laneBoundaryGeometry = {}
+
+    if p1 and p2 and halfWidth > 0.1 and type(boundaries) == "table"
+        and (laneInfo.status == "metadata" or laneInfo.status == "traffic-inferred"
+          or laneInfo.status == "traffic-provisional") then
+      local delta = vec3(p2.x - p1.x, p2.y - p1.y, 0)
+      local tangent = delta:length() > 0.1 and delta:normalized() or nil
+      local normal = tangent and vec3(-tangent.y, tangent.x, 0) or nil
+      local startMiter = leftA and vec3(leftA.x - p1.x, leftA.y - p1.y, leftA.z - p1.z)
+        or (normal and normal * halfWidth or nil)
+      local finishMiter = leftB and vec3(leftB.x - p2.x, leftB.y - p2.y, leftB.z - p2.z)
+        or (normal and normal * halfWidth or nil)
+
+      if startMiter and finishMiter then
+        local centerDivider = tonumber(laneInfo.centerDividerOffset)
+        for boundaryIndex = 1, #boundaries do
+          local offset = tonumber(boundaries[boundaryIndex])
+          if offset then
+            local ratio = math.max(-1, math.min(1, offset / halfWidth))
+            local startPoint = p1 + startMiter * ratio
+            local finishPoint = p2 + finishMiter * ratio
+            segment.laneBoundaryGeometry[#segment.laneBoundaryGeometry + 1] = {
+              offset = round2(offset),
+              start = vectorToPlainTable(startPoint),
+              finish = vectorToPlainTable(finishPoint),
+              centerDivider = centerDivider ~= nil and math.abs(offset - centerDivider) < 0.05
+            }
+          end
+        end
+      end
+    end
+  end
+
   laneGraph.source = "BeamNG NavGraph with confirmed traffic-trajectory inference"
 
   local seenNodes,incomingByNode,outgoingByNode={},{},{}
