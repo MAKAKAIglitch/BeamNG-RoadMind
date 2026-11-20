@@ -7195,14 +7195,19 @@ state._roadmindHelpers.buildSensorZones = function(data, settings)
 end
 
 state._roadmindHelpers.targetInsideSensorZone = function(target, zone)
-  local delta = target.center - zone.origin
-  local distanceSquared = delta:dot(delta)
+  -- Scalar deltas avoid allocating one temporary vec3 for every
+  -- vehicle-zone pair in the traffic detection hot loop.
+  local dx = target.center.x - zone.origin.x
+  local dy = target.center.y - zone.origin.y
+  local dz = target.center.z - zone.origin.z
+  local distanceSquared = dx * dx + dy * dy + dz * dz
   local maxDistance = zone.range + target.radius
   if distanceSquared > maxDistance * maxDistance then return false end
 
-  local along = delta:dot(zone.forward)
-  local lateral = delta:dot(zone.right)
-  local vertical = delta:dot(zone.up)
+  local forward, right, up = zone.forward, zone.right, zone.up
+  local along = dx * forward.x + dy * forward.y + dz * forward.z
+  local lateral = dx * right.x + dy * right.y + dz * right.z
+  local vertical = dx * up.x + dy * up.y + dz * up.z
 
   -- A bounding sphere fully contains the target OBB. Reject obvious misses
   -- with this cheap conservative test before projecting the box onto axes.
@@ -7217,9 +7222,9 @@ state._roadmindHelpers.targetInsideSensorZone = function(target, zone)
   if math.abs(lateral) > roughDepth * zone.horizontalSlope + radius then return false end
   if math.abs(vertical) > roughDepth * zone.verticalSlope + radius then return false end
 
-  local radiusForward = state._roadmindHelpers.projectedBoxRadius(target, zone.forward)
-  local radiusRight = state._roadmindHelpers.projectedBoxRadius(target, zone.right)
-  local radiusUp = state._roadmindHelpers.projectedBoxRadius(target, zone.up)
+  local radiusForward = state._roadmindHelpers.projectedBoxRadius(target, forward)
+  local radiusRight = state._roadmindHelpers.projectedBoxRadius(target, right)
+  local radiusUp = state._roadmindHelpers.projectedBoxRadius(target, up)
 
   local nearDistance = along - radiusForward
   local farDistance = along + radiusForward
