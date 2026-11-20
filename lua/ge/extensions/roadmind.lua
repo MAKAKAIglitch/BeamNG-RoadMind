@@ -8852,7 +8852,6 @@ local function buildMapMotionSnapshot(position, forward)
   -- at the same yaw rate for several seconds.
   local latest = state.latestData or {}
   local wheelTrajectory = latest.predictedTrajectory
-  local timestamps = latest.sensorTimestamps or {}
   local trajectoryAge = state.mapMotionTime
     - (tonumber(state.mapWheelTrajectoryTimestamp) or -math.huge)
   if type(wheelTrajectory) == "table" and wheelTrajectory.valid == true
@@ -8917,9 +8916,11 @@ local function buildMapMotionSnapshot(position, forward)
       local previousTime = time - step
       local turnFade = math.exp(-previousTime * 1.25)
       heading = heading + yawRate * turnFade * step
-      local predictedSpeed = math.max(0, forwardSpeed + acceleration * math.min(time, 0.65))
-      local stepDistance = predictedSpeed * step
-      distanceTravelled = distanceTravelled + stepDistance
+      local predictedSignedSpeed = clampMapMotion(
+        forwardSpeed + acceleration * math.min(time, 0.65), -55, 55
+      )
+      local stepDistance = predictedSignedSpeed * step
+      distanceTravelled = distanceTravelled + math.abs(stepDistance)
       if distanceTravelled > 30 then break end
       x = x + math.cos(heading) * stepDistance
       y = y + math.sin(heading) * stepDistance
