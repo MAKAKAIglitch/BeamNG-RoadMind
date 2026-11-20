@@ -59,6 +59,7 @@
         var cachedSurfacePointByKey = Object.create(null);
         var cachedSurfacePointBuckets = Object.create(null);
         var cachedSurfaceFaces = [];
+        var maxCachedSurfaceFaces = 16000;
         var cachedSurfaceRenderBuckets = Object.create(null);
         var cachedSurfacePruneCenter = null;
         var cachedSurfacePruneRadius = null;
@@ -188,7 +189,7 @@
             scope.$evalAsync();
             var loadingRoads = snapshot && snapshot.roadGeometryStatus
               && snapshot.roadGeometryStatus.loadActive === true;
-            schedulePoll(expanded ? (loadingRoads ? 220 : 300) : (loadingRoads ? 260 : 350));
+            schedulePoll(loadingRoads ? (expanded ? 220 : 260) : 100);
           });
         }
 
@@ -1080,13 +1081,14 @@
 
               // Build the local graph once per newly discovered world point.
               // Old points and their links stay in memory until the 1 km segment rolls over.
-              if (!point.airborne) {
+              if (!point.airborne && cachedSurfaceFaces.length < maxCachedSurfaceFaces) {
                 // Triangle faces are the only rendered surface primitive.
                 // No per-edge wireframe is built or submitted to the renderer.
                 var angularNeighbors = neighbors.slice(0, 9).slice().sort(function (a, b) {
                   return a.angle - b.angle;
                 });
-                for (var ti = 0; ti < angularNeighbors.length; ti++) {
+                for (var ti = 0; ti < angularNeighbors.length
+                    && cachedSurfaceFaces.length < maxCachedSurfaceFaces; ti++) {
                   var first = angularNeighbors[ti];
                   var second = angularNeighbors[(ti + 1) % angularNeighbors.length];
                   if (!first || !second || first.index === second.index) continue;
@@ -1136,9 +1138,11 @@
             }
           }
 
-          // Query only world-space buckets intersecting the current view. Geometry
-          // remains global; only its projection is recalculated around the ego car.
-          var visibleSurfaceFaces = [];
+          // Project only a bounded face budget from visible spatial buckets.
+          // Avoid flattening every bucket into a temporary array and transforming
+          // triangles that cannot be submitted because the polygon budget is full.
+          var surfaceFaceBudget = Math.min(1800, polygonLimit);
+          var processedSurfaceFaces = 0;
           var viewMinX = ego.position.x - 145;
           var viewMaxX = ego.position.x + 145;
           var viewMinY = ego.position.y - 145;
@@ -1147,27 +1151,32 @@
           var maxRenderX = Math.floor(viewMaxX / surfaceRenderCellSize);
           var minRenderY = Math.floor(viewMinY / surfaceRenderCellSize);
           var maxRenderY = Math.floor(viewMaxY / surfaceRenderCellSize);
-          for (var rx = minRenderX; rx <= maxRenderX; rx++) {
-            for (var ry = minRenderY; ry <= maxRenderY; ry++) {
+          for (var rx = minRenderX; rx <= maxRenderX
+              && processedSurfaceFaces < surfaceFaceBudget
+              && polygons.length < polygonLimit; rx++) {
+            for (var ry = minRenderY; ry <= maxRenderY
+                && processedSurfaceFaces < surfaceFaceBudget
+                && polygons.length < polygonLimit; ry++) {
               var renderBucket = cachedSurfaceRenderBuckets[rx + ":" + ry];
-              if (!renderBucket) continue;
-              visibleSurfaceFaces = visibleSurfaceFaces.concat(renderBucket.faces);
+              if (!renderBucket || !renderBucket.faces.length) continue;
+              var bucketFaces = renderBucket.faces;
+              var bucketStride = Math.max(1, Math.ceil(bucketFaces.length / 8));
+              for (var vf = 0; vf < bucketFaces.length
+                  && processedSurfaceFaces < surfaceFaceBudget
+                  && polygons.length < polygonLimit; vf += bucketStride) {
+                var face = bucketFaces[vf];
+                processedSurfaceFaces++;
+                if (!face || face.a.deleted || face.b.deleted || face.c.deleted) continue;
+                var faceA = localPoint(face.a.position, ego);
+                var faceB = localPoint(face.b.position, ego);
+                var faceC = localPoint(face.c.position, ego);
+                if (!faceA || !faceB || !faceC) continue;
+                if (Math.abs(faceA.x) > 90 || Math.abs(faceB.x) > 90 || Math.abs(faceC.x) > 90 ||
+                    faceA.y < -90 || faceA.y > 90 || faceB.y < -90 || faceB.y > 90 ||
+                    faceC.y < -90 || faceC.y > 90) continue;
+                addPolygon([faceA, faceB, faceC], "#343a40", 1);
+              }
             }
-          }
-
-          for (var vf = 0; vf < visibleSurfaceFaces.length; vf++) {
-            var face = visibleSurfaceFaces[vf];
-            var faceA = localPoint(face.a.position, ego);
-            var faceB = localPoint(face.b.position, ego);
-            var faceC = localPoint(face.c.position, ego);
-            if (!faceA || !faceB || !faceC) continue;
-            if (Math.abs(faceA.x) > 90 || Math.abs(faceB.x) > 90 || Math.abs(faceC.x) > 90 ||
-                faceA.y < -90 || faceA.y > 90 || faceB.y < -90 || faceB.y > 90 ||
-                faceC.y < -90 || faceC.y > 90) continue;
-            // The internal triangle mesh is only a fill tessellation. Use one
-            // opaque graphite tone and no borders so the scanned area reads as a
-            // completed continuous surface rather than a mint wireframe.
-            if (vf < 1800) addPolygon([faceA, faceB, faceC], "#343a40", 1);
           }
           }
 
