@@ -779,6 +779,7 @@ const diagnosticLine = computed(() => {
   return "REG " + value("registryCount")
     + " · Z " + value("cameraZoneCount")
     + " · CAM " + value("cameraCandidateCount")
+    + " · UNV " + value("unverifiedCandidateCount")
     + " · TRK " + value("trackedTargetCount")
     + " · DRAW " + vehicles.value.length
 })
