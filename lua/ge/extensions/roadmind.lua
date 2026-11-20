@@ -7402,19 +7402,21 @@ function M.onUpdate(dt)
   if dt < 0 then dt = 0 end
   if not state.visualizationEnabled then return end
 
-  local geStarted = M.performanceProfiler.start()
-  state._roadmindHelpers.updateAdaptivePerformance(dt)
-  state.frameAge = state.frameAge + dt
-  local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
-  local routePilotActive = state.routePilotEnabled
-
+  -- Keep watching for a replacement player vehicle while auto-resume is enabled,
+  -- even when the previous vehicle was destroyed and sensor data is stale.
   checkTimer = checkTimer + dt
   if checkTimer >= CHECK_INTERVAL then
     checkTimer = 0
     state._roadmindHelpers.syncPlayerVehicle()
   end
 
-  if not state.activeVehicle then return end
+  if not state.visualizationEnabled or not state.activeVehicle then return end
+
+  local geStarted = M.performanceProfiler.start()
+  state._roadmindHelpers.updateAdaptivePerformance(dt)
+  state.frameAge = state.frameAge + dt
+  local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
+  local routePilotActive = state.routePilotEnabled
 
   if visualFrameFresh or routePilotActive then
     state.simulationTime = state.simulationTime + dt
