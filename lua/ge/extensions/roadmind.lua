@@ -160,6 +160,7 @@ local state = {
   sessionStaticObservationIds = {},
   sessionStaticObservationOrder = {},
   sessionStaticObservationCursor = 1,
+  sessionStaticMapLastProcessedSequence = {},
   sessionStaticMapOutputCache = nil,
   sessionStaticMapOutputCenter = nil,
   sessionStaticMapLastRadius = nil,
@@ -4556,11 +4557,20 @@ buildWorldModel = function()
   local processedIds = state.sessionStaticObservationIds
   local processedOrder = state.sessionStaticObservationOrder
   local staticMapSources = {"lidar", "ultrasonic"}
+  local lastProcessedSequence = state.sessionStaticMapLastProcessedSequence
+    or {}
+  state.sessionStaticMapLastProcessedSequence = lastProcessedSequence
 
   for sourceIndex = 1, #staticMapSources do
     local sourceName = staticMapSources[sourceIndex]
-    local sourceObservations = model.observations[sourceName] or {}
-    for i = 1, #sourceObservations do
+    local sourceData = latest[sourceName]
+    local sourceSequence = type(sourceData) == "table"
+      and tonumber(sourceData.scanSequence) or nil
+    -- A world-model refresh can happen several times between sensor scans.
+    -- Static-map integration only needs to see each source scan once.
+    if sourceSequence == nil or lastProcessedSequence[sourceName] ~= sourceSequence then
+      local sourceObservations = model.observations[sourceName] or {}
+      for i = 1, #sourceObservations do
       local observation = sourceObservations[i]
       local observationId = observation and observation.observationId
       if observation and observation.targetTrackId == nil
@@ -4653,6 +4663,9 @@ buildWorldModel = function()
             end
           end
         end
+      end
+      if sourceSequence ~= nil then
+        lastProcessedSequence[sourceName] = sourceSequence
       end
     end
   end
@@ -8483,6 +8496,7 @@ function M.onClientStartMission()
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
   state.sessionStaticObservationCursor = 1
+  state.sessionStaticMapLastProcessedSequence = {}
   state.sessionStaticMapOutputCache = nil
   state.sessionStaticMapOutputCenter = nil
   state.sessionStaticMapLastRadius = nil
@@ -8522,6 +8536,7 @@ function M.onClientEndMission()
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
   state.sessionStaticObservationCursor = 1
+  state.sessionStaticMapLastProcessedSequence = {}
   state.sessionStaticMapOutputCache = nil
   state.sessionStaticMapOutputCenter = nil
   state.sessionStaticMapLastRadius = nil
@@ -8561,6 +8576,7 @@ function M.clearSessionMap()
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
   state.sessionStaticObservationCursor = 1
+  state.sessionStaticMapLastProcessedSequence = {}
   state.sessionStaticMapOutputCache = nil
   state.sessionStaticMapOutputCenter = nil
   state.sessionStaticMapLastRadius = nil
