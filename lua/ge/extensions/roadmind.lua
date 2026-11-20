@@ -8835,41 +8835,106 @@ local function buildMapMotionSnapshot(position, forward)
   local speed = tonumber(sample.speedMps) or 0
   local forwardSpeed = tonumber(sample.forwardSpeedMps) or 0
   local acceleration = tonumber(sample.accelerationMps2) or 0
-  local yawRate = tonumber(sample.yawRateRadS) or 0
-  local horizon, step = 4.0, 0.20
-  local heading = math.atan2(forward.y, forward.x)
-  local x, y, z = position.x, position.y, position.z
+  local measuredYawRate = tonumber(sample.yawRateRadS) or 0
   local predictedPath = {}
+  local predictionSource = "short-horizon-ego-motion"
+  local steeringAngleDeg, rearSteeringAngleDeg, wheelbaseM, reverse = nil, nil, nil, false
 
-  for index = 0, math.floor(horizon / step) do
-    local time = index * step
-    if index > 0 then
-      local previousTime = time - step
-      local turnFade = clampMapMotion(1 - math.max(0, previousTime - 1.0) * 0.20, 0.40, 1)
-      heading = heading + yawRate * turnFade * step
-      local predictedSpeed = clampMapMotion(
-        forwardSpeed + acceleration * math.min(time, 1.5), -55, 55
-      )
-      x = x + math.cos(heading) * predictedSpeed * step
-      y = y + math.sin(heading) * predictedSpeed * step
+  -- Prefer the vehicle-side wheel-geometry prediction. It uses actual steering
+  -- axle angles where available, rather than assuming the body keeps rotating
+  -- at the same yaw rate for several seconds.
+  local latest = state.latestData or {}
+  local wheelTrajectory = latest.predictedTrajectory
+  local timestamps = latest.sensorTimestamps or {}
+  local trajectoryAge = state.simulationTime - (tonumber(timestamps.detectionZones) or -math.huge)
+  if type(wheelTrajectory) == "table" and wheelTrajectory.valid == true
+      and type(wheelTrajectory.points) == "table" and #wheelTrajectory.points >= 2
+      and trajectoryAge >= 0 and trajectoryAge <= 0.75 then
+    local cumulativeDistance = 0
+    local previousCenter = nil
+    local maxPredictionDistance = 35
+    local timeScaleSpeed = math.max(1.0, speed)
+    for i = 1, #wheelTrajectory.points do
+      local point = wheelTrajectory.points[i]
+      local fl, fr = point and point.frontLeft, point and point.frontRight
+      local rl, rr = point and point.rearLeft, point and point.rearRight
+      if type(fl) == "table" and type(fr) == "table"
+          and type(rl) == "table" and type(rr) == "table" then
+        local center = {
+          x = (fl.x + fr.x + rl.x + rr.x) * 0.25,
+          y = (fl.y + fr.y + rl.y + rr.y) * 0.25,
+          z = (fl.z + fr.z + rl.z + rr.z) * 0.25
+        }
+        if previousCenter then
+          local dx, dy, dz = center.x - previousCenter.x,
+            center.y - previousCenter.y, center.z - previousCenter.z
+          cumulativeDistance = cumulativeDistance + math.sqrt(dx * dx + dy * dy + dz * dz)
+        end
+        if cumulativeDistance <= maxPredictionDistance then
+          predictedPath[#predictedPath + 1] = {
+            x = center.x, y = center.y, z = center.z,
+            timeS = cumulativeDistance / timeScaleSpeed
+          }
+          previousCenter = center
+        else
+          break
+        end
+      end
     end
-    predictedPath[#predictedPath + 1] = {
-      x = x, y = y, z = z, timeS = time
-    }
+    if #predictedPath >= 2 then
+      predictionSource = wheelTrajectory.source or "wheel-steering-geometry"
+      steeringAngleDeg = tonumber(wheelTrajectory.steeringAngleDeg)
+      rearSteeringAngleDeg = tonumber(wheelTrajectory.rearSteeringAngleDeg)
+      wheelbaseM = tonumber(wheelTrajectory.wheelbaseM)
+      reverse = wheelTrajectory.reverse == true
+    else
+      predictedPath = {}
+    end
+  end
+
+  -- Fallback is deliberately short and damped. A constant yaw rate over four
+  -- seconds can draw a full circle when steering is held at lock.
+  if #predictedPath < 2 and speed >= 0.8 then
+    predictionSource = "damped-ego-yaw-fallback"
+    local horizon, step = 1.5, 0.15
+    local heading = math.atan2(forward.y, forward.x)
+    local x, y, z = position.x, position.y, position.z
+    local maxLateralAcceleration = 4.5
+    local yawLimit = math.min(0.70, maxLateralAcceleration / math.max(speed, 1.5))
+    local yawRate = clampMapMotion(measuredYawRate, -yawLimit, yawLimit)
+    local distanceTravelled = 0
+    predictedPath[#predictedPath + 1] = {x = x, y = y, z = z, timeS = 0}
+    for index = 1, math.floor(horizon / step) do
+      local time = index * step
+      local previousTime = time - step
+      local turnFade = math.exp(-previousTime * 1.25)
+      heading = heading + yawRate * turnFade * step
+      local predictedSpeed = math.max(0, forwardSpeed + acceleration * math.min(time, 0.65))
+      local stepDistance = predictedSpeed * step
+      distanceTravelled = distanceTravelled + stepDistance
+      if distanceTravelled > 30 then break end
+      x = x + math.cos(heading) * stepDistance
+      y = y + math.sin(heading) * stepDistance
+      predictedPath[#predictedPath + 1] = {x = x, y = y, z = z, timeS = time}
+    end
   end
 
   return {
     source = "BeamNG vehicle pose and velocity",
+    predictionSource = predictionSource,
     confidence = (tonumber(sample.sampleCount) or 0) >= 4 and "measured" or "warming",
     speedMps = round2(speed),
     speedKph = round2(speed * 3.6),
     forwardSpeedMps = round2(forwardSpeed),
     accelerationMps2 = round2(acceleration),
-    yawRateRadS = round2(yawRate),
-    lateralAccelerationMps2 = round2(speed * yawRate),
-    lateralG = round2(speed * yawRate / 9.81),
-    predictionHorizonS = horizon,
-    predictionStepS = step,
+    yawRateRadS = round2(measuredYawRate),
+    lateralAccelerationMps2 = round2(speed * measuredYawRate),
+    lateralG = round2(speed * measuredYawRate / 9.81),
+    steeringAngleDeg = steeringAngleDeg,
+    rearSteeringAngleDeg = rearSteeringAngleDeg,
+    wheelbaseM = wheelbaseM,
+    reverse = reverse,
+    predictionHorizonS = 1.5,
     predictedPath = predictedPath,
     sampleCount = tonumber(sample.sampleCount) or 0,
     timestamp = tonumber(sample.timestamp) or 0
