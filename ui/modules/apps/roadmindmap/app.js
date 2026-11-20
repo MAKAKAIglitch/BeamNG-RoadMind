@@ -540,7 +540,7 @@
                   Math.abs(local.x) > 42 || local.y < -22 || local.y > 105 ||
                   local.z < -3.0 || local.z > 7.0) return;
               if (age < 0 || (source === "dynamic" && age > 2.5) ||
-                  (source === "static" && age > 60) || confidence < 0.18) return;
+                  (source === "static" && age > 3600) || confidence < 0.18) return;
               if (stableHits !== undefined && stableHits < 2) return;
 
               // Merge only near-identical returns. The former 0.55 m voxel
