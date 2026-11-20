@@ -131,11 +131,10 @@ local PLANNER_MAX_OBSTACLES = 128
 local PLANNER_MAX_TARGETS = 96
 local PLANNER_MAX_DATA_AGE = 1.0
 local PLANNER_CANDIDATE_OFFSETS = {-1.25, -0.625, 0, 0.625, 1.25}
-local SESSION_STATIC_MAP_MAX_CELLS = 3000
+local SESSION_STATIC_MAP_MAX_CELLS = 20000
 local SESSION_STATIC_MAP_MAX_IDS = 8192
-local SESSION_STATIC_MAP_MAX_AGE = 3600
-local SESSION_STATIC_MAP_RADIUS_M = 125
-local SESSION_STATIC_MAP_MAX_OUTPUT = 3000
+local SESSION_STATIC_MAP_SEGMENT_LENGTH_M = 1000
+local SESSION_STATIC_MAP_MAX_OUTPUT = 6000
 
 local state = {
   activeVehicleId = nil,
@@ -148,6 +147,9 @@ local state = {
   sessionStaticObservationIds = {},
   sessionStaticObservationOrder = {},
   sessionStaticMapCount = 0,
+  sessionStaticMapDistance = 0,
+  sessionStaticMapLastPosition = nil,
+  sessionStaticMapGeneration = 1,
   levelMetadataLoaded = false,
   levelMetadataFile = nil,
   levelDirectory = nil,
@@ -4420,87 +4422,125 @@ buildWorldModel = function()
   end)
 
 
-  -- Add only new, temporally consistent front-LiDAR observations. Vehicle
-  -- returns remain in the dynamic track layer and are never made static.
+  -- Keep a world-anchored map for one kilometre of actual driven path.
+  -- The minimap receives only nearby cells, while old cells remain available for
+  -- revisiting and for the future expanded map view.
+  local egoPosition = asVec3(safeCall(state.activeVehicle, "getPosition"))
   state.sessionStaticMap = state.sessionStaticMap or {}
   state.sessionStaticObservationIds = state.sessionStaticObservationIds or {}
   state.sessionStaticObservationOrder = state.sessionStaticObservationOrder or {}
+  state.sessionStaticMapDistance = tonumber(state.sessionStaticMapDistance) or 0
+  state.sessionStaticMapGeneration = tonumber(state.sessionStaticMapGeneration) or 1
+
+  if egoPosition then
+    local previousPosition = asVec3(state.sessionStaticMapLastPosition)
+    if previousPosition then
+      local travelledStep = (egoPosition - previousPosition):length()
+      -- Ignore large discontinuities such as teleporting or changing level.
+      if travelledStep <= 75 then
+        state.sessionStaticMapDistance = state.sessionStaticMapDistance + travelledStep
+      end
+    end
+    state.sessionStaticMapLastPosition = vectorToPlainTable(egoPosition)
+  end
+
+  if state.sessionStaticMapDistance >= SESSION_STATIC_MAP_SEGMENT_LENGTH_M then
+    state.sessionStaticMap = {}
+    state.sessionStaticObservationIds = {}
+    state.sessionStaticObservationOrder = {}
+    state.sessionStaticMapCount = 0
+    state.sessionStaticMapDistance = 0
+    state.sessionStaticMapGeneration = state.sessionStaticMapGeneration + 1
+    state.sessionStaticMapLastPosition = vectorToPlainTable(egoPosition)
+    log("I", "roadmind", "Session map rolled over after 1 km of driving")
+  end
+
   local staticCells = state.sessionStaticMap
   local processedIds = state.sessionStaticObservationIds
   local processedOrder = state.sessionStaticObservationOrder
+  local staticMapSources = {"lidar", "ultrasonic"}
 
-  for i = 1, #(model.observations.lidar or {}) do
-    local observation = model.observations.lidar[i]
-    local observationId = observation and observation.observationId
-    if type(observationId) == "string" and not processedIds[observationId]
-        and observation.targetTrackId == nil and observation.targetVehicleId == nil
-        and observation.isPredicted ~= true then
-      processedIds[observationId] = true
-      processedOrder[#processedOrder + 1] = observationId
-      if #processedOrder > SESSION_STATIC_MAP_MAX_IDS then
-        local expiredId = table.remove(processedOrder, 1)
-        if expiredId then processedIds[expiredId] = nil end
-      end
+  for sourceIndex = 1, #staticMapSources do
+    local sourceName = staticMapSources[sourceIndex]
+    local sourceObservations = model.observations[sourceName] or {}
+    for i = 1, #sourceObservations do
+      local observation = sourceObservations[i]
+      local observationId = observation and observation.observationId
+      if observation and observation.targetTrackId == nil
+          and observation.targetVehicleId == nil and observation.isPredicted ~= true then
+        local stableId = type(observationId) == "string" and observationId
+          or (sourceName .. ":" .. tostring(observation.timestamp or now) .. ":" .. tostring(i))
+        if not processedIds[stableId] then
+          processedIds[stableId] = true
+          processedOrder[#processedOrder + 1] = stableId
+          if #processedOrder > SESSION_STATIC_MAP_MAX_IDS then
+            local expiredId = table.remove(processedOrder, 1)
+            if expiredId then processedIds[expiredId] = nil end
+          end
 
-      local point = asVec3(observation.position)
-      if point then
-        local key = state._roadmindHelpers.worldObstacleCellKey(point)
-        local cell = staticCells[key]
-        local timestamp = tonumber(observation.timestamp) or now
-        if not cell then
-          staticCells[key] = {
-            hitCount = 1, conflictCount = 0,
-            sumX = point.x, sumY = point.y, sumZ = point.z,
-            position = vectorToPlainTable(point),
-            lastPosition = vectorToPlainTable(point),
-            firstObservedAt = timestamp,
-            lastObservedAt = timestamp
-          }
-        else
-          local lastPosition = asVec3(cell.lastPosition or cell.position)
-          local delta = lastPosition and (point - lastPosition):length() or math.huge
-          if delta <= WORLD_MODEL_OBSTACLE_CELL_SIZE * 0.72 then
-            cell.hitCount = (cell.hitCount or 0) + 1
-            cell.sumX = (cell.sumX or 0) + point.x
-            cell.sumY = (cell.sumY or 0) + point.y
-            cell.sumZ = (cell.sumZ or 0) + point.z
-            cell.position = {
-              x = cell.sumX / cell.hitCount,
-              y = cell.sumY / cell.hitCount,
-              z = cell.sumZ / cell.hitCount
-            }
-            cell.lastPosition = vectorToPlainTable(point)
-            cell.lastObservedAt = math.max(cell.lastObservedAt or timestamp, timestamp)
-          elseif now - (cell.lastObservedAt or 0) > 1.25 then
-            staticCells[key] = {
-              hitCount = 1,
-              conflictCount = (cell.conflictCount or 0) + 1,
-              sumX = point.x, sumY = point.y, sumZ = point.z,
-              position = vectorToPlainTable(point),
-              lastPosition = vectorToPlainTable(point),
-              firstObservedAt = timestamp,
-              lastObservedAt = timestamp
-            }
-          else
-            cell.conflictCount = (cell.conflictCount or 0) + 1
+          local point = asVec3(observation.position)
+          if point then
+            local key = state._roadmindHelpers.worldObstacleCellKey(point)
+            local cell = staticCells[key]
+            local timestamp = tonumber(observation.timestamp) or now
+            local confidence = tonumber(observation.confidence)
+              or (sourceName == "ultrasonic" and 0.58 or 0.68)
+            if not cell then
+              staticCells[key] = {
+                hitCount = 1, conflictCount = 0,
+                sumX = point.x, sumY = point.y, sumZ = point.z,
+                position = vectorToPlainTable(point),
+                lastPosition = vectorToPlainTable(point),
+                firstObservedAt = timestamp,
+                lastObservedAt = timestamp,
+                confidence = confidence,
+                sourceMask = {[sourceName] = true}
+              }
+            else
+              local lastPosition = asVec3(cell.lastPosition or cell.position)
+              local delta = lastPosition and (point - lastPosition):length() or math.huge
+              if delta <= WORLD_MODEL_OBSTACLE_CELL_SIZE * 0.72 then
+                cell.hitCount = (cell.hitCount or 0) + 1
+                cell.sumX = (cell.sumX or 0) + point.x
+                cell.sumY = (cell.sumY or 0) + point.y
+                cell.sumZ = (cell.sumZ or 0) + point.z
+                cell.position = {
+                  x = cell.sumX / cell.hitCount,
+                  y = cell.sumY / cell.hitCount,
+                  z = cell.sumZ / cell.hitCount
+                }
+                cell.lastPosition = vectorToPlainTable(point)
+                cell.lastObservedAt = math.max(cell.lastObservedAt or timestamp, timestamp)
+                cell.confidence = math.max(tonumber(cell.confidence) or 0, confidence)
+                cell.sourceMask = cell.sourceMask or {}
+                cell.sourceMask[sourceName] = true
+              elseif now - (cell.lastObservedAt or 0) > 1.25 then
+                staticCells[key] = {
+                  hitCount = 1,
+                  conflictCount = (cell.conflictCount or 0) + 1,
+                  sumX = point.x, sumY = point.y, sumZ = point.z,
+                  position = vectorToPlainTable(point),
+                  lastPosition = vectorToPlainTable(point),
+                  firstObservedAt = timestamp,
+                  lastObservedAt = timestamp,
+                  confidence = confidence,
+                  sourceMask = {[sourceName] = true}
+                }
+              else
+                cell.conflictCount = (cell.conflictCount or 0) + 1
+              end
+            end
           end
         end
       end
     end
   end
 
-  local egoPosition = asVec3(safeCall(state.activeVehicle, "getPosition"))
+  -- Do not evict points just because the player drove away from them or paused.
+  -- The only normal reset is the one-kilometre segment rollover above.
   local staticCellCount = 0
-  for key, cell in pairs(staticCells) do
-    local cellPosition = asVec3(cell.position)
-    local age = math.max(0, now - (tonumber(cell.lastObservedAt) or now))
-    local distance = egoPosition and cellPosition and (cellPosition - egoPosition):length() or 0
-    if age > SESSION_STATIC_MAP_MAX_AGE
-        or (egoPosition and distance > SESSION_STATIC_MAP_RADIUS_M) then
-      staticCells[key] = nil
-    else
-      staticCellCount = staticCellCount + 1
-    end
+  for _ in pairs(staticCells) do
+    staticCellCount = staticCellCount + 1
   end
 
   while staticCellCount > SESSION_STATIC_MAP_MAX_CELLS do
@@ -4521,21 +4561,29 @@ buildWorldModel = function()
   for key, cell in pairs(staticCells) do
     local point = asVec3(cell.position)
     local hits = tonumber(cell.hitCount) or 0
-    if point and hits >= 2 then
+    if point and hits >= 1 then
       local distance = egoPosition and (point - egoPosition):length() or math.huge
       if distance <= 105 then
+        local sourceSensors = {}
+        for sourceName in pairs(cell.sourceMask or {}) do
+          sourceSensors[#sourceSensors + 1] = sourceName
+        end
+        table.sort(sourceSensors)
         model.staticGeometry[#model.staticGeometry + 1] = {
           geometryId = key,
           position = vectorToPlainTable(point),
           classification = "stable-static-candidate",
-          sourceKind = "session-map-temporal-lidar",
-          sourceSensor = "lidar",
+          sourceKind = "session-map-multi-sensor",
+          sourceSensors = sourceSensors,
           firstObservedAt = cell.firstObservedAt,
           lastObservedAt = cell.lastObservedAt,
           dataAge = round2(math.max(0, now - (cell.lastObservedAt or now))),
           hitCount = hits,
           conflictCount = cell.conflictCount or 0,
-          confidence = math.min(0.92, 0.45 + math.min(hits, 8) * 0.055)
+          confidence = math.min(0.92, math.max(
+            tonumber(cell.confidence) or 0,
+            0.45 + math.min(hits, 8) * 0.055
+          ))
         }
       end
     end
@@ -7831,7 +7879,14 @@ function M.getMapSnapshot()
     geometry = geometry,
     vehicles = state._roadmindHelpers.cloneWorldModelValue(perception.targets or {}),
     staticGeometry = state._roadmindHelpers.cloneWorldModelValue(worldModel.staticGeometry or {}),
-    sessionMap = {cellCount = state.sessionStaticMapCount or 0, scope = "current-level-session"},
+    sessionMap = {
+      cellCount = state.sessionStaticMapCount or 0,
+      generation = state.sessionStaticMapGeneration or 1,
+      distanceTravelledM = round2(state.sessionStaticMapDistance or 0),
+      distanceUntilResetM = round2(math.max(0, SESSION_STATIC_MAP_SEGMENT_LENGTH_M - (state.sessionStaticMapDistance or 0))),
+      scope = "one-kilometre-travel-segment",
+      coordinateFrame = "beamng-world"
+    },
     route = route,
     planner = state._roadmindHelpers.cloneWorldModelValue(planner),
     selectedTrajectory = selectedPath,
