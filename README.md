@@ -53,6 +53,15 @@ BeamNG.tech may be supported later through a separate sensor adapter. Its native
 
 The map must show what RoadMind has observed or what a clearly identified structural prior supports. It must not become a hidden rendering of the complete game scene.
 
+
+## In-game Map app (implemented, unvalidated)
+
+The in-game UI app lives in `ui/modules/apps/roadmindmap/`. Add **RoadMind Map** from the in-game UI Apps library. Opening it starts the configured sensor suite only when it is not already running; closing it releases scanning only when the map started it.
+
+The map consumes a compact snapshot from the Game Engine Lua World Model. It renders the current vehicle and tracked traffic as low-poly meshes, recent fused raycast returns as spatial points, the NavGraph corridor as a road-surface prior, and the selected safe local trajectory in blue. The preview planner runs without enabling the vehicle controller.
+
+Road width falls back to a clearly tagged conservative NavGraph heuristic when no edge-width metadata exists. Lane markings are drawn only when lane metadata is present; no lane boundaries are fabricated from a centreline. RGB semantics, live signal phases, and level POIs remain explicitly unavailable until their regular-Drive adapters are implemented and validated. The map has not yet passed repeatable in-game visual or performance tests.
+
 ## Development scope
 
 This branch prioritizes sensors → World Model → road/lane representation → RoadMind Map → validation and performance. Route and trajectory data may be prepared for the map and future planning. The existing experimental route/controller code is not evidence of a validated autopilot and is not the focus of this branch.

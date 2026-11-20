@@ -120,8 +120,8 @@ local ROUTE_MAX_LOST_UPDATES = 4
 local ROUTE_SAFETY_INTERVAL = 0.10
 local PLANNER_INTERVAL = 0.20
 local PLANNER_HORIZON_M = 25.0
-local PLANNER_SAMPLE_STEP_M = 2.5
-local PLANNER_MAX_SAMPLES = 13
+local PLANNER_SAMPLE_STEP_M = 1.25
+local PLANNER_MAX_SAMPLES = 21
 local PLANNER_MAX_CANDIDATES = 5
 local PLANNER_ROAD_HALF_WIDTH_M = 3.5
 local PLANNER_ROAD_EDGE_MARGIN_M = 0.35
@@ -135,6 +135,9 @@ local state = {
   activeVehicleId = nil,
   activeVehicle = nil,
   visualizationEnabled = false,
+  mapModeEnabled = false,
+  mapPlanningEnabled = false,
+  mapStartedSensors = false,
   settings = nil,
   latestData = nil,
   frameAge = math.huge,
@@ -2604,6 +2607,53 @@ function M.setVisualizationEnabled(enabled)
   return settingsResult()
 end
 
+
+function M.setMapEnabled(enabled)
+  if not state.settings then state._roadmindHelpers.loadSettings() end
+  local wanted = enabled == true
+
+  if wanted then
+    if state.mapModeEnabled then
+      return {ok = true, enabled = true, scanning = state.visualizationEnabled}
+    end
+
+    local startedSensors = not state.visualizationEnabled
+    if startedSensors then
+      local result = M.setVisualizationEnabled(true)
+      if not result or result.ok ~= true then
+        return result or {ok = false, error = "Could not start RoadMind sensors"}
+      end
+    end
+
+    state.mapStartedSensors = startedSensors
+    state.mapModeEnabled = true
+    state.mapPlanningEnabled = true
+    if state.localPlanner then state.localPlanner.timestamp = nil end
+    return {
+      ok = true,
+      enabled = true,
+      scanning = state.visualizationEnabled,
+      startedSensors = startedSensors
+    }
+  end
+
+  local stopSensors = state.mapStartedSensors == true and not state.routePilotEnabled
+  state.mapModeEnabled = false
+  state.mapPlanningEnabled = false
+  state.mapStartedSensors = false
+  if not state.routePilotEnabled then
+    state.localPlanner = {
+      status = "idle", reasonCode = "inactive", timestamp = nil,
+      candidates = {}, selectedIndex = nil
+    }
+  end
+  if stopSensors and state.visualizationEnabled then
+    return M.setVisualizationEnabled(false)
+  end
+  return {ok = true, enabled = false, scanning = state.visualizationEnabled}
+end
+
+
 function M.setRoutePilotEnabled(enabled)
   if not state.settings then state._roadmindHelpers.loadSettings() end
 
@@ -4481,6 +4531,51 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     {x = pointA.x, y = pointA.y, z = pointA.z, nodeId = tostring(nodeAId)},
     {x = pointB.x, y = pointB.y, z = pointB.z, nodeId = tostring(nodeBId)}
   }
+  local roadHalfWidth = PLANNER_ROAD_HALF_WIDTH_M
+  local widthSource = "conservative-navgraph-heuristic"
+  local laneModel = {
+    status = "unknown",
+    source = "NavGraph lane boundaries are not exposed by this map edge"
+  }
+  local function readRoadEdge(fromId, toId)
+    local fromNode = nodes[fromId]
+    local links = fromNode and safeField(fromNode, "links") or nil
+    local edge = type(links) == "table" and links[toId] or nil
+    if type(edge) ~= "table" then
+      local toNode = nodes[toId]
+      local reverseLinks = toNode and safeField(toNode, "links") or nil
+      edge = type(reverseLinks) == "table" and reverseLinks[fromId] or nil
+    end
+    return type(edge) == "table" and edge or nil
+  end
+  local function edgeNumber(edge, key, minimum, maximum)
+    local value = tonumber(edge and safeField(edge, key))
+    if value and value >= minimum and value <= maximum then return value end
+    return nil
+  end
+  local firstEdge = readRoadEdge(nodeAId, nodeBId)
+  local edgeWidth = edgeNumber(firstEdge, "roadWidth", 2, 60)
+    or edgeNumber(firstEdge, "width", 2, 60)
+  local laneWidth = edgeNumber(firstEdge, "laneWidth", 2.3, 5.5)
+  local lanesLeft = edgeNumber(firstEdge, "lanesLeft", 0, 8)
+  local lanesRight = edgeNumber(firstEdge, "lanesRight", 0, 8)
+  if edgeWidth then
+    roadHalfWidth = edgeWidth * 0.5
+    widthSource = "navgraph-edge-width"
+  elseif laneWidth and lanesLeft and lanesRight and lanesLeft + lanesRight > 0 then
+    roadHalfWidth = (lanesLeft + lanesRight) * laneWidth * 0.5
+    widthSource = "navgraph-lane-count-and-width"
+  end
+  if lanesLeft and lanesRight then
+    laneModel = {
+      status = "metadata",
+      source = "navgraph-edge-metadata",
+      lanesLeft = math.floor(lanesLeft + 0.5),
+      lanesRight = math.floor(lanesRight + 0.5),
+      laneWidth = laneWidth,
+      direction = "not-resolved"
+    }
+  end
   local visited = {[tostring(nodeAId)] = true, [tostring(nodeBId)] = true}
   local currentId = nodeBId
   local currentPosition = pointB
@@ -4488,7 +4583,7 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
 
   -- Extend a short centerline by following the most forward connected graph edge.
   -- This is NavGraph geometry, not a lane-boundary or free-space estimate.
-  for _ = 1, 4 do
+  for _ = 1, 16 do
     local currentNode = nodes[currentId]
     local links = currentNode and safeField(currentNode, "links") or nil
     if type(links) ~= "table" then break end
@@ -4534,7 +4629,10 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     lateralOffset = lateralOffset,
     headingAlignment = alignment,
     roadDirection = {x = tangent.x, y = tangent.y, z = 0},
-    corridor = corridor
+    corridor = corridor,
+    roadHalfWidth = roadHalfWidth,
+    widthSource = widthSource,
+    laneModel = laneModel
   }
 end
 
@@ -4779,8 +4877,8 @@ updateLocalTrajectoryPlanner = function()
   if previous.timestamp and state.simulationTime - previous.timestamp < PLANNER_INTERVAL then
     return previous
   end
-  if not state.routePilotEnabled then
-    return state._roadmindHelpers.setLocalPlannerState("idle", "inactive", "Route pilot is inactive", {}, nil)
+  if not state.routePilotEnabled and not state.mapPlanningEnabled then
+    return state._roadmindHelpers.setLocalPlannerState("idle", "inactive", "Map planning and route pilot are inactive", {}, nil)
   end
   local function waiting(code, reason)
     return state._roadmindHelpers.setLocalPlannerState("waiting", code, reason, {}, nil)
@@ -4916,7 +5014,9 @@ updateLocalTrajectoryPlanner = function()
       candidate.pathProgress = sample.distance
       local projectedHalfWidth = footprint.halfLength * math.abs(footprint.forward:dot(normal))
         + footprint.halfWidth * math.abs(footprint.right:dot(normal))
-      local roadMargin = PLANNER_ROAD_HALF_WIDTH_M - math.abs(lateralOffset) - projectedHalfWidth
+      local roadHalfWidth = tonumber(state.roadState.roadHalfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+      roadHalfWidth = math.max(2.0, math.min(20.0, roadHalfWidth))
+      local roadMargin = roadHalfWidth - math.abs(lateralOffset) - projectedHalfWidth
       candidate.minimumRoadMargin = math.min(candidate.minimumRoadMargin, roadMargin)
       if roadMargin < PLANNER_ROAD_EDGE_MARGIN_M then
         candidate.safe = false
@@ -6331,9 +6431,14 @@ function M.onUpdate(dt)
     local trackingStarted = M.performanceProfiler.start()
     state._roadmindHelpers.updateVehicleDetection(dt)
     M.performanceProfiler.stop("vehicle_tracking", trackingStarted)
-    if visualFrameFresh then
+    if visualFrameFresh and not state.mapModeEnabled then
       state._roadmindHelpers.updateLidarRenderPoints(dt)
       state._roadmindHelpers.updateDetectedVehicleRenderStates(dt)
+    end
+    if state.mapPlanningEnabled and visualFrameFresh then
+      local mapPlannerStarted = M.performanceProfiler.start()
+      updateLocalTrajectoryPlanner()
+      M.performanceProfiler.stop("map_planner_preview", mapPlannerStarted)
     end
     if routePilotActive then
       local safetyStarted = M.performanceProfiler.start()
@@ -6347,17 +6452,18 @@ function M.onUpdate(dt)
   state._roadmindHelpers.updateADAS(dt)
   M.performanceProfiler.stop("adas", adasStarted)
 
-  -- Advance render-only inertia at display cadence. This covers own-vehicle
-  -- bounds/axes/mounts, radar and ultrasonic returns, camera frustums,
-  -- localization, traffic origins, route lines and planner candidates.
-  local visualStarted = M.performanceProfiler.start()
-  state._roadmindHelpers.updateVisualizationRenderState(dt)
-  M.performanceProfiler.stop("visualization", visualStarted)
+  -- The map owns its own compact UI renderer. Keep the legacy 3D sensor
+  -- diagnostics independent so opening the map does not draw sensor overlays
+  -- into the game world or spend time updating their display-only state.
+  if not state.mapModeEnabled then
+    local visualStarted = M.performanceProfiler.start()
+    state._roadmindHelpers.updateVisualizationRenderState(dt)
+    M.performanceProfiler.stop("visualization", visualStarted)
 
-  -- Keep redrawing the last valid snapshot while the simulation is paused.
-  local drawStarted = M.performanceProfiler.start()
-  drawFrame()
-  M.performanceProfiler.stop("debug_draw", drawStarted)
+    local drawStarted = M.performanceProfiler.start()
+    drawFrame()
+    M.performanceProfiler.stop("debug_draw", drawStarted)
+  end
   M.performanceProfiler.stop("ge_update", geStarted)
   M.performanceProfiler.advance(dt)
 end
@@ -6560,6 +6666,112 @@ function M.getPerceptionSnapshot()
       routeSafetyStopped = state.routeSafetyStopped == true,
       routePilotError = state.routePilotError,
       plannerStatus = state.localPlanner and state.localPlanner.status or "idle"
+    }
+  }
+end
+
+
+function M.getMapSnapshot()
+  local perception = M.getPerceptionSnapshot()
+  local worldModel = M.getWorldModel()
+  local routeState = M.getRouteState()
+  local vehicle = perception and perception.vehicle or nil
+  local vehiclePosition = vehicle and asVec3(vehicle.position) or nil
+
+  if vehicle and state.activeVehicle then
+    local velocity = asVec3(safeCall(state.activeVehicle, "getVelocity"))
+    vehicle.speedMps = velocity and round2(velocity:length()) or 0
+  end
+
+  local geometry = {}
+  for i = 1, math.min(#(worldModel.obstacles or {}), 384) do
+    local obstacle = worldModel.obstacles[i]
+    local position = obstacle and obstacle.position
+    local point = asVec3(position)
+    local age = tonumber(obstacle and obstacle.dataAge) or math.huge
+    local distance = vehiclePosition and point and (point - vehiclePosition):length() or math.huge
+    if point and age >= 0 and age <= 2.5 and distance <= 95 then
+      geometry[#geometry + 1] = {
+        id = obstacle.obstacleId,
+        position = state._roadmindHelpers.cloneWorldModelValue(position),
+        age = age,
+        confidence = obstacle.confidence,
+        observationCount = obstacle.observationCount,
+        sources = state._roadmindHelpers.copySensorSources(obstacle.sourceSensors),
+        sourceKind = obstacle.sourceKind,
+        measurementKind = obstacle.measurementKind
+      }
+    end
+  end
+
+  local road = state._roadmindHelpers.cloneWorldModelValue(state.roadState or {
+    valid = false, quality = "unavailable", corridor = {}
+  })
+  road.roadHalfWidth = tonumber(road.roadHalfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+  road.widthSource = road.widthSource or "conservative-navgraph-heuristic"
+  road.laneModel = road.laneModel or {
+    status = "unknown",
+    source = "No verified lane metadata is available on the current road edge"
+  }
+
+  local routePath = routeState and routeState.route and routeState.route.path or {}
+  local route = {}
+  for i = 1, math.min(#routePath, 180) do
+    local point = routePath[i]
+    if type(point) == "table" then
+      route[#route + 1] = {x = point.x, y = point.y, z = point.z}
+    end
+  end
+
+  local planner = routeState and routeState.planner or {
+    status = "waiting", reasonCode = "not-ready", candidates = {}
+  }
+  local selectedPath = nil
+  local selectedIndex = tonumber(planner.selectedIndex)
+  if selectedIndex and type(planner.candidates) == "table" then
+    local candidate = planner.candidates[selectedIndex]
+    if type(candidate) == "table" and candidate.safe == true then
+      selectedPath = state._roadmindHelpers.cloneWorldModelValue(candidate.path)
+    end
+  end
+
+  return {
+    schemaVersion = 2,
+    timestamp = state.simulationTime,
+    coordinateFrame = "beamng-world",
+    coordinateUnits = "meters",
+    vehicle = state._roadmindHelpers.cloneWorldModelValue(vehicle),
+    road = road,
+    geometry = geometry,
+    vehicles = state._roadmindHelpers.cloneWorldModelValue(perception.targets or {}),
+    route = route,
+    planner = state._roadmindHelpers.cloneWorldModelValue(planner),
+    selectedTrajectory = selectedPath,
+    sourceStatus = state._roadmindHelpers.cloneWorldModelValue(worldModel.sourceStatus or {}),
+    worldModelQuality = state._roadmindHelpers.cloneWorldModelValue(worldModel.quality or {}),
+    poi = {
+      status = "unavailable",
+      source = "No level-sites adapter is connected in the regular Drive backend",
+      items = {}
+    },
+    semantics = {
+      status = "unavailable",
+      source = "Regular Drive camera mounts are geometric coverage models, not RGB/semantic detections",
+      items = {}
+    },
+    signals = {
+      status = "unavailable",
+      source = "Runtime signal-state adapter has not been validated",
+      items = {}
+    },
+    status = {
+      enabled = state.mapModeEnabled == true,
+      scanning = state.visualizationEnabled == true,
+      frameAge = state.frameAge,
+      roadQuality = road.quality or "unavailable",
+      laneStatus = road.laneModel.status or "unknown",
+      plannerStatus = planner.status or "waiting",
+      plannerReason = planner.reason or nil
     }
   }
 end

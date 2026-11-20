@@ -1,0 +1,51 @@
+.roadmind-map-app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 240px;
+  min-height: 180px;
+  overflow: hidden;
+  border: 1px solid rgba(115, 145, 164, 0.34);
+  border-radius: 15px;
+  background: #0b131b;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
+  contain: layout paint;
+}
+.roadmind-map-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.roadmind-map-mark {
+  position: absolute;
+  top: 9px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(220, 232, 240, 0.72);
+  font: 600 9px/1.2 "Segoe UI", sans-serif;
+  letter-spacing: 0.19em;
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
+}
+.roadmind-map-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #4aaeff;
+  box-shadow: 0 0 8px rgba(74, 174, 255, 0.8);
+}
+.roadmind-map-wait {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: rgba(207, 221, 232, 0.72);
+  font: 600 10px/1.2 "Segoe UI", sans-serif;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+  text-shadow: 0 2px 6px #000;
+  pointer-events: none;
+}
