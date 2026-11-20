@@ -21,6 +21,12 @@ local DEFAULT_SETTINGS = {
   adaptiveFpsEnabled = false,
   performanceProfilerEnabled = false,
   targetFps = 60,
+  mapCameraHeightM = 7.5,
+  mapCameraDistanceM = 10.5,
+  mapCameraLookAheadM = 13,
+  mapRadiusM = 500,
+  mapMaxPolygons = 3000,
+  mapRenderFps = 30,
   speedAdaptiveRateEnabled = true,
   adasEnabled = false,
   adasFCWEnabled = true,
@@ -133,8 +139,8 @@ local PLANNER_MAX_DATA_AGE = 1.0
 local PLANNER_CANDIDATE_OFFSETS = {-1.25, -0.625, 0, 0.625, 1.25}
 local SESSION_STATIC_MAP_MAX_CELLS = 20000
 local SESSION_STATIC_MAP_MAX_IDS = 8192
-local SESSION_STATIC_MAP_SEGMENT_LENGTH_M = 1000
-local SESSION_STATIC_MAP_MAX_OUTPUT = 6000
+local SESSION_STATIC_MAP_PRUNE_STEP_M = 12
+local SESSION_STATIC_MAP_MAX_OUTPUT = 4000
 
 local state = {
   activeVehicleId = nil,
@@ -149,7 +155,9 @@ local state = {
   sessionStaticMapCount = 0,
   sessionStaticMapDistance = 0,
   sessionStaticMapLastPosition = nil,
+  sessionStaticMapLastPrunePosition = nil,
   sessionStaticMapGeneration = 1,
+  trafficLaneEvidence = {},
   levelMetadataLoaded = false,
   levelMetadataFile = nil,
   levelDirectory = nil,
@@ -2169,6 +2177,20 @@ state._roadmindHelpers.normalizeSettings = function(source)
   if source.poseHz == 2 or source.poseHz == 4 or source.poseHz == 5 then result.poseHz = source.poseHz end
   if type(source.targetFps) == "number" and source.targetFps >= 30 and source.targetFps <= 165 then
     result.targetFps = math.floor((source.targetFps - 30) / 5 + 0.5) * 5 + 30
+  end
+  local mapNumericSettings = {
+    mapCameraHeightM = {4, 18, 0.5},
+    mapCameraDistanceM = {8, 32, 1},
+    mapCameraLookAheadM = {6, 40, 1},
+    mapRadiusM = {100, 500, 25},
+    mapMaxPolygons = {500, 8000, 500},
+    mapRenderFps = {15, 60, 5}
+  }
+  for key, limits in pairs(mapNumericSettings) do
+    local value = tonumber(source[key])
+    if value and value >= limits[1] and value <= limits[2] then
+      result[key] = limits[1] + math.floor((value - limits[1]) / limits[3] + 0.5) * limits[3]
+    end
   end
   if type(source.lidarPointCloudLimit) == "number"
       and source.lidarPointCloudLimit >= MIN_PERSISTENT_LIDAR_POINTS
@@ -4422,37 +4444,51 @@ buildWorldModel = function()
   end)
 
 
-  -- Keep a world-anchored map for one kilometre of actual driven path.
-  -- The minimap receives only nearby cells, while old cells remain available for
-  -- revisiting and for the future expanded map view.
+  -- Keep a rolling world-anchored spatial memory around the player.
+  -- Leaving the 500 m circle evicts only out-of-range cells; nearby roads stay cached.
   local egoPosition = asVec3(safeCall(state.activeVehicle, "getPosition"))
   state.sessionStaticMap = state.sessionStaticMap or {}
   state.sessionStaticObservationIds = state.sessionStaticObservationIds or {}
   state.sessionStaticObservationOrder = state.sessionStaticObservationOrder or {}
   state.sessionStaticMapDistance = tonumber(state.sessionStaticMapDistance) or 0
   state.sessionStaticMapGeneration = tonumber(state.sessionStaticMapGeneration) or 1
+  local mapRadius = math.max(100, math.min(500,
+    tonumber(state.settings and state.settings.mapRadiusM) or 500))
 
   if egoPosition then
     local previousPosition = asVec3(state.sessionStaticMapLastPosition)
     if previousPosition then
       local travelledStep = (egoPosition - previousPosition):length()
-      -- Ignore large discontinuities such as teleporting or changing level.
       if travelledStep <= 75 then
-        state.sessionStaticMapDistance = state.sessionStaticMapDistance + travelledStep
+        state.sessionStaticMapDistance = math.min(10000000,
+          state.sessionStaticMapDistance + travelledStep)
       end
     end
     state.sessionStaticMapLastPosition = vectorToPlainTable(egoPosition)
   end
 
-  if state.sessionStaticMapDistance >= SESSION_STATIC_MAP_SEGMENT_LENGTH_M then
-    state.sessionStaticMap = {}
-    state.sessionStaticObservationIds = {}
-    state.sessionStaticObservationOrder = {}
-    state.sessionStaticMapCount = 0
-    state.sessionStaticMapDistance = 0
-    state.sessionStaticMapGeneration = state.sessionStaticMapGeneration + 1
-    state.sessionStaticMapLastPosition = vectorToPlainTable(egoPosition)
-    log("I", "roadmind", "Session map rolled over after 1 km of driving")
+  local lastPrunePosition = asVec3(state.sessionStaticMapLastPrunePosition)
+  local shouldPrune = egoPosition and (not lastPrunePosition
+    or (egoPosition - lastPrunePosition):length() >= SESSION_STATIC_MAP_PRUNE_STEP_M)
+  if shouldPrune then
+    local radiusSquared = mapRadius * mapRadius
+    local retained = 0
+    for key, cell in pairs(state.sessionStaticMap) do
+      local point = asVec3(cell and cell.position)
+      if point then
+        local dx = point.x - egoPosition.x
+        local dy = point.y - egoPosition.y
+        if dx * dx + dy * dy <= radiusSquared then
+          retained = retained + 1
+        else
+          state.sessionStaticMap[key] = nil
+        end
+      else
+        state.sessionStaticMap[key] = nil
+      end
+    end
+    state.sessionStaticMapCount = retained
+    state.sessionStaticMapLastPrunePosition = vectorToPlainTable(egoPosition)
   end
 
   local staticCells = state.sessionStaticMap
@@ -4536,8 +4572,7 @@ buildWorldModel = function()
     end
   end
 
-  -- Do not evict points just because the player drove away from them or paused.
-  -- The only normal reset is the one-kilometre segment rollover above.
+  -- The radius and hard cell cap are independent safeguards.
   local staticCellCount = 0
   for _ in pairs(staticCells) do
     staticCellCount = staticCellCount + 1
@@ -4563,7 +4598,7 @@ buildWorldModel = function()
     local hits = tonumber(cell.hitCount) or 0
     if point and hits >= 1 then
       local distance = egoPosition and (point - egoPosition):length() or math.huge
-      if distance <= 105 then
+      if distance <= mapRadius then
         local sourceSensors = {}
         for sourceName in pairs(cell.sourceMask or {}) do
           sourceSensors[#sourceSensors + 1] = sourceName
@@ -5244,11 +5279,13 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     timestamp = state.simulationTime, cacheGeneration = navCache and navCache.generation or 0,
     currentLaneId = nil, currentLaneStatus = "unknown",
     segments = {}, junctions = {}, connections = {},
-    nodeCount = 0, segmentCount = 0, laneCount = 0, junctionCount = 0, connectionCount = 0
+    nodeCount = 0, segmentCount = 0, laneCount = 0, inferredLaneCount = 0,
+    junctionCount = 0, connectionCount = 0
   }
   local queue, queuedEdges, visitedEdges = {}, {}, {}
   local queueIndex = 1
-  local maxSegments, maxDepth, maxDistance, maxBranches = 96, 4, 125, 8
+  local maxSegments, maxDepth, maxDistance, maxBranches = 96, 4,
+    math.max(125, math.min(500, tonumber(state.settings and state.settings.mapRadiusM) or 500)), 8
   local function edgeKey(a,b) return tostring(a)..">"..tostring(b) end
   local function enqueue(fromId,toId,depth,distance,current)
     local key=edgeKey(fromId,toId)
@@ -5356,6 +5393,155 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
   end
 
   laneGraph.segmentCount=#laneGraph.segments
+
+  -- Infer lane centres from repeated, confirmed traffic trajectories when
+  -- NavGraph does not publish lane metadata. Direction alignment prevents
+  -- opposite-direction traffic from being merged into one lane estimate.
+  local trafficTargets = state.worldModel and state.worldModel.targets or {}
+  state.trafficLaneEvidence = state.trafficLaneEvidence or {}
+  local laneEvidenceBySegment = state.trafficLaneEvidence
+  local activeSegmentIds = {}
+  local function inferTrafficLanes(segment)
+    if segment.laneModel and segment.laneModel.status == "metadata" then return end
+    if #(segment.lanes or {}) > 0 then return end
+    local p1, p2 = asVec3(segment.start), asVec3(segment.finish)
+    if not p1 or not p2 then return end
+    local delta = vec3(p2.x - p1.x, p2.y - p1.y, 0)
+    local length = delta:length()
+    if length < 2 then return end
+    local tangent = delta / length
+    local normal = vec3(-tangent.y, tangent.x, 0)
+    local halfWidth = tonumber(segment.roadHalfWidth) or 3.5
+    local evidence = laneEvidenceBySegment[segment.id]
+    if not evidence then
+      evidence = {samples = {}, lastByTrack = {}, lastUpdated = state.simulationTime}
+      laneEvidenceBySegment[segment.id] = evidence
+    end
+    evidence.lastUpdated = state.simulationTime
+
+    for targetIndex = 1, math.min(#trafficTargets, 48) do
+      local target = trafficTargets[targetIndex]
+      local age = tonumber(target and target.dataAge) or math.huge
+      local orientation = target and target.orientation
+      local heading = orientation and normalizedVec3(orientation.forward)
+      local trackPosition = target and asVec3(target.position)
+      local speed = tonumber(target and target.estimatedSpeed) or 0
+      if target and target.status == "confirmed" and age <= 0.75
+          and heading and trackPosition and speed >= 1.0 then
+        local alignment = heading:dot(tangent)
+        local relative = trackPosition - p1
+        local along = relative:dot(tangent)
+        local lateral = relative:dot(normal)
+        if alignment >= 0.72 and along >= -3 and along <= length + 3
+            and math.abs(lateral) <= math.max(1, halfWidth - 0.45) then
+          local trackId = tostring(target.trackId or targetIndex)
+          local lastSample = tonumber(evidence.lastByTrack[trackId]) or -math.huge
+          if state.simulationTime - lastSample >= 1.0 then
+            evidence.lastByTrack[trackId] = state.simulationTime
+            evidence.samples[#evidence.samples + 1] = {
+              offset = lateral, trackId = trackId, timestamp = state.simulationTime
+            }
+          end
+        end
+      end
+    end
+
+    local freshSamples = {}
+    for i = 1, #evidence.samples do
+      local sample = evidence.samples[i]
+      if state.simulationTime - (tonumber(sample.timestamp) or 0) <= 60 then
+        freshSamples[#freshSamples + 1] = sample
+      end
+    end
+    evidence.samples = freshSamples
+    local offsets = {}
+    for i = 1, #freshSamples do offsets[i] = freshSamples[i] end
+    table.sort(offsets, function(a, b) return a.offset < b.offset end)
+
+    local clusters = {}
+    for i = 1, #offsets do
+      local sample = offsets[i]
+      local cluster = clusters[#clusters]
+      if not cluster or sample.offset - cluster.maxOffset > 1.15 then
+        cluster = {sum = 0, count = 0, maxOffset = sample.offset, tracks = {}}
+        clusters[#clusters + 1] = cluster
+      end
+      cluster.sum = cluster.sum + sample.offset
+      cluster.count = cluster.count + 1
+      cluster.maxOffset = sample.offset
+      cluster.tracks[sample.trackId] = true
+    end
+
+    local inferred = {}
+    for i = 1, #clusters do
+      local cluster = clusters[i]
+      if cluster.count >= 3 then
+        local distinctTracks = 0
+        for _ in pairs(cluster.tracks) do distinctTracks = distinctTracks + 1 end
+        local centerOffset = cluster.sum / cluster.count
+        if math.abs(centerOffset) <= halfWidth - 0.5 then
+          inferred[#inferred + 1] = {
+            centerOffset = centerOffset, sampleCount = cluster.count,
+            distinctTracks = distinctTracks
+          }
+        end
+      end
+    end
+    while #inferred > 6 do table.remove(inferred) end
+    if #inferred == 0 then return end
+
+    local laneWidth = math.max(2.8, math.min(4.2, (halfWidth * 2) / #inferred))
+    local boundaries = {inferred[1].centerOffset - laneWidth * 0.5}
+    local lanes = {}
+    local hasIndependentTracks = false
+    for i = 1, #inferred do
+      local lane = inferred[i]
+      local center = p1 + normal * lane.centerOffset
+      local finish = p2 + normal * lane.centerOffset
+      local confidence = math.min(0.82,
+        0.30 + math.min(lane.distinctTracks, 4) * 0.09 + math.min(lane.sampleCount, 12) * 0.012)
+      if lane.distinctTracks >= 2 then hasIndependentTracks = true end
+      lanes[#lanes + 1] = {
+        id = segment.id .. ":traffic-lane:" .. tostring(i), index = i,
+        fromNode = segment.from, toNode = segment.to,
+        centerOffset = round2(lane.centerOffset), width = round2(laneWidth),
+        start = vectorToPlainTable(center), finish = vectorToPlainTable(finish),
+        direction = "forward", source = "tracked-traffic-trajectories",
+        confidence = round2(confidence), evidenceTracks = lane.distinctTracks,
+        evidenceSamples = lane.sampleCount,
+        status = lane.distinctTracks >= 2 and "inferred" or "provisional"
+      }
+      if i < #inferred then
+        boundaries[#boundaries + 1] = (lane.centerOffset + inferred[i + 1].centerOffset) * 0.5
+      end
+    end
+    boundaries[#boundaries + 1] = inferred[#inferred].centerOffset + laneWidth * 0.5
+    segment.lanes = lanes
+    segment.laneCount = #lanes
+    segment.laneModel = {
+      status = hasIndependentTracks and "traffic-inferred" or "traffic-provisional",
+      source = "Confirmed moving vehicle trajectories aligned with this directed NavGraph segment",
+      laneWidth = round2(laneWidth),
+      laneBoundaryOffsets = boundaries,
+      evidenceWindowSeconds = 60
+    }
+    laneGraph.laneCount = laneGraph.laneCount + #lanes
+    laneGraph.inferredLaneCount = (laneGraph.inferredLaneCount or 0) + #lanes
+  end
+
+  for i = 1, #laneGraph.segments do
+    local segment = laneGraph.segments[i]
+    activeSegmentIds[segment.id] = true
+    inferTrafficLanes(segment)
+  end
+  for segmentId, evidence in pairs(laneEvidenceBySegment) do
+    if not activeSegmentIds[segmentId]
+        and state.simulationTime - (tonumber(evidence.lastUpdated) or 0) > 120 then
+      laneEvidenceBySegment[segmentId] = nil
+    end
+  end
+  laneGraph.source = "BeamNG NavGraph with confirmed traffic-trajectory inference"
+
   local seenNodes,incomingByNode,outgoingByNode={},{},{}
   local function addSegment(bucket,nodeId,segment)
     local key=tostring(nodeId)
@@ -7544,7 +7730,13 @@ end
 
 function M.clearSessionMap()
   state.sessionStaticMap = {}
+  state.sessionStaticObservationIds = {}
+  state.sessionStaticObservationOrder = {}
   state.sessionStaticMapCount = 0
+  state.sessionStaticMapDistance = 0
+  state.sessionStaticMapLastPosition = nil
+  state.sessionStaticMapLastPrunePosition = nil
+  state.sessionStaticMapGeneration = (state.sessionStaticMapGeneration or 0) + 1
   if state.worldModel then state.worldModel.staticGeometry = {} end
   return {ok = true, cleared = true}
 end
@@ -7883,9 +8075,17 @@ function M.getMapSnapshot()
       cellCount = state.sessionStaticMapCount or 0,
       generation = state.sessionStaticMapGeneration or 1,
       distanceTravelledM = round2(state.sessionStaticMapDistance or 0),
-      distanceUntilResetM = round2(math.max(0, SESSION_STATIC_MAP_SEGMENT_LENGTH_M - (state.sessionStaticMapDistance or 0))),
-      scope = "one-kilometre-travel-segment",
+      radiusM = tonumber(state.settings and state.settings.mapRadiusM) or 500,
+      scope = "rolling-circular-radius",
       coordinateFrame = "beamng-world"
+    },
+    mapSettings = {
+      cameraHeightM = tonumber(state.settings and state.settings.mapCameraHeightM) or 7.5,
+      cameraDistanceM = tonumber(state.settings and state.settings.mapCameraDistanceM) or 10.5,
+      cameraLookAheadM = tonumber(state.settings and state.settings.mapCameraLookAheadM) or 13,
+      radiusM = tonumber(state.settings and state.settings.mapRadiusM) or 500,
+      maxPolygons = tonumber(state.settings and state.settings.mapMaxPolygons) or 3000,
+      renderFps = tonumber(state.settings and state.settings.mapRenderFps) or 30
     },
     route = route,
     planner = state._roadmindHelpers.cloneWorldModelValue(planner),
