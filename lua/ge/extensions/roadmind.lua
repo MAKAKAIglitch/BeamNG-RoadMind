@@ -5499,7 +5499,7 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     if #inferred == 0 then return end
 
     local laneWidth = math.max(2.8, math.min(4.2, (halfWidth * 2) / #inferred))
-    local boundaries = {inferred[1].centerOffset - laneWidth * 0.5}
+    local boundaries = {math.max(-halfWidth, inferred[1].centerOffset - laneWidth * 0.5)}
     local lanes = {}
     local hasIndependentTracks = false
     for i = 1, #inferred do
@@ -5523,7 +5523,8 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
         boundaries[#boundaries + 1] = (lane.centerOffset + inferred[i + 1].centerOffset) * 0.5
       end
     end
-    boundaries[#boundaries + 1] = inferred[#inferred].centerOffset + laneWidth * 0.5
+    boundaries[#boundaries + 1] = math.min(halfWidth,
+      inferred[#inferred].centerOffset + laneWidth * 0.5)
     segment.lanes = lanes
     segment.laneCount = #lanes
     segment.laneModel = {
