@@ -8611,13 +8611,27 @@ function M.getMapSnapshot()
   local zoneTimestamp = tonumber(sensorTimestamps.detectionZones)
   local zonesFresh = zoneTimestamp ~= nil and state.simulationTime - zoneTimestamp <= 1.6
   if zonesFresh and state._roadmindHelpers.buildSensorZones then
-    local zones = state._roadmindHelpers.buildSensorZones(latest, sensorSettings)
+    -- Show the physical sensor layout even when a sensor is switched off.
+    -- The enabled/fresh flags keep inactive frustums visually distinguishable
+    -- from sources that are currently producing measurements.
+    local zoneSettings = {}
+    for key, value in pairs(sensorSettings) do zoneSettings[key] = value end
+    zoneSettings.lidarEnabled = true
+    zoneSettings.radarEnabled = true
+    zoneSettings.ultrasonicEnabled = true
+    zoneSettings.cameraDetectionEnabled = true
+    local zones = state._roadmindHelpers.buildSensorZones(latest, zoneSettings)
     for zoneIndex = 1, math.min(#zones, 40) do
       local zone = zones[zoneIndex]
       if zone and zone.origin and zone.forward and zone.right then
+        local enabled = zone.sensor == "camera"
+          and sensorSettings.cameraDetectionEnabled == true
+          or sensorSettings[zone.sensor .. "Enabled"] == true
         sensorZones[#sensorZones + 1] = {
           name = zone.name,
           sensor = zone.sensor,
+          enabled = enabled,
+          fresh = enabled and zonesFresh,
           origin = vectorToPlainTable(zone.origin),
           forward = vectorToPlainTable(zone.forward),
           right = vectorToPlainTable(zone.right),
