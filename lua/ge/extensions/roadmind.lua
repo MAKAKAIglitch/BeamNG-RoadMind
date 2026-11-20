@@ -7099,6 +7099,19 @@ state._roadmindHelpers.targetInsideSensorZone = function(target, zone)
   local lateral = delta:dot(zone.right)
   local vertical = delta:dot(zone.up)
 
+  -- A bounding sphere fully contains the target OBB. Reject obvious misses
+  -- with this cheap conservative test before projecting the box onto axes.
+  -- Targets that pass still go through the original exact OBB/frustum checks.
+  local radius = target.radius or 0
+  local roughNearDistance = along - radius
+  local roughFarDistance = along + radius
+  if roughFarDistance < zone.minRange or roughNearDistance > zone.range then
+    return false
+  end
+  local roughDepth = math.max(0, math.min(zone.range, roughFarDistance))
+  if math.abs(lateral) > roughDepth * zone.horizontalSlope + radius then return false end
+  if math.abs(vertical) > roughDepth * zone.verticalSlope + radius then return false end
+
   local radiusForward = state._roadmindHelpers.projectedBoxRadius(target, zone.forward)
   local radiusRight = state._roadmindHelpers.projectedBoxRadius(target, zone.right)
   local radiusUp = state._roadmindHelpers.projectedBoxRadius(target, zone.up)
