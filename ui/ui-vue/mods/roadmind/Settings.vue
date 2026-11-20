@@ -163,6 +163,26 @@
             @update:modelValue="value => setSetting('speedAdaptiveRateEnabled', value)" />
         </BngRow>
       </div>
+      <BngRow>
+        <template #label>{{ t("performanceProfiler") }}</template>
+        <BngSwitch :modelValue="settings.performanceProfilerEnabled" :disabled="busy"
+          @update:modelValue="value => setSetting('performanceProfilerEnabled', value)" />
+      </BngRow>
+      <p class="roadmind-note">{{ t("performanceProfilerNote") }}</p>
+      <div v-if="settings.performanceProfilerEnabled && status.profiler && status.profiler.enabled"
+        class="roadmind-profiler">
+        <div class="roadmind-profiler-heading">
+          {{ t("performanceProfileHistory") }}: {{ status.profiler.historySeconds }} s
+        </div>
+        <div v-for="stage in trafficProfilerStages" :key="stage.key" class="roadmind-profiler-row">
+          <strong>{{ t("profilerStage_" + stage.key) }}</strong>
+          <span>{{ t("profilerAvg") }} {{ Number(stage.avgMs || 0).toFixed(2) }} ms</span>
+          <span>{{ t("profilerPeak") }} {{ Number(stage.peakMs || 0).toFixed(2) }} ms</span>
+        </div>
+        <p v-if="!trafficProfilerStages.length" class="roadmind-note">
+          {{ t("performanceProfileEmpty") }}
+        </p>
+      </div>
     </section>
 
     <section class="roadmind-section">
@@ -324,6 +344,11 @@
           @update:modelValue="value => setSetting('showDetectedVehicles', value)" />
       </BngRow>
       <BngRow>
+        <template #label>{{ t("predictedTrajectoryDisplay") }}</template>
+        <BngSwitch :modelValue="settings.showPredictedTrajectory" :disabled="busy"
+          @update:modelValue="value => setSetting('showPredictedTrajectory', value)" />
+      </BngRow>
+      <BngRow>
         <template #label>{{ t("cameraFrustums") }}</template>
         <BngSwitch :modelValue="settings.showCameras" :disabled="busy"
           @update:modelValue="value => setSetting('showCameras', value)" />
@@ -437,6 +462,21 @@ const EN = {
   clearCloud: "Clear scanned point cloud",
   visualizationInertia: "Smooth inertial movement",
   detectedVehicles: "Detected vehicles",
+  predictedTrajectoryDisplay: "Predicted vehicle footprint path",
+  performanceProfiler: "Measure RoadMind processing stages",
+  performanceProfilerNote: "Collects rolling 15-second timings for traffic registry snapshots, camera/frustum filtering and visibility raycasts. Enable briefly while reproducing a slowdown; timing adds a small measurement overhead.",
+  performanceProfileHistory: "Profiler history",
+  performanceProfileEmpty: "Waiting for samples. Keep scanning active for a few seconds.",
+  profilerAvg: "Avg",
+  profilerPeak: "Peak",
+  profilerStage_traffic_registry: "Traffic registry",
+  profilerStage_traffic_filter: "Camera / sensor zone filtering",
+  profilerStage_traffic_occlusion: "Visibility raycasts",
+  profilerStage_vehicle_tracking: "Vehicle tracking total",
+  profilerStage_world_model: "World Model",
+  profilerStage_visualization: "Visualization update",
+  profilerStage_debug_draw: "3D debug drawing",
+  profilerStage_ge_update: "GE update total",
   vehiclesDetected: "Vehicles confirmed visible",
   vehicleCandidates: "Vehicle candidates in sensor zones",
   trackedObjects: "RoadMind object tracks",
@@ -632,6 +672,21 @@ const RU = {
   clearCloud: "Очистить облако точек",
   visualizationInertia: "Плавное движение с инерцией",
   detectedVehicles: "Обнаруженные автомобили",
+  predictedTrajectoryDisplay: "Прогноз траектории и габаритов машины",
+  performanceProfiler: "Измерять этапы RoadMind",
+  performanceProfilerNote: "Собирает замеры за последние 15 секунд: обход трафика, проверки зон камер/датчиков и raycast видимости. Включай на время проверки лагов; измерения добавляют небольшую нагрузку.",
+  performanceProfileHistory: "История профайлера",
+  performanceProfileEmpty: "Ожидание замеров. Оставь сканирование включённым на несколько секунд.",
+  profilerAvg: "Среднее",
+  profilerPeak: "Пик",
+  profilerStage_traffic_registry: "Сбор реестра трафика",
+  profilerStage_traffic_filter: "Проверка зон камер/датчиков",
+  profilerStage_traffic_occlusion: "Raycast видимости",
+  profilerStage_vehicle_tracking: "Отслеживание машин всего",
+  profilerStage_world_model: "World Model",
+  profilerStage_visualization: "Обновление визуализации",
+  profilerStage_debug_draw: "3D-отрисовка отладки",
+  profilerStage_ge_update: "GE update всего",
   vehiclesDetected: "Подтверждённо видимых машин",
   vehicleCandidates: "Кандидатов в зонах датчиков",
   trackedObjects: "Треки RoadMind",
@@ -828,6 +883,7 @@ const settings = ref({
   lidarPointCloudLimit: 5000,
   visualizationInertiaEnabled: true,
   adaptiveFpsEnabled: false,
+  performanceProfilerEnabled: false,
   targetFps: 60,
   mapCameraHeightM: 14,
   mapCameraDistanceM: 20,
@@ -850,6 +906,7 @@ const settings = ref({
   showCameras: false,
   showLocalization: false,
   showDetectedVehicles: true,
+  showPredictedTrajectory: true,
   showCalibration: false,
 })
 const status = ref({
@@ -904,6 +961,17 @@ const status = ref({
   worldModelRegistryEnabled: false,
   worldModelRegistryFresh: false,
   vehicleCalibration: { calibrated: false, error: "Calibration has not been run" },
+})
+const TRAFFIC_PROFILER_STAGE_KEYS = [
+  "traffic_registry", "traffic_filter", "traffic_occlusion",
+  "vehicle_tracking", "world_model", "visualization", "debug_draw", "ge_update"
+]
+const trafficProfilerStages = computed(() => {
+  const stages = status.value.profiler && status.value.profiler.stages
+  if (!Array.isArray(stages)) return []
+  return stages.filter(stage =>
+    TRAFFIC_PROFILER_STAGE_KEYS.includes(stage.key) && Number(stage.calls) > 0
+  )
 })
 const error = ref("")
 const busy = ref(false)
@@ -1161,6 +1229,34 @@ onMounted(() => {
   gap: 0.75em;
 }
 .roadmind-camera-diagnostics { display: flex; flex-wrap: wrap; gap: 0.3em 0.8em; color: var(--bng-cool-gray-300, #bbb); font-size: 0.82em; font-variant-numeric: tabular-nums; }
+.roadmind-profiler {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  margin-top: 0.35em;
+  padding: 0.5em 0.6em;
+  border: 1px solid var(--bng-cool-gray-700, rgba(255,255,255,0.12));
+  border-radius: 0.25em;
+}
+.roadmind-profiler-heading {
+  color: var(--bng-cool-gray-200, #ddd);
+  font-size: 0.84em;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.roadmind-profiler-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.5em;
+  color: var(--bng-cool-gray-300, #bbb);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+}
+.roadmind-profiler-row strong { color: var(--bng-cool-gray-100, #eee); font-weight: 550; }
+@media (max-width: 520px) {
+  .roadmind-profiler-row { grid-template-columns: 1fr auto; }
+  .roadmind-profiler-row strong { grid-column: 1 / -1; }
+}
 .roadmind-track-list {
   display: flex;
   flex-direction: column;
