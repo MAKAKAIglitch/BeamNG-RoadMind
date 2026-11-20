@@ -5455,7 +5455,13 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
         freshSamples[#freshSamples + 1] = sample
       end
     end
+    while #freshSamples > 128 do table.remove(freshSamples, 1) end
     evidence.samples = freshSamples
+    for trackId, lastSeen in pairs(evidence.lastByTrack) do
+      if state.simulationTime - (tonumber(lastSeen) or 0) > 60 then
+        evidence.lastByTrack[trackId] = nil
+      end
+    end
     local offsets = {}
     for i = 1, #freshSamples do offsets[i] = freshSamples[i] end
     table.sort(offsets, function(a, b) return a.offset < b.offset end)
