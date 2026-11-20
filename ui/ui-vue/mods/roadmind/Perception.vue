@@ -268,8 +268,8 @@ const camera = computed(() => {
   if (mode.value === "top") {
     return { r: 0, f: -10, u: 32, targetR: 0, targetF: 20, targetU: 0, focal: 300, horizon: 280 }
   }
-  // Slightly farther back and above the ego car, while keeping it prominent.
-  return { r: 0, f: -10, u: 5, targetR: 0, targetF: 26, targetU: 0, focal: 330, horizon: 300 }
+  // Pull the camera back and slightly higher to expose more surrounding geometry.
+  return { r: 0, f: -21.5, u: 9.2, targetR: 0, targetF: 27, targetU: 0, focal: 320, horizon: 302 }
 })
 
 function projectLocal(point) {
@@ -436,54 +436,125 @@ function triangulateDelaunay(input) {
 const localCloudPoints = computed(() => {
   const source = snapshot.value.lidarPoints || []
   const cells = new Map()
+  const cellR = 0.82
+  const cellF = 0.82
+  const cellU = 0.72
+
   for (const worldPoint of source) {
     const p = worldToLocal(worldPoint)
-    if (!p || p.f < -18 || p.f > 88 || Math.abs(p.r) > 30 || p.u < -6 || p.u > 12) continue
-    const cell = Math.floor(p.r / 0.72) + ":" + Math.floor(p.f / 0.72)
-    const existing = cells.get(cell)
-    if (!existing || Math.abs(p.u + 0.7) < Math.abs(existing.u + 0.7)) cells.set(cell, p)
+    if (!p || p.f < -18 || p.f > 88 || Math.abs(p.r) > 30 || p.u < -10 || p.u > 14) continue
+
+    // A 3D voxel key retains raised and vertical surfaces instead of reducing
+    // all returns at the same ground-plane location to a single sample.
+    const ir = Math.floor(p.r / cellR)
+    const iff = Math.floor(p.f / cellF)
+    const iu = Math.floor(p.u / cellU)
+    const key = ir + ":" + iff + ":" + iu
+    const centerR = (ir + 0.5) * cellR
+    const centerF = (iff + 0.5) * cellF
+    const centerU = (iu + 0.5) * cellU
+    const score = Math.pow(p.r - centerR, 2)
+      + Math.pow(p.f - centerF, 2) + Math.pow(p.u - centerU, 2)
+    const existing = cells.get(key)
+    if (!existing || score < existing.score) cells.set(key, { point: p, score })
   }
-  const points = Array.from(cells.values()).sort((a, b) => a.f - b.f || a.r - b.r)
-  const maxPoints = 420
-  const stride = Math.max(1, Math.ceil(points.length / maxPoints))
+
+  const points = Array.from(cells.values(), item => item.point)
+    .sort((a, b) => a.f - b.f || a.r - b.r || a.u - b.u)
+  const maxPoints = 600
+  if (points.length <= maxPoints) return points
+
+  // Preserve coverage across the full sorted cloud when applying the cap.
+  const stride = points.length / maxPoints
   const sampled = []
-  for (let i = 0; i < points.length; i += stride) sampled.push(points[i])
+  for (let i = 0; i < maxPoints; i++) sampled.push(points[Math.floor(i * stride)])
   return sampled
 })
+
+function buildMeshSlices(points, axis) {
+  const groups = new Map()
+  const sliceSize = 0.78
+  for (const point of points) {
+    let sliceCoordinate
+    let planeR
+    let planeF
+    if (axis === "height") {
+      sliceCoordinate = point.u
+      planeR = point.r
+      planeF = point.f
+    } else if (axis === "lateral") {
+      sliceCoordinate = point.r
+      planeR = point.f
+      planeF = point.u
+    } else {
+      sliceCoordinate = point.f
+      planeR = point.r
+      planeF = point.u
+    }
+
+    const slice = Math.floor(sliceCoordinate / sliceSize)
+    let group = groups.get(slice)
+    if (!group) {
+      group = []
+      groups.set(slice, group)
+    }
+    group.push({ r: planeR, f: planeF, u: point.u, source: point })
+  }
+  return Array.from(groups.values()).filter(group => group.length >= 3)
+}
 
 const meshFaces = computed(() => {
   const points = localCloudPoints.value
   if (points.length < 3) return []
-  const triangles = triangulateDelaunay(points)
+
   const faces = []
+  const axes = ["height", "lateral", "longitudinal"]
   let serial = 0
-  for (const triangle of triangles) {
-    const a = points[triangle.a]
-    const b = points[triangle.b]
-    const c = points[triangle.c]
-    const pairs = [[a, b], [b, c], [c, a]]
-    let maxEdge = 0
-    for (const pair of pairs) {
-      const dr = pair[0].r - pair[1].r
-      const df = pair[0].f - pair[1].f
-      const du = pair[0].u - pair[1].u
-      maxEdge = Math.max(maxEdge, Math.sqrt(dr * dr + df * df + du * du))
+  for (const axis of axes) {
+    const slices = buildMeshSlices(points, axis)
+    for (const slice of slices) {
+      const triangles = triangulateDelaunay(slice)
+      for (const triangle of triangles) {
+        const a = slice[triangle.a].source
+        const b = slice[triangle.b].source
+        const c = slice[triangle.c].source
+        const pairs = [[a, b], [b, c], [c, a]]
+        let maxEdge = 0
+        for (const pair of pairs) {
+          const dr = pair[0].r - pair[1].r
+          const df = pair[0].f - pair[1].f
+          const du = pair[0].u - pair[1].u
+          maxEdge = Math.max(maxEdge, Math.sqrt(dr * dr + df * df + du * du))
+        }
+
+        let planeArea
+        if (axis === "height") {
+          planeArea = Math.abs((b.r - a.r) * (c.f - a.f) - (b.f - a.f) * (c.r - a.r)) * 0.5
+        } else if (axis === "lateral") {
+          planeArea = Math.abs((b.f - a.f) * (c.u - a.u) - (b.u - a.u) * (c.f - a.f)) * 0.5
+        } else {
+          planeArea = Math.abs((b.r - a.r) * (c.u - a.u) - (b.u - a.u) * (c.r - a.r)) * 0.5
+        }
+        if (maxEdge > 4.4 || planeArea < 0.045 || planeArea > 9.5) continue
+
+        const pa = projectLocal(a)
+        const pb = projectLocal(b)
+        const pc = projectLocal(c)
+        if (!pa || !pb || !pc) continue
+        if ([pa, pb, pc].every(p => p.x < -20 || p.x > 500 || p.y < -20 || p.y > 540)) continue
+
+        const depth = (pa.depth + pb.depth + pc.depth) / 3
+        faces.push({
+          id: axis + "-face-" + serial++,
+          points: [pa, pb, pc].map(p => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" "),
+          depth,
+          opacity: Math.max(0.045, Math.min(0.19, 0.19 - depth * 0.00145))
+        })
+        if (faces.length >= 1500) break
+      }
+      if (faces.length >= 1500) break
     }
-    const heightSpan = Math.max(a.u, b.u, c.u) - Math.min(a.u, b.u, c.u)
-    const horizontalArea = Math.abs((b.r - a.r) * (c.f - a.f) - (b.f - a.f) * (c.r - a.r)) * 0.5
-    if (maxEdge > 4.2 || heightSpan > 2.4 || horizontalArea < 0.08 || horizontalArea > 8.5) continue
-    const pa = projectLocal(a)
-    const pb = projectLocal(b)
-    const pc = projectLocal(c)
-    if (!pa || !pb || !pc) continue
-    if ([pa, pb, pc].every(p => p.x < -20 || p.x > 500 || p.y < -20 || p.y > 540)) continue
-    const depth = (pa.depth + pb.depth + pc.depth) / 3
-    faces.push({
-      id: "face-" + serial++,
-      points: [pa, pb, pc].map(p => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" "),
-      depth,
-      opacity: Math.max(0.045, Math.min(0.19, 0.19 - depth * 0.00145))
-    })
+    if (faces.length >= 1500) break
   }
   return faces.sort((a, b) => b.depth - a.depth)
 })
@@ -673,7 +744,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   color: #d8e1e9;
   background: #10161d;
-  border-radius: 15px;
+  border-radius: 18px;
 }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; }
 .kicker { color: #78cbbb; font-size: 0.65rem; letter-spacing: 0.16em; font-weight: 700; }
@@ -696,7 +767,7 @@ onBeforeUnmount(() => {
   min-height: 260px;
   overflow: hidden;
   border: 1px solid #344653;
-  border-radius: 19px;
+  border-radius: 24px;
   background: #0b1118;
   box-shadow: inset 0 0 0 1px rgba(190, 220, 235, 0.025), 0 8px 24px rgba(0, 0, 0, 0.18);
 }
