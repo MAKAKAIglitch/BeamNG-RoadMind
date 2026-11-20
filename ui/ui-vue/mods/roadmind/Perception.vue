@@ -54,6 +54,7 @@
         <strong>{{ speedLabel }}</strong>
         <span>{{ t("acceleration") }}: {{ accelerationLabel }}</span>
         <span>{{ t("lateral") }}: {{ lateralLabel }}</span>
+        <span v-if="motion.steeringAngleDeg !== undefined">{{ t("steering") }}: {{ Number(motion.steeringAngleDeg).toFixed(1) }}°</span>
       </div>
       <div class="guidance" :class="guidance.status">
         <strong>{{ guidanceLabel }}</strong>
@@ -129,6 +130,7 @@ const EN = {
   waiting: "Waiting for RoadMind vehicle data",
   acceleration: "Acceleration",
   lateral: "Lateral load",
+  steering: "Wheel angle",
   targetSpeed: "Curve speed",
   brakeIn: "Brake point",
   warning: "ADAS",
@@ -167,6 +169,7 @@ const RU = {
   waiting: "Ожидание данных автомобиля RoadMind",
   acceleration: "Ускорение",
   lateral: "Боковая нагрузка",
+  steering: "Поворот колёс",
   targetSpeed: "Скорость в повороте",
   brakeIn: "Точка торможения",
   warning: "ADAS",
