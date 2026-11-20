@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 3D triangulated LiDAR perception map
+
+- Replace the flat 2D perception plot with a perspective 3D scene using a rear-follow camera positioned farther behind and above the ego vehicle, plus an elevated top view.
+- Export a bounded nearby LiDAR point snapshot to the Perception UI (up to 1,400 points); prefer the accumulated session map and fall back to the latest scan.
+- Build a render-only Delaunay triangle mesh from spatially sampled points (up to 420), rejecting long edges, excessive height steps and degenerate faces to reduce false surfaces.
+- Display the NavGraph corridor as a translucent estimated road surface, while keeping the route, OBB vehicle geometry and detected obstacle markers in the same 3D perspective.
+- Round the perception window and scene frame; keep point-cloud rendering separate from sensor acquisition, World Model fusion and planner/safety inputs.
+
+
 ## Unreleased — camera priority and ADAS safety fixes
 
 - Give camera-frustum vehicle observations priority over overlapping LiDAR/radar/ultrasonic vehicle zones; retain camera-only provenance when a target is inside a camera frustum.
