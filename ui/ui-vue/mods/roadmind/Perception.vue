@@ -131,6 +131,10 @@ const EN = {
   targetSpeed: "Curve speed",
   brakeIn: "Brake point",
   warning: "ADAS",
+  guidanceBrake: "BRAKE NOW",
+  guidancePrepare: "SLOW FOR CURVE",
+  guidanceClear: "ROAD PREVIEW CLEAR",
+  guidanceWaiting: "ROAD DATA UNAVAILABLE",
   reconnecting: "RoadMind connection unavailable · keeping the last valid view",
   visible: "VISIBLE",
   predicted: "PREDICTED",
@@ -163,6 +167,10 @@ const RU = {
   targetSpeed: "Скорость в повороте",
   brakeIn: "Точка торможения",
   warning: "ADAS",
+  guidanceBrake: "ПОРА ТОРМОЗИТЬ",
+  guidancePrepare: "СНИЗИТЬ СКОРОСТЬ К ПОВОРОТУ",
+  guidanceClear: "ТРАЕКТОРИЯ СВОБОДНА",
+  guidanceWaiting: "НЕТ ДАННЫХ О ДОРОГЕ",
   reconnecting: "Нет связи с RoadMind · показаны последние данные",
   visible: "ВИДЕН",
   predicted: "ПРОГНОЗ",
@@ -229,10 +237,10 @@ const lateralLabel = computed(() => Number.isFinite(Number(motion.value.lateralG
   ? Number(motion.value.lateralG).toFixed(2) + " g" : "—")
 const guidanceLabel = computed(() => {
   const status = guidance.value.status
-  if (status === "brake_now") return "ТОРМОЗИТЬ СЕЙЧАС"
-  if (status === "prepare") return "ГОТОВИТЬСЯ К ПОВОРОТУ"
-  if (status === "clear") return "ТРАЕКТОРИЯ СВОБОДНА"
-  return "НЕТ ДАННЫХ О ДОРОГЕ"
+  if (status === "brake_now") return t("guidanceBrake")
+  if (status === "prepare") return t("guidancePrepare")
+  if (status === "clear") return t("guidanceClear")
+  return t("guidanceWaiting")
 })
 const vehicles = computed(() => (snapshot.value.targets || []).map(track => {
   const p = project(track.predictedPosition || track.position)
