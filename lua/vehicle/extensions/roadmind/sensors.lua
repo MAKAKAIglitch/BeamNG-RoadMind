@@ -102,7 +102,9 @@ local state = {
   pendingReset = false,
   frame = nil,
   vehicleGeometry = nil,
-  sensorLayout = nil
+  sensorLayout = nil,
+  predictionWheelScratch = {},
+  predictionWheelCenterById = {}
 }
 
 local function round2(value)
@@ -729,6 +731,214 @@ local function buildVehiclePose(frame)
   }
 end
 
+local function wrapSteeringAxleAngle(angle)
+  if angle > math.pi * 0.5 then
+    angle = angle - math.pi
+  elseif angle < -math.pi * 0.5 then
+    angle = angle + math.pi
+  end
+  return angle
+end
+
+local function buildPredictedTrajectory(frame, updateDt)
+  if not frame or not frame.position or not frame.forward or not frame.right then
+    return {points = {}, valid = false}
+  end
+
+  local scratch = state.predictionWheelScratch
+  local wheelCount = 0
+  local minimumLongitudinal = math.huge
+  local maximumLongitudinal = -math.huge
+  local minimumLateral = math.huge
+  local maximumLateral = -math.huge
+  local wheelsTable = type(wheels) == "table" and wheels.wheels or nil
+
+  if type(wheelsTable) == "table" and obj then
+    for wheelIndex, wheel in pairs(wheelsTable) do
+      if type(wheel) == "table" and wheel.node1 ~= nil and wheel.node2 ~= nil then
+        local firstNode = safeCall(obj, "getNodePosition", wheel.node1)
+        local secondNode = safeCall(obj, "getNodePosition", wheel.node2)
+        if firstNode and secondNode then
+          local midpoint = (firstNode + secondNode) * 0.5
+          local relative = midpoint - frame.position
+          local longitudinal = relative:dot(frame.forward)
+          local lateral = relative:dot(frame.right)
+          local axle = secondNode - firstNode
+          local axleForward = axle:dot(frame.forward)
+          local axleRight = axle:dot(frame.right)
+
+          -- Wheel node order differs between left/right wheels. Normalize the
+          -- axle direction exactly once so both sides report the same steering sign.
+          if axleRight < 0 then
+            axleForward = -axleForward
+            axleRight = -axleRight
+          end
+
+          local yaw = math.atan2(axleForward, math.max(0.00001, axleRight))
+          wheelCount = wheelCount + 1
+          local item = scratch[wheelCount] or {}
+          item.id = tostring(wheelIndex)
+          item.longitudinal = longitudinal
+          item.lateral = lateral
+          item.yaw = yaw
+          scratch[wheelCount] = item
+          minimumLongitudinal = math.min(minimumLongitudinal, longitudinal)
+          maximumLongitudinal = math.max(maximumLongitudinal, longitudinal)
+          minimumLateral = math.min(minimumLateral, lateral)
+          maximumLateral = math.max(maximumLateral, lateral)
+        end
+      end
+    end
+  end
+  for i = wheelCount + 1, #scratch do scratch[i] = nil end
+
+  local steeringValues = type(electrics) == "table"
+      and type(electrics.values) == "table" and electrics.values or {}
+  local steeringInput = tonumber(steeringValues.steering_input) or 0
+  local yawRate = tonumber(safeCall(obj, "getYawAngularVelocity"))
+  local canRecenter = math.abs(steeringInput) < 0.035 and (
+    (yawRate ~= nil and math.abs(yawRate) < 0.055) or frame.speed < 0.8
+  )
+  local recenterAlpha = math.max(0, math.min(1, (tonumber(updateDt) or 0.1) * 0.85))
+
+  local frontSin, frontCos, frontCount = 0, 0, 0
+  local rearSin, rearCos, rearCount = 0, 0, 0
+  local frontLongitudinal, rearLongitudinal = nil, nil
+  local rearLateral = nil
+
+  if wheelCount >= 2 and maximumLongitudinal - minimumLongitudinal > 0.65 then
+    local frontLimit = maximumLongitudinal - 0.30
+    local rearLimit = minimumLongitudinal + 0.30
+    local centerById = state.predictionWheelCenterById
+
+    for i = 1, wheelCount do
+      local wheel = scratch[i]
+      local centerAngle = centerById[wheel.id]
+      if centerAngle == nil then
+        centerAngle = math.abs(steeringInput) < 0.08 and wheel.yaw or 0
+        centerById[wheel.id] = centerAngle
+      end
+      if canRecenter then
+        centerAngle = centerAngle
+          + wrapSteeringAxleAngle(wheel.yaw - centerAngle) * recenterAlpha
+        centerById[wheel.id] = centerAngle
+      end
+      local steeringAngle = wrapSteeringAxleAngle(wheel.yaw - centerAngle)
+
+      if wheel.longitudinal >= frontLimit then
+        frontSin = frontSin + math.sin(steeringAngle)
+        frontCos = frontCos + math.cos(steeringAngle)
+        frontCount = frontCount + 1
+        frontLongitudinal = (frontLongitudinal or 0) + wheel.longitudinal
+      elseif wheel.longitudinal <= rearLimit then
+        rearSin = rearSin + math.sin(steeringAngle)
+        rearCos = rearCos + math.cos(steeringAngle)
+        rearCount = rearCount + 1
+        rearLongitudinal = (rearLongitudinal or 0) + wheel.longitudinal
+        rearLateral = (rearLateral or 0) + wheel.lateral
+      end
+    end
+  end
+
+  local frontAngle
+  if frontCount > 0 then
+    frontAngle = math.atan2(frontSin / frontCount, frontCos / frontCount)
+  else
+    -- Compatibility fallback for vehicles without exposed wheel-node data.
+    frontAngle = -steeringInput * 0.50
+  end
+  local rearAngle = rearCount > 0
+    and math.atan2(rearSin / rearCount, rearCos / rearCount) or 0
+
+  local geometry = state.vehicleGeometry
+  local geometryValid = type(geometry) == "table" and geometry.valid == true
+  local wheelbase = nil
+  local rearY = nil
+  if frontCount > 0 and rearCount > 0 then
+    wheelbase = frontLongitudinal / frontCount - rearLongitudinal / rearCount
+    rearY = rearLongitudinal / rearCount
+  end
+  if not wheelbase or wheelbase < 0.75 or wheelbase > 15 then
+    wheelbase = geometryValid and geometry.length * 0.58 or 2.7
+  end
+  if not rearY then
+    rearY = geometryValid and geometry.forwardMin + 0.25 or -wheelbase * 0.45
+  end
+
+  local vehicleLength = geometryValid and geometry.length or math.max(2.6, wheelbase * 1.7)
+  local vehicleWidth = geometryValid and geometry.width
+    or math.max(1.45, maximumLateral - minimumLateral + 0.45)
+  vehicleLength = math.max(1.2, math.min(30, vehicleLength))
+  vehicleWidth = math.max(0.8, math.min(10, vehicleWidth))
+
+  local bodyCenterLongitudinal = geometryValid
+    and (geometry.forwardMin + geometry.forwardMax) * 0.5
+    or ((maximumLongitudinal + minimumLongitudinal) * 0.5)
+  local rearToCenter = bodyCenterLongitudinal - rearY
+  local curvature = (math.tan(frontAngle) - math.tan(rearAngle)) / wheelbase
+  curvature = math.max(-0.75, math.min(0.75, curvature))
+
+  local longitudinalSpeed = frame.velocity and frame.velocity:dot(frame.forward) or 0
+  local reverseSelected = steeringValues.reverse == true or tonumber(steeringValues.reverse) == 1
+      or tostring(steeringValues.gear or ""):upper() == "R"
+  local directionSign
+  if math.abs(longitudinalSpeed) > 0.45 then
+    directionSign = longitudinalSpeed < 0 and -1 or 1
+  else
+    directionSign = reverseSelected and -1 or 1
+  end
+  local travelDistance = math.max(5, math.min(40, math.abs(longitudinalSpeed) * 2.2))
+  local signedDistance = directionSign * travelDistance
+  local steps = 13
+  local points = {}
+  local rearAxleOrigin = frame.position + frame.forward * rearY + frame.up * 0.08
+  local halfLength = vehicleLength * 0.5
+  local halfWidth = vehicleWidth * 0.5
+
+  for i = 0, steps - 1 do
+    local fraction = i / (steps - 1)
+    local distance = signedDistance * fraction
+    local headingChange = curvature * distance
+    local cosine = math.cos(headingChange)
+    local sine = math.sin(headingChange)
+    local offsetForward, offsetRight
+    if math.abs(curvature) < 0.0001 then
+      offsetForward = distance
+      offsetRight = 0
+    else
+      offsetForward = sine / curvature
+      offsetRight = -(1 - cosine) / curvature
+    end
+
+    local rearPosition = rearAxleOrigin
+      + frame.forward * offsetForward
+      + frame.right * offsetRight
+    local pathForward = frame.forward * cosine - frame.right * sine
+    local pathRight = frame.right * cosine + frame.forward * sine
+    local bodyCenter = rearPosition + pathForward * rearToCenter
+
+    points[#points + 1] = {
+      frontLeft = vectorToTable(bodyCenter + pathForward * halfLength - pathRight * halfWidth),
+      frontRight = vectorToTable(bodyCenter + pathForward * halfLength + pathRight * halfWidth),
+      rearLeft = vectorToTable(bodyCenter - pathForward * halfLength - pathRight * halfWidth),
+      rearRight = vectorToTable(bodyCenter - pathForward * halfLength + pathRight * halfWidth)
+    }
+  end
+
+  return {
+    valid = #points >= 2,
+    points = points,
+    reverse = directionSign < 0,
+    speedMps = math.abs(longitudinalSpeed),
+    steeringAngleDeg = math.deg(frontAngle),
+    rearSteeringAngleDeg = math.deg(rearAngle),
+    wheelbaseM = wheelbase,
+    vehicleLengthM = vehicleLength,
+    vehicleWidthM = vehicleWidth,
+    source = wheelCount >= 2 and "measured-wheel-axles" or "steering-input-estimate"
+  }
+end
+
 local function buildAttachedRadarMounts(frame)
   local mounts = {}
   local radars = currentSensorLayout().radars
@@ -824,6 +1034,7 @@ local function buildEmptyFrame()
     mounts = {},
     geometryDebug = nil,
     detectionZones = {},
+    predictedTrajectory = {},
     vehicleVelocity = nil,
     vehiclePose = nil
   }
@@ -875,6 +1086,9 @@ local function publish(selectedJob)
   if updates.radar then payload.radar = frame.radar end
   if updates.ultrasonic then payload.ultrasonic = frame.ultrasonic end
   if updates.detectionZones then payload.detectionZones = frame.detectionZones or {} end
+  if updates.trajectory then
+    payload.predictedTrajectory = frame.predictedTrajectory or {}
+  end
   if updates.pose then
     payload.cameras = frame.cameras or {}
     payload.localization = frame.localization
@@ -1020,6 +1234,8 @@ function M.setEnabled(enabled, sourceVehicleId)
   state.detectionZoneTimer = 0
   state.schedulerCursor = 1
   state.lastForward = nil
+  state.predictionWheelCenterById = {}
+  state.predictionWheelScratch = {}
   state.lastLidarCount = 0
   state.lastRadarCount = 0
   state.lastUltrasonicCount = 0
@@ -1113,6 +1329,8 @@ function M.onReset()
   state.detectionZoneTimer = 0
   state.schedulerCursor = 1
   state.lastForward = nil
+  state.predictionWheelCenterById = {}
+  state.predictionWheelScratch = {}
   state.pendingReset = true
   state.frame = state.enabled and buildEmptyFrame() or nil
 end
@@ -1176,6 +1394,8 @@ function M.updateGFX(dt)
     state.frame.geometryDebug = nil
     state.frame.detectionZones = {}
     updatedSensors.detectionZones = true
+    updatedSensors.trajectory = true
+    state.frame.predictedTrajectory = {}
     updatedSensors.lidar = true
     updatedSensors.radar = true
     updatedSensors.ultrasonic = true
@@ -1243,7 +1463,9 @@ function M.updateGFX(dt)
       state.detectionZoneTimer = state.detectionZoneTimer % detectionZoneInterval
       state.frame = state.frame or buildEmptyFrame()
       state.frame.detectionZones = buildDetectionZones(frame)
+      state.frame.predictedTrajectory = buildPredictedTrajectory(frame, detectionZoneInterval)
       updatedSensors.detectionZones = true
+      updatedSensors.trajectory = true
       selectedJob = job
     end
 
