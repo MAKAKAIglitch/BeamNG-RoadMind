@@ -21,9 +21,10 @@ local DEFAULT_SETTINGS = {
   adaptiveFpsEnabled = false,
   performanceProfilerEnabled = false,
   targetFps = 60,
-  mapCameraHeightM = 7.5,
-  mapCameraDistanceM = 10.5,
-  mapCameraLookAheadM = 13,
+  mapCameraHeightM = 12,
+  mapCameraDistanceM = 22,
+  mapCameraLookAheadM = 36,
+  mapForwardRangeM = 120,
   mapRadiusM = 500,
   mapMaxPolygons = 3000,
   mapRenderFps = 30,
@@ -162,6 +163,10 @@ local state = {
   levelMetadataFile = nil,
   levelDirectory = nil,
   levelMetadataName = nil,
+  levelRoadCache = nil,
+  levelRoadCacheFile = nil,
+  levelRoadCacheStatus = "unavailable",
+  levelRoadCacheNodeCount = 0,
   navGraphCache = nil,
   navGraphGeneration = 0,
   levelRoadRules = {rightHandDrive = false, turnOnRed = false},
@@ -2179,9 +2184,10 @@ state._roadmindHelpers.normalizeSettings = function(source)
     result.targetFps = math.floor((source.targetFps - 30) / 5 + 0.5) * 5 + 30
   end
   local mapNumericSettings = {
-    mapCameraHeightM = {4, 18, 0.5},
-    mapCameraDistanceM = {8, 32, 1},
-    mapCameraLookAheadM = {6, 40, 1},
+    mapCameraHeightM = {8, 20, 0.5},
+    mapCameraDistanceM = {14, 36, 1},
+    mapCameraLookAheadM = {24, 70, 1},
+    mapForwardRangeM = {100, 180, 10},
     mapRadiusM = {100, 500, 25},
     mapMaxPolygons = {500, 8000, 500},
     mapRenderFps = {15, 60, 5}
@@ -4930,6 +4936,274 @@ state._roadmindHelpers.loadLevelMetadata = function(force)
   return true
 end
 
+state._roadmindHelpers.loadLevelRoadGeometry = function(force)
+  local missionFile, levelDirectory = roadMindLevelContext()
+  if not missionFile or not levelDirectory then
+    state.levelRoadCacheStatus = "unavailable"
+    return false
+  end
+
+  local roadFile = levelDirectory .. "items.level.json"
+  if force ~= true and state.levelRoadCacheFile == roadFile then
+    return state.levelRoadCacheStatus == "available"
+  end
+
+  state.levelRoadCacheFile = roadFile
+  state.levelRoadCache = {}
+  state.levelRoadCacheStatus = "unavailable"
+  state.levelRoadCacheNodeCount = 0
+
+  local levelItems = roadMindReadLevelJson(roadFile)
+  if type(levelItems) ~= "table" then
+    state.levelRoadCacheStatus = "file-unavailable"
+    return false
+  end
+
+  local objects = safeField(levelItems, "items") or safeField(levelItems, "objects") or levelItems
+  if type(objects) ~= "table" then
+    state.levelRoadCacheStatus = "invalid-level-items"
+    return false
+  end
+
+  local roads = {}
+  local totalRoadNodes = 0
+  for _, item in pairs(objects) do
+    if type(item) == "table" and safeField(item, "class") == "DecalRoad" then
+      local rawNodes = safeField(item, "nodes")
+      local nodeCount = type(rawNodes) == "table" and #rawNodes or 0
+      if nodeCount >= 2 and nodeCount <= 1024 and #roads < 1024 then
+        local nodes = {}
+        local previousWidth = tonumber(safeField(item, "width"))
+          or tonumber(safeField(item, "defaultWidth")) or 8
+        for nodeIndex = 1, nodeCount do
+          local rawNode = rawNodes[nodeIndex]
+          local position = roadMindPoint(rawNode)
+          local width = tonumber(safeField(rawNode, 4) or safeField(rawNode, "width"))
+            or previousWidth
+          if position and width >= 2.2 and width <= 60 then
+            nodes[#nodes + 1] = {
+              x = position.x, y = position.y, z = position.z,
+              width = width
+            }
+            previousWidth = width
+          else
+            nodes = {}
+            break
+          end
+        end
+
+        if #nodes >= 2 then
+          totalRoadNodes = totalRoadNodes + #nodes
+          local name = tostring(safeField(item, "name")
+            or safeField(item, "persistentId") or ("DecalRoad-" .. tostring(#roads + 1)))
+          roads[#roads + 1] = {
+            id = tostring(safeField(item, "persistentId") or name),
+            name = name,
+            nodes = nodes,
+            lanesLeft = tonumber(safeField(item, "lanesLeft")),
+            lanesRight = tonumber(safeField(item, "lanesRight")),
+            autoLanes = safeField(item, "autoLanes"),
+            oneWay = safeField(item, "oneWay") == true,
+            flipDirection = safeField(item, "flipDirection") == true,
+            drivability = tonumber(safeField(item, "drivability")),
+            smoothness = math.max(0, math.min(1,
+              tonumber(safeField(item, "smoothness")) or 0.5)),
+            improvedSpline = safeField(item, "improvedSpline") ~= false,
+            material = tostring(safeField(item, "material") or "")
+          }
+        end
+      end
+    end
+  end
+
+  state.levelRoadCache = roads
+  state.levelRoadCacheStatus = #roads > 0 and "available" or "empty"
+  state.levelRoadCacheNodeCount = totalRoadNodes
+  return #roads > 0
+end
+
+
+state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleForward, forwardRange)
+  if not vehiclePosition then return {}, "no-vehicle-position" end
+  if type(state.levelRoadCache) ~= "table" then
+    state._roadmindHelpers.loadLevelRoadGeometry(false)
+  end
+  local roads = state.levelRoadCache or {}
+  if #roads == 0 then return {}, state.levelRoadCacheStatus or "unavailable" end
+
+  local forward = normalizedVec3(vehicleForward) or vec3(0, 1, 0)
+  local flatForward = vec3(forward.x, forward.y, 0)
+  if flatForward:length() < 0.0001 then return {}, "invalid-heading" end
+  flatForward = flatForward:normalized()
+  local right = vec3(flatForward.y, -flatForward.x, 0)
+  local rangeAhead = math.max(100, math.min(180, tonumber(forwardRange) or 120))
+  local rangeBehind, sideRange = 32, 78
+  local maxRuns, maxSamples = 128, 1800
+  local output, totalSamples = {}, 0
+
+  local function distance3(a, b)
+    local dx, dy, dz = a.x - b.x, a.y - b.y, a.z - b.z
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+  end
+
+  local function catmullScalar(v0, v1, v2, v3, t0, t1, t2, t3, t)
+    local d10 = math.max(0.0001, t1 - t0)
+    local d21 = math.max(0.0001, t2 - t1)
+    local d32 = math.max(0.0001, t3 - t2)
+    local d20 = math.max(0.0001, t2 - t0)
+    local d31 = math.max(0.0001, t3 - t1)
+    local a1 = ((t1 - t) / d10) * v0 + ((t - t0) / d10) * v1
+    local a2 = ((t2 - t) / d21) * v1 + ((t - t1) / d21) * v2
+    local a3 = ((t3 - t) / d32) * v2 + ((t - t2) / d32) * v3
+    local b1 = ((t2 - t) / d20) * a1 + ((t - t0) / d20) * a2
+    local b2 = ((t3 - t) / d31) * a2 + ((t - t1) / d31) * a3
+    return ((t2 - t) / d21) * b1 + ((t - t1) / d21) * b2
+  end
+
+  local function interpolateRoadNode(p0, p1, p2, p3, amount, smooth)
+    if smooth <= 0.02 then
+      return {
+        x = p1.x + (p2.x - p1.x) * amount,
+        y = p1.y + (p2.y - p1.y) * amount,
+        z = p1.z + (p2.z - p1.z) * amount,
+        width = p1.width + (p2.width - p1.width) * amount
+      }
+    end
+
+    local t0 = 0
+    local t1 = t0 + math.sqrt(math.max(0.0001, distance3(p0, p1)))
+    local t2 = t1 + math.sqrt(math.max(0.0001, distance3(p1, p2)))
+    local t3 = t2 + math.sqrt(math.max(0.0001, distance3(p2, p3)))
+    local t = t1 + (t2 - t1) * amount
+
+    return {
+      x = catmullScalar(p0.x, p1.x, p2.x, p3.x, t0, t1, t2, t3, t),
+      y = catmullScalar(p0.y, p1.y, p2.y, p3.y, t0, t1, t2, t3, t),
+      z = catmullScalar(p0.z, p1.z, p2.z, p3.z, t0, t1, t2, t3, t),
+      width = math.max(2.2, math.min(60,
+        catmullScalar(p0.width, p1.width, p2.width, p3.width, t0, t1, t2, t3, t)))
+    }
+  end
+
+  local function pointVisible(point)
+    local dx, dy = point.x - vehiclePosition.x, point.y - vehiclePosition.y
+    local along = dx * flatForward.x + dy * flatForward.y
+    local lateral = dx * right.x + dy * right.y
+    return along >= -rangeBehind and along <= rangeAhead and math.abs(lateral) <= sideRange
+  end
+
+  local function laneLayout(road, averageWidth)
+    local leftCount = tonumber(road.lanesLeft)
+    local rightCount = tonumber(road.lanesRight)
+    local hasManualCounts = leftCount ~= nil or rightCount ~= nil
+    leftCount = math.max(0, math.min(8, math.floor(leftCount or 0)))
+    rightCount = math.max(0, math.min(8, math.floor(rightCount or 0)))
+
+    if leftCount + rightCount == 0 and road.autoLanes ~= false then
+      local estimatedTotal = math.max(1, math.min(8,
+        math.floor(averageWidth / 3.5 + 0.5)))
+      if road.oneWay then
+        leftCount = estimatedTotal
+      else
+        leftCount = math.ceil(estimatedTotal * 0.5)
+        rightCount = math.floor(estimatedTotal * 0.5)
+      end
+    end
+
+    local total = leftCount + rightCount
+    local fractions = {}
+    if total > 1 then
+      for index = 1, total - 1 do
+        fractions[#fractions + 1] = -1 + (2 * index / total)
+      end
+    end
+    local divider = nil
+    if not road.oneWay and leftCount > 0 and rightCount > 0 then
+      divider = -1 + (2 * leftCount / total)
+    end
+    return fractions, divider,
+      hasManualCounts and "decalroad-lane-counts" or "decalroad-auto-lane-estimate"
+  end
+
+  local function appendRun(road, laneFractions, dividerFraction, laneSource, runPoints, runIndex)
+    if #runPoints < 2 or #output >= maxRuns then return end
+    output[#output + 1] = {
+      id = road.id .. ":" .. tostring(runIndex),
+      name = road.name,
+      points = runPoints,
+      laneFractions = laneFractions,
+      centerDividerFraction = dividerFraction,
+      laneSource = laneSource,
+      source = "DecalRoad-spline",
+      material = road.material,
+      drivability = road.drivability
+    }
+  end
+
+  for roadIndex = 1, #roads do
+    if #output >= maxRuns or totalSamples >= maxSamples then break end
+    local road = roads[roadIndex]
+    local nodes = road.nodes or {}
+    if #nodes >= 2 then
+      local averageWidth = 0
+      for nodeIndex = 1, #nodes do averageWidth = averageWidth + nodes[nodeIndex].width end
+      averageWidth = averageWidth / #nodes
+      local laneFractions, dividerFraction, laneSource = laneLayout(road, averageWidth)
+      local runPoints, runIndex = {}, 0
+
+      local function flushRun()
+        if #runPoints >= 2 then
+          runIndex = runIndex + 1
+          appendRun(road, laneFractions, dividerFraction, laneSource, runPoints, runIndex)
+        end
+        runPoints = {}
+      end
+
+      for nodeIndex = 1, #nodes - 1 do
+        local p1, p2 = nodes[nodeIndex], nodes[nodeIndex + 1]
+        local p0 = nodes[math.max(1, nodeIndex - 1)]
+        local p3 = nodes[math.min(#nodes, nodeIndex + 2)]
+        if nodeIndex == 1 then
+          p0 = {
+            x = p1.x * 2 - p2.x, y = p1.y * 2 - p2.y,
+            z = p1.z * 2 - p2.z, width = p1.width * 2 - p2.width
+          }
+        end
+        if nodeIndex + 1 == #nodes then
+          p3 = {
+            x = p2.x * 2 - p1.x, y = p2.y * 2 - p1.y,
+            z = p2.z * 2 - p1.z, width = p2.width * 2 - p1.width
+          }
+        end
+
+        local spanLength = distance3(p1, p2)
+        local steps = math.max(2, math.min(48, math.ceil(spanLength / 2.5)))
+        local firstSample = nodeIndex == 1 and 0 or 1
+        for sampleIndex = firstSample, steps do
+          if totalSamples >= maxSamples or #output >= maxRuns then break end
+          local sample = interpolateRoadNode(
+            p0, p1, p2, p3, sampleIndex / steps, road.smoothness or 0.5)
+          if pointVisible(sample) then
+            local previous = runPoints[#runPoints]
+            if previous and distance3(previous, sample) > 9 then flushRun() end
+            runPoints[#runPoints + 1] = {
+              x = round2(sample.x), y = round2(sample.y), z = round2(sample.z),
+              width = round2(sample.width)
+            }
+            totalSamples = totalSamples + 1
+          else
+            flushRun()
+          end
+        end
+      end
+      flushRun()
+    end
+  end
+
+  return output, state.levelRoadCacheStatus or "available"
+end
+
+
 local function roadMindSignalColor(stateName, stateData)
   local values = {string.lower(tostring(stateName or ""))}
   local lights = type(stateData) == "table" and stateData.lights or nil
@@ -5313,8 +5587,8 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
   }
   local queue, queuedEdges, visitedEdges = {}, {}, {}
   local queueIndex = 1
-  local maxSegments, maxDepth, maxDistance, maxBranches = 96, 4,
-    math.max(125, math.min(500, tonumber(state.settings and state.settings.mapRadiusM) or 500)), 8
+  local maxSegments, maxDepth, maxDistance, maxBranches = 192, 32,
+    math.max(150, math.min(500, tonumber(state.settings and state.settings.mapRadiusM) or 500)), 4
   local function edgeKey(a,b) return tostring(a)..">"..tostring(b) end
   local function enqueue(fromId,toId,depth,distance,current)
     local key=edgeKey(fromId,toId)
@@ -7904,6 +8178,10 @@ function M.onClientStartMission()
   state.levelMetadataLoaded = false
   state.levelMetadataName = nil
   state.levelDirectory = nil
+  state.levelRoadCache = nil
+  state.levelRoadCacheFile = nil
+  state.levelRoadCacheStatus = "unavailable"
+  state.levelRoadCacheNodeCount = 0
   state.navGraphCache = nil
   state.levelPOICache = {}
   state.levelSignalCache = {status = "unavailable", items = {}}
@@ -7923,6 +8201,10 @@ function M.onClientEndMission()
   state.levelMetadataLoaded = false
   state.levelMetadataName = nil
   state.levelDirectory = nil
+  state.levelRoadCache = nil
+  state.levelRoadCacheFile = nil
+  state.levelRoadCacheStatus = "unavailable"
+  state.levelRoadCacheNodeCount = 0
   state.navGraphCache = nil
   state.levelPOICache = {}
   state.levelSignalCache = {status = "unavailable", items = {}}
