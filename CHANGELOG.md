@@ -6,6 +6,8 @@
 - Keep the mini-map as a forward-looking perspective view with a small fixed drawing budget; reserve the all-directions 500 m road-and-lane overview and close scan-surface reconstruction for the large map.
 - Preload active-level `DecalRoad` objects incrementally in batches of 128 objects per map request, then build the cached road network in a 500 m radius. Use approximately 2.5 m spline sampling near the vehicle, 8 m in the middle distance and 16 m in the outer ring.
 - Preserve the session scan map when scanning is stopped. The map view no longer starts the sensors automatically; new scan geometry is merged only when a scan is active and the existing world-space memory remains available afterward.
+- Recenter the cached session-map output after about 12 m of vehicle movement or a map-radius change, including while scanning is off; expose previously scanned cells around the new ego position without requiring fresh sensor measurements.
+- Refresh the positions and spatial buckets of existing client-side surface points when the session-map revision changes, so updated cell centres are reflected in the reconstructed surface.
 - Remove LiDAR/radar/ultrasonic point clouds and camera/sensor coverage cones from the map display. Sensor acquisition and World Model/ADAS processing remain separate from map visualization.
 - Render the map only after a new snapshot, resize, pan or zoom. Bound mini-map work to 650 polygons, 1,200 lines and 32 markers; bound large-map drawing to 8,000 polygons, 12,000 lines and 900 markers.
 - Limit large-map scan reconstruction to 2,500 nearby scan points and 1,800 submitted surface faces per draw; cap its persistent face cache at 16,000 faces.

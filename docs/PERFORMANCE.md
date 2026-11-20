@@ -171,6 +171,8 @@ DecalRoad is a road-surface decal projected onto terrain or static surfaces, not
 - **Scanned detail:** only the large map reconstructs the nearby measured surface. It consumes up to 2,500 scan points from within 90 m of the vehicle, submits at most 1,800 faces in one draw, and keeps a client-side face cache capped at 16,000 faces. New data is merged by the session-map revision rather than by every UI poll.
 - **No sensor overlays:** LiDAR point clouds, radar/ultrasonic returns and sensor/camera coverage cones are not drawn on either map view. Sensor acquisition, object fusion and ADAS processing remain active according to their own settings; only the map visualization is removed.
 - **Persistent scan memory:** stopping scanning does not clear the session map. The cached world-space scan geometry remains available to the large map; only explicit map clearing or a level transition resets the corresponding memory.
+- **Idle recentering:** the map snapshot checks the live player-vehicle position and refreshes the compact static-geometry output after about 12 m of movement or when the configured radius changes, even with scanning disabled. The refresh reads the existing session cache and does not require new sensor observations.
+- **Point revision updates:** when the session-map revision changes, the client updates the world position of an existing cached point and moves its spatial-bucket index if its cell changed. This keeps the triangulated surface aligned with the updated backend geometry.
 - **View-only lifecycle:** opening or closing the map does not automatically start or stop scanning. The map polls the current vehicle pose and map revisions independently of sensor activation.
 
 ## 14. Map responsiveness and update cadence
