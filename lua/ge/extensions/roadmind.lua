@@ -158,8 +158,12 @@ local state = {
   activeVehicle = nil,
   visualizationEnabled = false,
   mapModeEnabled = false,
+  perceptionViewEnabled = false,
   mapPlanningEnabled = false,
   mapStartedSensors = false,
+  mapVehicleCheckTimer = 0,
+  mapMotionTime = 0,
+  mapMotion = nil,
   sessionStaticMap = {},
   sessionStaticObservationIds = {},
   sessionStaticObservationOrder = {},
@@ -1508,6 +1512,8 @@ end
 state._roadmindHelpers.attachVehicle = function(vehicle, id)
   state.activeVehicle = vehicle
   state.activeVehicleId = id
+  state.mapMotion = nil
+  state.mapMotionTime = 0
   state._roadmindHelpers.resetFrame()
   state._roadmindHelpers.calibrateVehicleGeometry(vehicle)
   state._roadmindHelpers.setVehicleSensorState(vehicle, state.visualizationEnabled, id)
@@ -2833,6 +2839,9 @@ function M.setMapEnabled(enabled)
     state.mapModeEnabled = true
     state.mapStartedSensors = false
     state.mapPlanningEnabled = state.visualizationEnabled == true
+    -- The map may be opened with scanning disabled. Attach only the player
+    -- vehicle so live pose/velocity remain available without starting sensors.
+    state._roadmindHelpers.syncPlayerVehicle(true)
     return {
       ok = true,
       enabled = true,
@@ -2856,6 +2865,20 @@ function M.setMapEnabled(enabled)
     return M.setVisualizationEnabled(false)
   end
   return {ok = true, enabled = false, scanning = state.visualizationEnabled}
+end
+
+
+function M.setPerceptionViewEnabled(enabled)
+  state.perceptionViewEnabled = enabled == true
+  if state.perceptionViewEnabled then
+    state._roadmindHelpers.syncPlayerVehicle(true)
+  end
+  return {
+    ok = true,
+    enabled = state.perceptionViewEnabled,
+    vehicleAvailable = state.activeVehicle ~= nil,
+    scanning = state.visualizationEnabled == true
+  }
 end
 
 
@@ -8727,6 +8750,14 @@ end
 function M.onUpdate(dt)
   dt = tonumber(dt) or 0
   if dt < 0 then dt = 0 end
+  if state.mapModeEnabled or state.perceptionViewEnabled then
+    state.mapVehicleCheckTimer = (state.mapVehicleCheckTimer or 0) + dt
+    if state.mapVehicleCheckTimer >= CHECK_INTERVAL then
+      state.mapVehicleCheckTimer = 0
+      state._roadmindHelpers.syncPlayerVehicle(true)
+    end
+    if state.activeVehicle then updateMapMotion(dt) end
+  end
   if not state.visualizationEnabled then return end
 
   -- Keep watching for a replacement player vehicle while auto-resume is enabled,
@@ -9024,19 +9055,24 @@ end
 
 function M.getPerceptionSnapshot(worldModelOverride, snapshotOptions)
   local options = type(snapshotOptions) == "table" and snapshotOptions or {}
+  if (state.mapModeEnabled or state.perceptionViewEnabled) and not state.activeVehicle then
+    state._roadmindHelpers.syncPlayerVehicle(true)
+  end
   local latest = state.latestData or {}
   local pose = latest.vehiclePose or latest.localizationVehiclePose
-  local position = pose and asVec3(pose.position) or nil
-  local forward = pose and normalizedVec3(pose.forward) or nil
-  local right = pose and normalizedVec3(pose.right) or nil
-  local up = pose and normalizedVec3(pose.up) or nil
-
-  if state.activeVehicle then
-    position = position or asVec3(safeCall(state.activeVehicle, "getPosition"))
-    forward = forward or normalizedVec3(safeCall(state.activeVehicle, "getDirectionVector"))
-    up = up or normalizedVec3(safeCall(state.activeVehicle, "getDirectionVectorUp"))
-    right = right or (forward and up and normalizedVec3(forward:cross(up)) or nil)
-  end
+  -- Prefer the live BeamNG pose for the ego vehicle. Sensor pose remains the
+  -- fallback for frames where the vehicle object is temporarily unavailable.
+  local position = state.activeVehicle
+    and asVec3(safeCall(state.activeVehicle, "getPosition")) or nil
+  local forward = state.activeVehicle
+    and normalizedVec3(safeCall(state.activeVehicle, "getDirectionVector")) or nil
+  local up = state.activeVehicle
+    and normalizedVec3(safeCall(state.activeVehicle, "getDirectionVectorUp")) or nil
+  local right = forward and up and normalizedVec3(forward:cross(up)) or nil
+  position = position or (pose and asVec3(pose.position) or nil)
+  forward = forward or (pose and normalizedVec3(pose.forward) or nil)
+  right = right or (pose and normalizedVec3(pose.right) or nil)
+  up = up or (pose and normalizedVec3(pose.up) or nil)
 
   local vehicle = nil
   if position and forward and right then
@@ -9051,6 +9087,12 @@ function M.getPerceptionSnapshot(worldModelOverride, snapshotOptions)
         height = state.vehicleGeometry.height
       } or nil
     }
+    local velocity = state.activeVehicle
+      and asVec3(safeCall(state.activeVehicle, "getVelocity")) or nil
+    if velocity then
+      vehicle.speedMps = round2(velocity:length())
+      vehicle.forwardSpeedMps = round2(velocity:dot(forward))
+    end
   end
 
   local model = type(worldModelOverride) == "table"
@@ -9118,11 +9160,25 @@ function M.getPerceptionSnapshot(worldModelOverride, snapshotOptions)
     })
   end
 
+  local motion = buildMapMotionSnapshot(position, forward)
+  if motion then
+    motion.guidance = buildCurveGuidance(
+      position, motion.speedMps, (#route >= 3 and route or (road and road.corridor)) or {},
+      road and road.quality or "unavailable"
+    )
+    local adas = state.adas or {}
+    motion.warning = adas.aeb == true and "aeb"
+      or (adas.fcw == true and "fcw" or nil)
+    motion.leadDistanceM = tonumber(adas.leadDistance)
+    motion.adasAvailable = adas.available == true
+  end
+
   return {
     schemaVersion = 1,
     timestamp = state.simulationTime,
     frameAge = state.frameAge,
     vehicle = vehicle,
+    motion = motion,
     targets = targets,
     obstacles = obstacles,
     road = road,
@@ -9300,6 +9356,22 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
     end
   end
 
+  local motion = perception and perception.motion or nil
+  if motion and vehiclePosition then
+    motion.guidance = buildCurveGuidance(
+      vehiclePosition, motion.speedMps,
+      (selectedPath and #selectedPath >= 3 and selectedPath)
+        or (#route >= 3 and route)
+        or (road and road.corridor) or {},
+      road.quality or "unavailable"
+    )
+    local adas = state.adas or {}
+    motion.warning = adas.aeb == true and "aeb"
+      or (adas.fcw == true and "fcw" or nil)
+    motion.leadDistanceM = tonumber(adas.leadDistance)
+    motion.adasAvailable = adas.available == true
+  end
+
   return {
     schemaVersion = 2,
     timestamp = state.simulationTime,
@@ -9307,6 +9379,7 @@ function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
     coordinateUnits = "meters",
     -- These perception values are already detached snapshots, not GE-owned tables.
     vehicle = vehicle,
+    motion = motion,
     road = road,
     laneGraph = laneGraph,
     roadRevision = roadRevision,
