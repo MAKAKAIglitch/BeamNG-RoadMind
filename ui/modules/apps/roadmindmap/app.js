@@ -142,7 +142,7 @@
           roadmindLua("jsonEncode(extensions.roadmind.setMapEnabled(true))", function (result) {
             if (destroyed) return;
             var status = decodeLuaResult(result);
-            if (status && status.ok === false && status.error !== "No active player vehicle") {
+            if (status && status.ok === false) {
               $timeout(enableMap, 1200);
             }
           });
@@ -591,6 +591,7 @@
         }
 
         enableMap();
+        schedulePoll(250);
         rafId = window.requestAnimationFrame(frame);
 
         scope.$on("$destroy", function () {
