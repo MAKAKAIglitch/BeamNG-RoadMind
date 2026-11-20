@@ -4,7 +4,7 @@
 
 - Build connected road strips from the local BeamNG NavGraph using shared miter joins at degree-two nodes and filled surface patches at graph junctions.
 - Render each physical road edge once even when the NavGraph exposes both travel directions; use the connected corner geometry so asphalt edges do not split into separate rectangular pieces.
-- Derive road width from available NavGraph node-radius data; when it is absent, estimate total width from the recorded lane count at approximately 3.5 m per lane plus a 0.6 m total allowance, and retain a conservative fallback when both sources are missing.
+- Use the NavGraph node radius as road half-width; when it is missing, estimate total width as 2.4 m for one lane or 3.05 m per lane for two or more lanes, with a conservative fallback when both sources are missing. Preserve narrow widths in the renderer instead of forcing every road to at least 4 m.
 - Generate separators for all lanes across both travel directions, distinguish the opposing-flow centre divider, and join marking endpoints across bends.
 - Keep confirmed traffic trajectories as a lower-confidence fallback for lane locations only when directional NavGraph lane metadata is unavailable.
 
