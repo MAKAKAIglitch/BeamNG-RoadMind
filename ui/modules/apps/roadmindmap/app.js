@@ -52,6 +52,10 @@
         var extensionReady = false;
         var extensionLoading = false;
         var extensionWaiters = [];
+        var extensionLoadWatchdog = null;
+        var extensionLoadGeneration = 0;
+        var pollGeneration = 0;
+        var retryDelay = 1000;
         var renderErrorReported = false;
         var cachedSurfaceGeneration = null;
         var cachedSurfaceSnapshotTime = null;
@@ -80,28 +84,75 @@
           }
         }
 
-        // engineLua wraps callback values as a single Lua expression.
-        // Load the GE extension once and return snapshots as explicit JSON strings.
+        // engineLua wrapping a load request does not prove that the GE module
+        // registered successfully. Verify it before any caller invokes methods.
         function ensureRoadMind(callback) {
+          if (destroyed) return;
           if (extensionReady) {
-            callback();
+            callback(true);
             return;
           }
           extensionWaiters.push(callback);
           if (extensionLoading) return;
+
           extensionLoading = true;
-          lua("extensions.load('roadmind')", function () {
+          var generation = ++extensionLoadGeneration;
+          var completed = false;
+          function finish(ready) {
+            if (completed || generation !== extensionLoadGeneration) return;
+            completed = true;
+            if (extensionLoadWatchdog) $timeout.cancel(extensionLoadWatchdog);
+            extensionLoadWatchdog = null;
             extensionLoading = false;
-            extensionReady = true;
+            extensionReady = ready === true;
             var waiters = extensionWaiters.slice();
             extensionWaiters.length = 0;
-            waiters.forEach(function (waiter) { waiter(); });
+            waiters.forEach(function (waiter) {
+              try { waiter(extensionReady); } catch (error) {
+                if (window.console && window.console.warn) {
+                  window.console.warn("RoadMind map callback failed:", error);
+                }
+              }
+            });
+          }
+
+          extensionLoadWatchdog = $timeout(function () {
+            finish(false);
+          }, 3500);
+
+          var verifyAndLoad =
+            "(function() " +
+              "local ext = extensions and extensions.roadmind; " +
+              "if type(ext) ~= 'table' then " +
+                "local ok = pcall(function() extensions.load('roadmind') end); " +
+                "if not ok then return false end; " +
+                "ext = extensions and extensions.roadmind; " +
+              "end; " +
+              "return type(ext) == 'table' and type(ext.getMapSnapshot) == 'function' " +
+            "end)()";
+          lua(verifyAndLoad, function (result) {
+            finish(decodeLuaResult(result) === true);
           });
         }
 
         function roadmindLua(command, callback) {
-          ensureRoadMind(function () {
-            if (!destroyed) lua(command, callback);
+          ensureRoadMind(function (ready) {
+            if (destroyed) return;
+            if (!ready) {
+              if (callback) callback(null);
+              return;
+            }
+            // Recheck the namespace at call time: extensions can be unloaded
+            // independently of this widget's lifecycle.
+            var guardedCommand =
+              "(function() " +
+                "local ext = extensions and extensions.roadmind; " +
+                "if type(ext) ~= 'table' then return nil end; " +
+                "local ok, result = pcall(function() return " + command + " end); " +
+                "if not ok then return nil end; " +
+                "return result " +
+              "end)()";
+            lua(guardedCommand, callback);
           });
         }
 
@@ -141,21 +192,33 @@
           pollTimer = $timeout(poll, delay || 350);
         }
 
+        function nextRetryDelay() {
+          var delay = retryDelay;
+          retryDelay = Math.min(8000, Math.max(1000, retryDelay * 2));
+          return delay;
+        }
+
         function poll() {
           if (destroyed || polling) return;
           polling = true;
+          var generation = ++pollGeneration;
           pollWatchdog = $timeout(function () {
+            if (generation !== pollGeneration) return;
+            pollGeneration++;
             polling = false;
-            schedulePoll(700);
-          }, 1800);
+            extensionReady = false;
+            schedulePoll(nextRetryDelay());
+          }, 2200);
           var command = "jsonEncode(extensions.roadmind.getMapSnapshot(" +
             roadRevision + "," + surfaceRevision + "," + (expanded ? "true" : "false") + "))";
           roadmindLua(command, function (result) {
-            if (destroyed) return;
+            if (destroyed || generation !== pollGeneration) return;
             if (pollWatchdog) $timeout.cancel(pollWatchdog);
+            pollWatchdog = null;
             polling = false;
             var next = unwrap(result);
             if (next) {
+              retryDelay = 1000;
               var generation = Number(next.sessionMap && next.sessionMap.generation) || 1;
               if (sessionGeneration !== null && generation !== sessionGeneration) {
                 roadRevision = -1;
@@ -185,8 +248,15 @@
               });
               lastSnapshotAt = Date.now();
               drawDirty = true;
+            } else {
+              // Preserve the last valid snapshot and cached geometry during recovery.
+              extensionReady = false;
             }
             scope.$evalAsync();
+            if (!next) {
+              schedulePoll(nextRetryDelay());
+              return;
+            }
             var loadingRoads = snapshot && snapshot.roadGeometryStatus
               && snapshot.roadGeometryStatus.loadActive === true;
             schedulePoll(loadingRoads ? (expanded ? 220 : 260) : 100);
@@ -280,8 +350,11 @@
           roadmindLua("jsonEncode(extensions.roadmind.setMapEnabled(true))", function (result) {
             if (destroyed) return;
             var status = decodeLuaResult(result);
-            if (status && status.ok === false) {
-              $timeout(enableMap, 1200);
+            if (!status || status.ok !== true) {
+              extensionReady = false;
+              $timeout(enableMap, nextRetryDelay());
+            } else {
+              retryDelay = 1000;
             }
           });
         }
@@ -904,6 +977,29 @@
           }
           drawPolyline(routeLocal, "#48a8ff", 2.5, 0.96);
 
+          // Predictive ego path is derived from live vehicle motion, independent
+          // of sensor freshness. This is visual guidance, never actuator input.
+          var motion = snapshotData.motion || {};
+          var motionPath = asArray(motion.predictedPath);
+          if (motionPath.length >= 2) {
+            var predictedLocal = motionPath.map(function (point) {
+              return localPoint(point, ego);
+            }).filter(Boolean);
+            drawPolyline(predictedLocal, "#62dec2", 2.1, 0.96, [5, 4]);
+          }
+          var guidance = motion.guidance || {};
+          if (guidance.brakePoint) {
+            var brakePointLocal = localPoint(guidance.brakePoint, ego);
+            if (brakePointLocal) {
+              var brakeColor = guidance.status === "brake_now" ? "#ff655f"
+                : (guidance.status === "prepare" ? "#f2bb61" : "#8b9aa5");
+              addMarker({
+                x: brakePointLocal.x, y: brakePointLocal.y,
+                z: brakePointLocal.z + 0.35
+              }, brakeColor, 0.55, 0.98);
+            }
+          }
+
           // The mini-map stays clean; expensive scanned-surface triangulation
           // is only built for the large overview and only near the ego vehicle.
           if (isExpanded) {
@@ -1349,6 +1445,49 @@
           ctx.fillStyle = glow;
           ctx.fillRect(0, 0, cssWidth, cssHeight);
 
+          // Small live telemetry overlay; no additional scene queries are made here.
+          if (motion && isFinite(Number(motion.speedKph))) {
+            var guidanceLabel = guidance.status === "brake_now" ? "BRAKE NOW"
+              : (guidance.status === "prepare" ? "SLOW FOR CURVE"
+                : (guidance.status === "clear" ? "ROAD PREVIEW" : "GUIDANCE WAIT"));
+            var targetLabel = isFinite(Number(guidance.targetSpeedMps))
+              ? "TARGET " + Math.round(Number(guidance.targetSpeedMps) * 3.6) + " km/h"
+              : guidanceLabel;
+            var speedLabel = Math.round(Number(motion.speedKph)) + " km/h";
+            var accelLabel = (Number(motion.accelerationMps2) >= 0 ? "+" : "") +
+              Number(motion.accelerationMps2 || 0).toFixed(1) + " m/s²";
+            var lateralLabel = (Number(motion.lateralG) || 0).toFixed(2) + " g";
+            var telemetryWidth = Math.min(cssWidth - 20, isExpanded ? 245 : 166);
+            var telemetryHeight = isExpanded ? 54 : 44;
+            var telemetryX = 10, telemetryY = 10;
+            ctx.save();
+            ctx.globalAlpha = 0.94;
+            ctx.fillStyle = "rgba(7, 13, 19, 0.88)";
+            ctx.strokeStyle = "rgba(100, 133, 151, 0.40)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(telemetryX, telemetryY, telemetryWidth, telemetryHeight, 5);
+            else ctx.rect(telemetryX, telemetryY, telemetryWidth, telemetryHeight);
+            ctx.fill();
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            ctx.font = "600 12px sans-serif";
+            ctx.fillStyle = "#d7e8ee";
+            ctx.fillText(speedLabel, telemetryX + 9, telemetryY + 13);
+            ctx.font = "10px sans-serif";
+            ctx.fillStyle = "#91a9b5";
+            ctx.fillText(accelLabel + "  ·  " + lateralLabel, telemetryX + 9, telemetryY + 29);
+            if (isExpanded) {
+              ctx.font = "600 9px sans-serif";
+              ctx.fillStyle = guidance.status === "brake_now" ? "#ff8178"
+                : (guidance.status === "prepare" ? "#f2bb61" : "#8ad9c8");
+              ctx.fillText(targetLabel, telemetryX + 9, telemetryY + 44);
+            }
+            ctx.restore();
+          }
+
         }
 
         function frame(timestamp) {
@@ -1402,6 +1541,10 @@
           destroyed = true;
           if (pollTimer) $timeout.cancel(pollTimer);
           if (pollWatchdog) $timeout.cancel(pollWatchdog);
+          if (extensionLoadWatchdog) $timeout.cancel(extensionLoadWatchdog);
+          extensionLoadGeneration++;
+          extensionWaiters.length = 0;
+          pollGeneration++;
           if (rafId) window.cancelAnimationFrame(rafId);
           window.removeEventListener("keydown", onMapKeyDown);
           if (expandButton) expandButton.removeEventListener("click", onExpandClick);
@@ -1413,7 +1556,11 @@
           canvas.removeEventListener("pointerup", onMapPointerUp);
           canvas.removeEventListener("pointercancel", onMapPointerUp);
           canvas.removeEventListener("wheel", onMapWheel);
-          if (extensionReady) lua("jsonEncode(extensions.roadmind.setMapEnabled(false))");
+          if (extensionReady) {
+            lua("(function() local ext = extensions and extensions.roadmind; " +
+              "if type(ext) == 'table' and type(ext.setMapEnabled) == 'function' then " +
+              "return ext.setMapEnabled(false) end; return nil end)()");
+          }
         });
       }
     };
