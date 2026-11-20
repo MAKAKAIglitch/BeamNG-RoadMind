@@ -3289,13 +3289,19 @@ state._roadmindHelpers.findTrackForLidarPoint = function(point)
 
   -- When the raycast does not expose an object handle, query only the coarse
   -- spatial cell covering the hit. Ambiguous overlapping OBBs remain static.
-  local worldPoint = asVec3(point)
-  if not worldPoint then return nil, nil end
+  -- Most ray hits are not near a tracked vehicle, so avoid both a temporary
+  -- vec3 conversion and an empty fallback table for the common miss path.
+  local worldPoint = point
+  if type(worldPoint) ~= "table" or type(worldPoint.x) ~= "number"
+      or type(worldPoint.y) ~= "number" or type(worldPoint.z) ~= "number" then
+    return nil, nil
+  end
   local cellSize = TRACK_SPATIAL_CELL_SIZE
   local key = math.floor(worldPoint.x / cellSize) .. ":"
     .. math.floor(worldPoint.y / cellSize) .. ":"
     .. math.floor(worldPoint.z / cellSize)
-  local bucket = state.lidarTrackGrid[key] or {}
+  local bucket = state.lidarTrackGrid[key]
+  if not bucket then return nil, nil end
   local match, matchLocal = nil, nil
   for i = 1, #bucket do
     local track = bucket[i]
