@@ -369,20 +369,22 @@ Code-level implementation is present. Route choice, one-way behavior, map-to-map
 **Goal:** provide a lightweight in-game mini-application that visualizes the interpreted environment, similar in purpose to a modern vehicle perception display, without duplicating sensor simulation or rendering a second heavy scene.
 
 - [x] Add a separate compact **RoadMind Perception** application/window with a dark, restrained, high-contrast interface.
-- [x] Provide a rear-follow-style 2D projection and a switchable top-down/overhead road view. This is a perception-map projection, not a live game camera.
-- [x] Draw stylized vehicle markers, the NavGraph road-centreline corridor, the active route and surrounding detected targets in a flat SVG view; lane boundaries are not fabricated.
-- [x] Visualize tracked cars as vehicle-shaped OBB markers and raycast obstacle clusters as generic obstacle points; unsupported object classes are not invented.
+- [x] Replace the flat map with a perspective 3D view, using a rear-follow camera offset behind/above the ego vehicle and a switchable elevated top view.
+- [x] Export a bounded local LiDAR point snapshot (up to 1,400 points), preferring the accumulated session cloud and falling back to the latest scan.
+- [x] Spatially sample up to 420 points and triangulate nearby returns into a Delaunay mesh; reject long edges, large height jumps and degenerate faces to limit false surfaces.
+- [x] Render the NavGraph corridor as a translucent estimated road surface, plus the active route, OBB vehicle geometry and generic obstacle clusters in the same perspective; lane boundaries are not fabricated.
+- [x] Round the perception window and scene viewport corners.
 - [ ] Show traffic signs and traffic lights with concise text/state labels (for example, speed limit, STOP, parking restriction, turn warning, SIGNAL: RED) and their current camera/visibility status.
 - [ ] Show lane lines only when measured or supported by map geometry; render an explicit unknown/unavailable state when lane data is missing.
 - [ ] Display object distance, relative speed when available, track confidence/age and source sensor/camera on selection or in a compact details strip.
 - [ ] Use textual statuses such as VISIBLE, OCCLUDED, PREDICTED, STALE and UNKNOWN alongside restrained visual accents; do not make meaning depend on color or emoji alone.
-- [x] Reuse the latest bounded World Model and road/route snapshots. The application performs no scene raycasts, vehicle-registry scans, physics queries or perception work in its UI/render loop.
-- [x] Throttle UI polling, reuse compact snapshots and cap targets, obstacles and displayed road points.
-- [x] Avoid a redundant second raw-LiDAR/obstacle debug layer: show the fused interpreted scene and object classes, while the existing sensor visualization remains the detailed diagnostic view.
-- [ ] Add controls for view mode, labels, object categories and display scale; keep the display optional and independently disableable.
-- [ ] Validate readability, object motion, camera handoff, stale-data presentation and UI overhead in dense traffic and on low-end hardware.
+- [x] Reuse bounded World Model, road/route and display-only point-cloud snapshots. The application performs no scene raycasts, vehicle-registry scans, physics queries or perception work in its UI/render loop.
+- [x] Throttle UI polling, reuse compact snapshots and cap points, targets, obstacles and displayed road geometry.
+- [x] Keep triangulation render-only: generated faces never feed sensor observations, World Model fusion, route planning or safety decisions.
+- [ ] Add controls for labels, object categories and display scale; keep the display optional and independently disableable.
+- [ ] Validate mesh quality, object motion, camera handoff, stale-data presentation and UI overhead in dense traffic and on low-end hardware.
 
-**Acceptance criteria:** the mini-app shows only data already present in RoadMind's world/road model, distinguishes measurements from predictions and unknowns, performs no acquisition work itself and remains inexpensive when hidden or disabled.
+**Acceptance criteria:** the mini-app shows only bounded data already present in RoadMind's sensor/world/road snapshots, distinguishes measurements from predictions and unknowns, performs no acquisition work itself, keeps generated mesh separate from planning and remains inexpensive when hidden or disabled.
 
 
 ## Performance principles
