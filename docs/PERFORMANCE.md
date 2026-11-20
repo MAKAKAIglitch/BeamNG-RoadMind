@@ -16,6 +16,10 @@ The default is Economy: only LiDAR scans (9 queries/s). Radar and ultrasonic are
 
 These figures are calculated from configured ray counts and frequencies. They are not measured FPS or CPU percentages.
 
+## 3D perception-map cost
+
+The Perception panel polls a bounded snapshot at 2 Hz. The GE side filters the point map to the current local view and serializes at most 1,400 world-space returns; when point accumulation is disabled, it falls back to the latest LiDAR scan. The Vue renderer spatially downsamples to at most 420 points before triangulation, then rejects faces with long edges or excessive height spread. This work adds no scene raycasts and does not change sensor rates, World Model data or planner inputs. The 3D surface is a visual approximation rather than a collision mesh or semantic reconstruction.
+
 ## Vehicle geometry cost
 
 Vehicle dimensions are sampled once from the active vehicle's oriented bounding box during attach or explicit recalibration. The resulting local geometry and sensor layout are cached in Vehicle Lua. Each due sensor frame transforms the cached local mounts into world space using the current vehicle basis. The OBB is not queried for every ray or on the render loop.
