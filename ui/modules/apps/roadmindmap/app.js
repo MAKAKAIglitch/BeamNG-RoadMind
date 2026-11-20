@@ -201,9 +201,9 @@
         function poll() {
           if (destroyed || polling) return;
           polling = true;
-          var generation = ++pollGeneration;
+          var pollToken = ++pollGeneration;
           pollWatchdog = $timeout(function () {
-            if (generation !== pollGeneration) return;
+            if (pollToken !== pollGeneration) return;
             pollGeneration++;
             polling = false;
             extensionReady = false;
@@ -214,7 +214,7 @@
           var command = "jsonEncode(extensions.roadmind.getMapSnapshot(" +
             roadRevision + "," + surfaceRevision + "," + (expanded ? "true" : "false") + "))";
           roadmindLua(command, function (result) {
-            if (destroyed || generation !== pollGeneration) return;
+            if (destroyed || pollToken !== pollGeneration) return;
             if (pollWatchdog) $timeout.cancel(pollWatchdog);
             pollWatchdog = null;
             polling = false;
