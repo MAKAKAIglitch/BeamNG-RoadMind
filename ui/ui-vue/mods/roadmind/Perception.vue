@@ -23,6 +23,11 @@
         <path v-if="roadPath" :d="roadPath" fill="none" stroke="#526273" stroke-width="62" opacity="0.28" stroke-linecap="round" />
         <path v-if="roadPath" :d="roadPath" fill="none" stroke="#9aa8b5" stroke-width="1.5" stroke-dasharray="5 7" />
         <path v-if="routePath" :d="routePath" fill="none" stroke="#65cdbb" stroke-width="2.2" stroke-dasharray="7 5" />
+        <path v-if="predictionPath" :d="predictionPath" fill="none" stroke="#62dec2"
+          stroke-width="2.8" stroke-linecap="round" stroke-dasharray="5 5" />
+        <circle v-if="brakeMarker" :cx="brakeMarker.x" :cy="brakeMarker.y" r="7"
+          :fill="guidance.status === 'brake_now' ? '#ff655f' : '#f2bb61'"
+          stroke="#111a22" stroke-width="2" />
         <g v-for="o in obstacles" :key="o.id">
           <circle :cx="o.x" :cy="o.y" r="3.5" fill="#8997a5" fill-opacity="0.35" stroke="#aab6c0" stroke-width="1" />
         </g>
@@ -42,6 +47,20 @@
         <text x="466" y="22" text-anchor="end" class="overlay-label">{{ t("road") }}: {{ roadQuality }}</text>
       </svg>
       <div v-if="!snapshot.vehicle" class="waiting">{{ t("waiting") }}</div>
+    </div>
+
+    <div class="telemetry" v-if="snapshot.motion">
+      <div class="telemetry-main">
+        <strong>{{ speedLabel }}</strong>
+        <span>{{ t("acceleration") }}: {{ accelerationLabel }}</span>
+        <span>{{ t("lateral") }}: {{ lateralLabel }}</span>
+      </div>
+      <div class="guidance" :class="guidance.status">
+        <strong>{{ guidanceLabel }}</strong>
+        <span v-if="guidance.targetSpeedMps">{{ t("targetSpeed") }}: {{ Math.round(guidance.targetSpeedMps * 3.6) }} km/h</span>
+        <span v-if="guidance.distanceToBrakePointM !== undefined">{{ t("brakeIn") }}: {{ guidance.distanceToBrakePointM.toFixed(0) }} m</span>
+        <span v-if="snapshot.motion.warning">{{ t("warning") }}: {{ snapshot.motion.warning.toUpperCase() }}</span>
+      </div>
     </div>
 
     <div class="legend">
@@ -79,7 +98,7 @@
     </div>
 
     <footer>
-      <span>{{ t("disclaimer") }}</span>
+      <span>{{ lastError ? t("reconnecting") : t("disclaimer") }}</span>
       <button @click="refresh">{{ t("refresh") }}</button>
     </footer>
   </div>
@@ -106,7 +125,13 @@ const EN = {
   obstacle: "Obstacle cluster",
   measured: "MEASURED",
   empty: "No current objects in the World Model.",
-  waiting: "Waiting for RoadMind sensor data",
+  waiting: "Waiting for RoadMind vehicle data",
+  acceleration: "Acceleration",
+  lateral: "Lateral load",
+  targetSpeed: "Curve speed",
+  brakeIn: "Brake point",
+  warning: "ADAS",
+  reconnecting: "RoadMind connection unavailable · keeping the last valid view",
   visible: "VISIBLE",
   predicted: "PREDICTED",
   stale: "STALE",
@@ -132,7 +157,13 @@ const RU = {
   obstacle: "Кластер препятствий",
   measured: "ИЗМЕРЕНО",
   empty: "В World Model пока нет объектов.",
-  waiting: "Ожидание данных RoadMind",
+  waiting: "Ожидание данных автомобиля RoadMind",
+  acceleration: "Ускорение",
+  lateral: "Боковая нагрузка",
+  targetSpeed: "Скорость в повороте",
+  brakeIn: "Точка торможения",
+  warning: "ADAS",
+  reconnecting: "Нет связи с RoadMind · показаны последние данные",
   visible: "ВИДЕН",
   predicted: "ПРОГНОЗ",
   stale: "УСТАРЕЛ",
@@ -145,8 +176,11 @@ const RU = {
 const locale = ref("en-US")
 const mode = ref("top")
 const loading = ref(false)
-const snapshot = ref({ vehicle: null, targets: [], obstacles: [], road: {}, route: [] })
+const snapshot = ref({ vehicle: null, targets: [], obstacles: [], road: {}, route: [], motion: null })
+const lastError = ref("")
 let timer = null
+let disposed = false
+let lastSuccessfulAt = 0
 
 function t(key) {
   const dict = String(locale.value).toLowerCase().startsWith("ru") ? RU : EN
@@ -180,6 +214,26 @@ function toPath(points) {
 }
 const roadPath = computed(() => toPath(snapshot.value.road && snapshot.value.road.corridor || []))
 const routePath = computed(() => toPath(snapshot.value.route || []))
+const predictionPath = computed(() => toPath(
+  snapshot.value.motion && snapshot.value.motion.predictedPath || []
+))
+const guidance = computed(() => snapshot.value.motion && snapshot.value.motion.guidance || {})
+const brakeMarker = computed(() => guidance.value.brakePoint ? project(guidance.value.brakePoint) : null)
+const motion = computed(() => snapshot.value.motion || {})
+const speedLabel = computed(() => Number.isFinite(Number(motion.value.speedKph))
+  ? Math.round(Number(motion.value.speedKph)) + " km/h" : "—")
+const accelerationLabel = computed(() => Number.isFinite(Number(motion.value.accelerationMps2))
+  ? (Number(motion.value.accelerationMps2) > 0 ? "+" : "") +
+    Number(motion.value.accelerationMps2).toFixed(1) + " m/s²" : "—")
+const lateralLabel = computed(() => Number.isFinite(Number(motion.value.lateralG))
+  ? Number(motion.value.lateralG).toFixed(2) + " g" : "—")
+const guidanceLabel = computed(() => {
+  const status = guidance.value.status
+  if (status === "brake_now") return "ТОРМОЗИТЬ СЕЙЧАС"
+  if (status === "prepare") return "ГОТОВИТЬСЯ К ПОВОРОТУ"
+  if (status === "clear") return "ТРАЕКТОРИЯ СВОБОДНА"
+  return "НЕТ ДАННЫХ О ДОРОГЕ"
+})
 const vehicles = computed(() => (snapshot.value.targets || []).map(track => {
   const p = project(track.predictedPosition || track.position)
   if (!p || p.x < -35 || p.x > 515 || p.y < -35 || p.y > 555) return null
@@ -221,27 +275,80 @@ const obstacles = computed(() => (snapshot.value.obstacles || []).map(o => {
   }
 }).filter(Boolean))
 
-async function refresh() {
-  if (loading.value) return
-  loading.value = true
+async function setPerceptionView(enabled) {
+  const cmd = "(function() " +
+    "local ext = extensions and extensions.roadmind; " +
+    "if type(ext) ~= 'table' then " +
+      "local ok = pcall(function() extensions.load('roadmind') end); " +
+      "if not ok then return {ok=false,error='RoadMind extension load failed'} end; " +
+      "ext = extensions and extensions.roadmind; " +
+    "end; " +
+    "if type(ext) ~= 'table' or type(ext.setPerceptionViewEnabled) ~= 'function' then " +
+      "return {ok=false,error='RoadMind perception API unavailable'} end; " +
+    "local ok, result = pcall(function() return ext.setPerceptionViewEnabled(" +
+      (enabled ? "true" : "false") + ") end); " +
+    "if not ok then return {ok=false,error=tostring(result)} end; " +
+    "return result " +
+  "end)()"
   try {
-    const cmd = "(function() extensions.load('roadmind'); return extensions.roadmind.getPerceptionSnapshot() end)()"
     const result = await runRaw(cmd)
     if (result && result.ok === false) throw new Error(result.error || "RoadMind error")
-    if (result && result.language) locale.value = result.language
-    if (result) snapshot.value = result
-  } catch (e) {
-    console.warn("RoadMind perception snapshot unavailable", e)
+  } catch (error) {
+    if (enabled) lastError.value = String(error && error.message || error)
+  }
+}
+
+async function refresh() {
+  if (loading.value || disposed) return
+  loading.value = true
+  try {
+    const cmd = "(function() " +
+      "local ext = extensions and extensions.roadmind; " +
+      "if type(ext) ~= 'table' then " +
+        "local ok = pcall(function() extensions.load('roadmind') end); " +
+        "if not ok then return nil end; ext = extensions and extensions.roadmind; " +
+      "end; " +
+      "if type(ext) ~= 'table' or type(ext.getPerceptionSnapshot) ~= 'function' then return nil end; " +
+      "local ok, value = pcall(function() return ext.getPerceptionSnapshot() end); " +
+      "if not ok then return nil end; return value " +
+    "end)()"
+    let result = await runRaw(cmd)
+    if (typeof result === "string") {
+      try { result = JSON.parse(result) } catch (_) { result = null }
+    }
+    if (result && result.result !== undefined && result.schemaVersion === undefined) {
+      result = result.result
+      if (typeof result === "string") {
+        try { result = JSON.parse(result) } catch (_) { result = null }
+      }
+    }
+    if (!result || result.schemaVersion !== 1 || !result.vehicle) {
+      throw new Error("No valid vehicle perception snapshot")
+    }
+    if (disposed) return
+    if (result.language) locale.value = result.language
+    snapshot.value = result
+    lastError.value = ""
+    lastSuccessfulAt = Date.now()
+  } catch (error) {
+    if (!disposed) {
+      lastError.value = String(error && error.message || error)
+      console.warn("RoadMind perception snapshot unavailable; keeping previous view", error)
+    }
   } finally {
     loading.value = false
   }
 }
-onMounted(() => {
-  refresh()
-  timer = setInterval(refresh, 500)
+onMounted(async () => {
+  await setPerceptionView(true)
+  if (disposed) return
+  await refresh()
+  timer = setInterval(refresh, 250)
 })
 onBeforeUnmount(() => {
+  disposed = true
   if (timer) clearInterval(timer)
+  setPerceptionView(false)
 })
 </script>
 
@@ -260,6 +367,15 @@ onBeforeUnmount(() => {
 .ego-label { fill: #a9bac8; font-size: 9px; font-weight: 700; }
 .object-label { fill: #cad5de; font-size: 7px; font-weight: 600; }
 .waiting { position: absolute; inset: 0; display: grid; place-items: center; color: #9aaab8; font-size: 0.85rem; background: rgba(13,19,25,0.72); }
+.telemetry { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.45rem; }
+.telemetry-main, .guidance { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem 0.75rem; min-height: 34px; padding: 0.4rem 0.55rem; border: 1px solid #2b3d48; border-radius: 5px; background: #141f28; color: #9fb1bd; font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+.telemetry-main strong { color: #e1edf2; font-size: 1rem; }
+.guidance { flex: 1; border-color: #385047; }
+.guidance strong { color: #83d7c5; letter-spacing: 0.04em; }
+.guidance.prepare strong { color: #f2bb61; }
+.guidance.brake_now { border-color: #74443e; background: #2a1b1c; }
+.guidance.brake_now strong { color: #ff8178; }
+.guidance.unavailable strong, .guidance.waiting strong { color: #98a5af; }
 .legend { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; color: #9aabb9; font-size: 0.7rem; }
 .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
 .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
