@@ -1486,6 +1486,8 @@ state._roadmindHelpers.detachPreviousVehicle = function()
   }
   state.vehicleGeometry = nil
   state.vehicleCalibrationError = nil
+  state.mapMotion = nil
+  state.mapMotionTime = 0
   state._roadmindHelpers.resetTrackingState(true)
   state.vehicleRegistry = {}
   state.vehicleRegistryById = {}
@@ -2855,6 +2857,10 @@ function M.setMapEnabled(enabled)
   state.mapModeEnabled = false
   state.mapPlanningEnabled = false
   state.mapStartedSensors = false
+  if not state.perceptionViewEnabled then
+    state.mapMotion = nil
+    state.mapMotionTime = 0
+  end
   if not state.routePilotEnabled then
     state.localPlanner = {
       status = "idle", reasonCode = "inactive", timestamp = nil,
@@ -2872,6 +2878,9 @@ function M.setPerceptionViewEnabled(enabled)
   state.perceptionViewEnabled = enabled == true
   if state.perceptionViewEnabled then
     state._roadmindHelpers.syncPlayerVehicle(true)
+  elseif not state.mapModeEnabled then
+    state.mapMotion = nil
+    state.mapMotionTime = 0
   end
   return {
     ok = true,
@@ -9102,6 +9111,8 @@ function M.onPreRender(dtReal, dtSim, dtRaw)
 end
 
 function M.onClientStartMission()
+  state.mapMotion = nil
+  state.mapMotionTime = 0
   state.sessionStaticMap = {}
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
@@ -9142,6 +9153,8 @@ function M.onClientStartMission()
 end
 
 function M.onClientEndMission()
+  state.mapMotion = nil
+  state.mapMotionTime = 0
   state.sessionStaticMap = {}
   state.sessionStaticObservationIds = {}
   state.sessionStaticObservationOrder = {}
