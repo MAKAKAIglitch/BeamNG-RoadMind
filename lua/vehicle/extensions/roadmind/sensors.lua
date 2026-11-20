@@ -35,7 +35,7 @@ local sensorSettings = {
   radarEnabled = false,
   radarDensity = "low",
   radarHz = 1,
-  ultrasonicEnabled = false,
+  ultrasonicEnabled = true,
   ultrasonicDensity = "single",
   ultrasonicHz = 1,
   poseHz = 2,
@@ -1100,8 +1100,10 @@ function M.updateGFX(dt)
   if sensorSettings.speedAdaptiveRateEnabled ~= false then
     if frame.speed < 5 then
       speedMultiplier = 1.5
+    elseif frame.speed >= 45 then
+      speedMultiplier = 0.50
     elseif frame.speed >= 25 then
-      speedMultiplier = 0.75
+      speedMultiplier = 0.65
     end
   end
 
