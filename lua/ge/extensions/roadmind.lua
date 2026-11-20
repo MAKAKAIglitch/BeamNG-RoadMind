@@ -203,6 +203,7 @@ local state = {
   vehicleCalibrationError = nil,
   vehicleRegistry = {},
   vehicleRegistryById = {},
+  vehicleBoundsCacheById = {},
   vehicleRegistrySnapshotValid = false,
   vehicleRegistryTimestamp = nil,
   vehicleIteratorContext = {},
@@ -4719,40 +4720,98 @@ end
 state._roadmindHelpers.snapshotVehicleBounds = function(vehicle, vehicleId)
   local position = asVec3(safeCall(vehicle, "getPosition"))
   local velocity = asVec3(safeCall(vehicle, "getVelocity"))
-  local box = safeCall(vehicle, "getSpawnWorldOOBB")
-  if not position or not velocity or not box then return nil end
-
-  local center = asVec3(safeCall(box, "getCenter"))
-  local half = asVec3(safeCall(box, "getHalfExtents"))
-  local axes = {
-    normalizedVec3(safeCall(box, "getAxis", 0)),
-    normalizedVec3(safeCall(box, "getAxis", 1)),
-    normalizedVec3(safeCall(box, "getAxis", 2))
-  }
-  if not center or not half or not axes[1] or not axes[2] or not axes[3] then return nil end
-
-  local hx, hy, hz = math.abs(half.x), math.abs(half.y), math.abs(half.z)
-  if hx < 0.1 or hy < 0.1 or hz < 0.1
-      or hx > 15 or hy > 15 or hz > 5 then
-    return nil
-  end
-
   local forward = normalizedVec3(safeCall(vehicle, "getDirectionVector"))
   local up = normalizedVec3(safeCall(vehicle, "getDirectionVectorUp"))
   local right = forward and up and normalizedVec3(forward:cross(up)) or nil
-  if not forward or not right or not up then return nil end
-
-  local function projectedHalfExtent(axis)
-    return hx * math.abs(axes[1]:dot(axis))
-      + hy * math.abs(axes[2]:dot(axis))
-      + hz * math.abs(axes[3]:dot(axis))
+  if not position or not velocity or not forward or not right or not up then
+    return nil
   end
 
-  local length = projectedHalfExtent(forward) * 2
-  local width = projectedHalfExtent(right) * 2
-  local height = projectedHalfExtent(up) * 2
-  local radius = math.sqrt(hx * hx + hy * hy + hz * hz)
-  local centerOffset = center - position
+  local cacheById = state.vehicleBoundsCacheById
+  local cacheKey = tostring(vehicleId)
+  local cached = cacheById and cacheById[cacheKey] or nil
+
+  -- Spawn OOBB dimensions and its local offset are static for a given
+  -- vehicle object. Read the engine OOBB once, then rotate its cached local
+  -- basis with the live vehicle pose instead of querying 5 OOBB properties
+  -- for every vehicle on every registry refresh.
+  if not cached or cached.vehicleObject ~= vehicle then
+    local box = safeCall(vehicle, "getSpawnWorldOOBB")
+    if not box then return nil end
+
+    local center = asVec3(safeCall(box, "getCenter"))
+    local half = asVec3(safeCall(box, "getHalfExtents"))
+    local spawnAxes = {
+      normalizedVec3(safeCall(box, "getAxis", 0)),
+      normalizedVec3(safeCall(box, "getAxis", 1)),
+      normalizedVec3(safeCall(box, "getAxis", 2))
+    }
+    if not center or not half or not spawnAxes[1] or not spawnAxes[2] or not spawnAxes[3] then
+      return nil
+    end
+
+    local hx, hy, hz = math.abs(half.x), math.abs(half.y), math.abs(half.z)
+    if hx < 0.1 or hy < 0.1 or hz < 0.1
+        or hx > 15 or hy > 15 or hz > 5 then
+      return nil
+    end
+
+    local function localAxis(axis)
+      return {
+        forward = axis:dot(forward),
+        right = axis:dot(right),
+        up = axis:dot(up)
+      }
+    end
+
+    local axesLocal = {
+      localAxis(spawnAxes[1]),
+      localAxis(spawnAxes[2]),
+      localAxis(spawnAxes[3])
+    }
+    local function projectedHalfExtent(axis)
+      return hx * math.abs(spawnAxes[1]:dot(axis))
+        + hy * math.abs(spawnAxes[2]:dot(axis))
+        + hz * math.abs(spawnAxes[3]:dot(axis))
+    end
+
+    local centerOffset = center - position
+    cached = {
+      vehicleObject = vehicle,
+      centerOffsetLocal = {
+        forward = centerOffset:dot(forward),
+        right = centerOffset:dot(right),
+        up = centerOffset:dot(up)
+      },
+      axesLocal = axesLocal,
+      half = {hx, hy, hz},
+      radius = math.sqrt(hx * hx + hy * hy + hz * hz),
+      dimensions = {
+        length = projectedHalfExtent(forward) * 2,
+        width = projectedHalfExtent(right) * 2,
+        height = projectedHalfExtent(up) * 2
+      }
+    }
+    if cacheById then cacheById[cacheKey] = cached end
+  end
+
+  local offset = cached.centerOffsetLocal
+  local center = position
+    + forward * offset.forward
+    + right * offset.right
+    + up * offset.up
+
+  local function worldAxis(axis)
+    return forward * axis.forward
+      + right * axis.right
+      + up * axis.up
+  end
+  local axesLocal = cached.axesLocal
+  local axes = {
+    worldAxis(axesLocal[1]),
+    worldAxis(axesLocal[2]),
+    worldAxis(axesLocal[3])
+  }
 
   return {
     id = vehicleId,
@@ -4763,15 +4822,11 @@ state._roadmindHelpers.snapshotVehicleBounds = function(vehicle, vehicleId)
     forward = forward,
     right = right,
     up = up,
-    centerOffsetLocal = {
-      forward = centerOffset:dot(forward),
-      right = centerOffset:dot(right),
-      up = centerOffset:dot(up)
-    },
-    dimensions = {length = length, width = width, height = height},
+    centerOffsetLocal = offset,
+    dimensions = cached.dimensions,
     axes = axes,
-    half = {hx, hy, hz},
-    radius = radius,
+    half = cached.half,
+    radius = cached.radius,
     registryTimestamp = state.simulationTime
   }
 end
@@ -7032,6 +7087,13 @@ state._roadmindHelpers.refreshVehicleRegistry = function()
   local registryById = {}
   for i = 1, #registry do
     registryById[tostring(registry[i].id)] = true
+  end
+
+  -- Drop cached geometry for vehicles that left the live registry.
+  for cacheKey in pairs(state.vehicleBoundsCacheById) do
+    if not registryById[cacheKey] then
+      state.vehicleBoundsCacheById[cacheKey] = nil
+    end
   end
 
   state.vehicleRegistry = registry
