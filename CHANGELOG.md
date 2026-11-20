@@ -1,14 +1,24 @@
 # Changelog
 
+## Unreleased — pannable map overview and low-overhead mini-map
+
+- Open a full-screen top-down map by clicking the FSD-style mini-map; drag to pan, use the mouse wheel to zoom, recenter with the toolbar, and close with the close control or Escape.
+- Keep the mini-map as a forward-looking perspective view with a small fixed drawing budget; reserve the all-directions 500 m road-and-lane overview and close scan-surface reconstruction for the large map.
+- Preload active-level `DecalRoad` objects incrementally in batches of 128 objects per map request, then build the cached road network in a 500 m radius. Use approximately 2.5 m spline sampling near the vehicle, 8 m in the middle distance and 16 m in the outer ring.
+- Preserve the session scan map when scanning is stopped. The map view no longer starts the sensors automatically; new scan geometry is merged only when a scan is active and the existing world-space memory remains available afterward.
+- Remove LiDAR/radar/ultrasonic point clouds and camera/sensor coverage cones from the map display. Sensor acquisition and World Model/ADAS processing remain separate from map visualization.
+- Render the map only after a new snapshot, resize, pan or zoom. Bound mini-map work to 650 polygons, 1,200 lines and 32 markers; bound large-map drawing to 8,000 polygons, 12,000 lines and 900 markers.
+- Limit large-map scan reconstruction to 2,500 nearby scan points and 1,800 submitted surface faces per draw; cap its persistent face cache at 16,000 faces.
+- Reuse the GE-owned World Model during map snapshots instead of cloning it repeatedly, build road geometry once per snapshot, and throttle road geometry rebuilds while the level preload is still in progress.
+
 ## Unreleased — Tesla FSD-style 3D perception map
 
-- Set a forward-looking FSD-style perspective with the ego vehicle low in the foreground, a 120 m default road preview, and independent camera height, follow distance and look-ahead controls.
+- Keep a forward-looking FSD-style mini-map perspective with the ego vehicle low in the foreground; the separate large map shows the all-directions road network and lane markings within the configured 500 m radius.
 - Build the primary road ribbon from cached `DecalRoad` nodes in `items.level.json`, including per-node width, lane counts and direction settings; sample the spline at approximately 2.5 m intervals with Catmull–Rom interpolation blended by road smoothness.
 - Render continuous road ribbons and lane separators from the precomputed spline points, with a distinct opposing-flow divider; retain the expanded NavGraph network as a fallback when DecalRoad data is not available.
-- Cache world-space road samples and refresh them on movement, heading changes or cache expiry; reject distant road objects by bounding box and prioritize nearby roads within fixed run/sample budgets.
-- Publish fresh LiDAR, radar and ultrasonic hit points with their sensor origins/directions, plus geometric camera/radar/LiDAR/ultrasonic coverage zones. Disabled sensor volumes remain visible in a dimmed state without enabling their scans.
-- Render sensor-specific point colours, proximity rays and translucent coverage wedges; distinguish vehicles confirmed by camera visibility from other tracked traffic.
-- State explicitly that regular BeamNG camera models provide geometric frustums and vehicle visibility candidates, not RGB image recognition or semantic segmentation.
+- Cache world-space road samples, reject distant road objects by bounding box and prioritize nearby roads; use adaptive sample spacing and avoid rebuilding the complete geometry for each preload batch.
+- Keep sensor measurements available to the perception World Model and ADAS pipeline, but do not draw LiDAR/radar/ultrasonic returns or camera/sensor frustums on the map.
+- Keep the visual map focused on level road geometry, lane markings, traffic objects and locally reconstructed scan surfaces.
 
 ## Unreleased — NavGraph road surface and lane geometry
 

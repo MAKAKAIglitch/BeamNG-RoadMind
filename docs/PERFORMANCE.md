@@ -149,32 +149,38 @@ The fallback road and lane graph is sourced from the cached local NavGraph (map.
 These are static geometry and source-selection checks. Road width estimates and junction appearance still require visual validation on several BeamNG levels, especially roads with missing radius/lane metadata, unusual lane widths, and complex intersections.
 
 
-## 13. FSD-style road and sensor preview
+## 13. FSD-style road map source and sensor display
 
-The map uses the same basic visual hierarchy as an FSD-style perception display: the ego vehicle stays in the foreground, the road extends ahead in perspective, lane boundaries remain visible, and sensor-derived objects are separated by source.
+The map is organized into two views. The in-game mini-map keeps a forward-looking perspective around the ego vehicle. Clicking it opens a full-screen top-down map covering the all-directions road network and lane markings around the current vehicle position.
 
-### Road geometry source and sampling
+### Road geometry and loading
 
-- **Primary source:** cached `DecalRoad` objects from the active level's `items.level.json`. Each accepted node uses the documented `[x, y, z, width]` format. Road-level fields include `lanesLeft`, `lanesRight`, `autoLanes`, `oneWay`, `flipDirection` and `smoothness`.
-- **Curve:** sample consecutive control-node pairs at about 2.5 m spacing. Use centripetal Catmull–Rom interpolation and blend from linear interpolation according to the road's smoothness value. Width is interpolated along the same curve.
-- **Lane markings:** manual left/right lane counts take priority. When automatic lanes are enabled and counts are absent, estimate lane count from road width. The center divider is styled separately; `flipDirection` swaps the two manual side counts.
-- **Preview window:** the default forward preview is 120 m (configurable 100–180 m); a short rear window and lateral margin keep the road under and around the car connected. This road preview is level data and is visible before sensor scans have discovered the surface.
-- **Performance:** level road objects are cached once per level. Candidate road bounds are checked before sampling and nearer road objects are processed first. The sampled world-space geometry is reused for up to 0.8 s and refreshed after about 5 m of movement, a meaningful heading change, or a preview-range change. Hard limits are 128 road runs and 1,800 samples.
-- **Fallback:** if DecalRoad data is unavailable, use the connected NavGraph geometry and its lane metadata/traffic inference. The map should expose the source/status so missing level road data is diagnosable.
+- **Primary source:** active-level `DecalRoad` objects from `items.level.json`. Each accepted node uses `[x, y, z, width]`; road-level settings include `lanesLeft`, `lanesRight`, `autoLanes`, `oneWay`, `flipDirection` and `smoothness`.
+- **Background preload:** level objects are parsed incrementally, up to 128 objects per map request. The loader caches road nodes, widths, lane counts and object bounds; the network is then sampled in all directions within the configured map radius (default 500 m).
+- **Detail levels:** sample spacing is about 2.5 m within 120 m of the vehicle, 8 m from 120–260 m, and 16 m in the outer ring. The radial road window includes a 35 m continuity margin at its edge. This keeps lane geometry dense close to the car without using the same vertex density across the whole level.
+- **Curve:** use centripetal Catmull–Rom interpolation blended from linear interpolation by the road's smoothness value. Interpolate road width along the same curve. Manual lane counts take priority; automatic lane estimates are used only when manual counts are absent.
+- **Geometry bounds:** at most 512 road runs and 8,000 spline samples are retained for the current view. Candidate roads are filtered by bounding boxes and processed nearest-first. During level preload, an existing geometry cache is reused; the full view is rebuilt after loading completes or when the vehicle/radius/road cache meaningfully changes.
+- **Fallback:** if DecalRoad data is unavailable, use the connected NavGraph geometry and its lane metadata/traffic inference. A missing level file remains an explicit data-source limitation, not fabricated road coverage.
 
-DecalRoad is a road-surface decal projected onto terrain or static surfaces, not a standalone elevated road mesh. The map therefore reconstructs a smooth ribbon from its node positions and widths; it does not copy BeamNG's clipped material texture or the exact generated terrain/static-mesh edge geometry. Bridges depend on the stored node heights and may need in-game validation.
+DecalRoad is a road-surface decal projected onto terrain or static surfaces, not a standalone elevated road mesh. The map reconstructs its ribbon from node positions and widths; it does not copy clipped material textures or the exact terrain/static-mesh edge geometry. Bridges and unusual elevated structures still require in-game validation.
 
-### Sensor and perception layers
+### Map interaction and display
 
-- **LiDAR:** fresh hit points are displayed as a cyan point cloud.
-- **Radar:** fresh radar hits are shown in amber; the source mount-to-hit ray is retained when available.
-- **Ultrasonic:** nearby hits are shown in green with short source-to-hit proximity rays.
-- **Cameras:** geometric field-of-view wedges are drawn in blue. Vehicles with a current camera visibility source receive a separate vehicle tint. Sensor volumes remain visible but dimmed while their source is disabled; their presence does not start a scan.
-- **Freshness and bounds:** map snapshots only publish returns from enabled sensors whose source timestamp is no more than 1.6 s old. Snapshot caps are 180 LiDAR, 64 radar, 32 ultrasonic returns, and 40 geometric zones. These are display limits, not sensor scan-rate changes.
-- **Camera limitation:** the regular Drive camera model supplies geometric frustums and simulator-assisted visibility candidates. It does not supply RGB frames or semantic segmentation. The map must not label these overlays as image recognition.
+- **Mini-map:** remains a compact FSD-style forward-perspective view. It uses a budget of 650 polygons, 1,200 lines and 32 markers and does not triangulate the scanned surface.
+- **Large map:** opens full-screen from the mini-map. It uses a top-down view, drag-to-pan, wheel-to-zoom, a recenter control and Escape/close to return. Its per-draw budget is 8,000 polygons, 12,000 lines and 900 markers.
+- **Scanned detail:** only the large map reconstructs the nearby measured surface. It consumes up to 2,500 scan points from within 90 m of the vehicle, submits at most 1,800 faces in one draw, and keeps a client-side face cache capped at 16,000 faces. New data is merged by the session-map revision rather than by every UI poll.
+- **No sensor overlays:** LiDAR point clouds, radar/ultrasonic returns and sensor/camera coverage cones are not drawn on either map view. Sensor acquisition, object fusion and ADAS processing remain active according to their own settings; only the map visualization is removed.
+- **Persistent scan memory:** stopping scanning does not clear the session map. The cached world-space scan geometry remains available to the large map; only explicit map clearing or a level transition resets the corresponding memory.
+- **View-only lifecycle:** opening or closing the map does not automatically start or stop scanning. The map polls the current vehicle pose and map revisions independently of sensor activation.
 
-### Perspective defaults
+## 14. Map responsiveness and update cadence
 
-The default FSD-style camera uses 14 m height, 20 m follow distance and a 20 m look-ahead target. The road preview distance is a separate 120 m setting: it controls how much road is available to draw, not where the virtual camera aims. These defaults provide a low foreground ego-car view while preserving enough road depth to show upcoming bends.
+The map no longer performs a full draw on every animation frame. It marks the canvas dirty only when a new map snapshot arrives, the canvas is resized, or the user pans/zooms. The animation-frame loop then draws the changed view and stays idle between changes.
 
-All geometry and sensor overlays are projected from world coordinates around the live ego pose. The UI only draws cached snapshots; road file parsing, spline sampling, sensor acquisition and World Model fusion stay in Lua/backend paths.
+- **Snapshot cadence:** when road preload is complete, the map requests a new compact snapshot every 100 ms. While road objects are being loaded, polling is reduced to 260 ms for the mini-map and 220 ms for the large map so background parsing does not dominate the game loop.
+- **Incremental payloads:** the client sends the latest road and session-surface revisions. Unchanged road geometry and scan points are not serialized repeatedly; the browser/UI retains its last copy until a revision changes.
+- **World Model reuse:** `getMapSnapshot` reads the GE-owned World Model once and passes that same read-only model to the perception snapshot builder. It does not create two full deep copies per map request. The World Model itself is rebuilt only when sensor/tracking data marks it dirty, with a 0.20 s update interval.
+- **Road sampling:** the map snapshot calls the road-geometry builder once. During background level preload it reuses the previous geometry cache for up to 1.5 s while the road cache revision changes, then performs a complete rebuild when loading is finished.
+- **Surface limits:** the mini-map omits the surface reconstruction pass entirely. The large map uses the nearby-point, face submission and persistent-face limits described in section 13.
+- **Validation status:** these limits and update paths are statically checked. They do not establish a measured FPS improvement. Final performance still needs an in-game comparison using the same vehicle, level, weather, traffic density and scan settings.
+
