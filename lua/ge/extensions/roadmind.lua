@@ -308,7 +308,8 @@ M.performanceProfiler = (function(ownerState, defaults)
     "vehicle_job", "vehicle_lidar", "vehicle_radar", "vehicle_ultrasonic",
     "vehicle_pose", "vehicle_detection_zones",
     "sensor_frame", "sensor_lidar", "sensor_radar", "sensor_ultrasonic",
-    "vehicle_tracking", "world_model", "planner", "road_graph", "adas",
+    "vehicle_tracking", "traffic_registry", "traffic_filter", "traffic_occlusion",
+    "world_model", "planner", "road_graph", "adas",
     "visualization", "debug_draw", "route_safety", "ge_update"
   }
   local clock = type(os) == "table" and type(os.clock) == "function" and os.clock or nil
@@ -7558,6 +7559,7 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
     return candidates
   end
 
+  local filterStarted = M.performanceProfiler.start()
   local playerVelocity = safeCall(state.activeVehicle, "getVelocity")
   for i = 1, #state.vehicleRegistry do
     local target = state.vehicleRegistry[i]
@@ -7707,7 +7709,9 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       end
     end
   end
+  M.performanceProfiler.stop("traffic_filter", filterStarted)
 
+  local occlusionStarted = M.performanceProfiler.start()
   local checked = 0
   local count = #candidates
   local cursor = count > 0 and ((state.occlusionCursor - 1) % count) + 1 or 1
@@ -7799,6 +7803,7 @@ state._roadmindHelpers.detectNearbyVehicles = function(data)
       state.occlusionCache[key] = nil
     end
   end
+  M.performanceProfiler.stop("traffic_occlusion", occlusionStarted)
 
   state.vehicleCandidates = candidates
   state.occlusionRaycastsLastCycle = checked
@@ -7851,7 +7856,9 @@ state._roadmindHelpers.updateVehicleDetection = function(dt)
   -- Keep advancing a single registry build in small pieces on consecutive GE
   -- frames. Detection below continues against the previous complete snapshot.
   if state.vehicleRegistryWork then
+    local registryStarted = M.performanceProfiler.start()
     state._roadmindHelpers.stepVehicleRegistryRefresh(VEHICLE_REGISTRY_BATCH_SIZE)
+    M.performanceProfiler.stop("traffic_registry", registryStarted)
   end
 
   state.vehicleDetectionTimer = state.vehicleDetectionTimer + elapsed
