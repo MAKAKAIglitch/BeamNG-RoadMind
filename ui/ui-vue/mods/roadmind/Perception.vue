@@ -57,6 +57,7 @@
       </div>
       <div class="guidance" :class="guidance.status">
         <strong>{{ guidanceLabel }}</strong>
+        <span v-if="guidance.turnDirection">{{ guidance.turnDirection === 'left' ? t("leftTurn") : t("rightTurn") }}</span>
         <span v-if="guidance.targetSpeedMps">{{ t("targetSpeed") }}: {{ Math.round(guidance.targetSpeedMps * 3.6) }} km/h</span>
         <span v-if="guidance.distanceToBrakePointM !== undefined">{{ t("brakeIn") }}: {{ guidance.distanceToBrakePointM.toFixed(0) }} m</span>
         <span v-if="snapshot.motion.warning">{{ t("warning") }}: {{ snapshot.motion.warning.toUpperCase() }}</span>
@@ -135,6 +136,8 @@ const EN = {
   guidancePrepare: "SLOW FOR CURVE",
   guidanceClear: "ROAD PREVIEW CLEAR",
   guidanceWaiting: "ROAD DATA UNAVAILABLE",
+  leftTurn: "LEFT TURN",
+  rightTurn: "RIGHT TURN",
   reconnecting: "RoadMind connection unavailable · keeping the last valid view",
   visible: "VISIBLE",
   predicted: "PREDICTED",
@@ -171,6 +174,8 @@ const RU = {
   guidancePrepare: "СНИЗИТЬ СКОРОСТЬ К ПОВОРОТУ",
   guidanceClear: "ТРАЕКТОРИЯ СВОБОДНА",
   guidanceWaiting: "НЕТ ДАННЫХ О ДОРОГЕ",
+  leftTurn: "ПОВОРОТ НАЛЕВО",
+  rightTurn: "ПОВОРОТ НАПРАВО",
   reconnecting: "Нет связи с RoadMind · показаны последние данные",
   visible: "ВИДЕН",
   predicted: "ПРОГНОЗ",
