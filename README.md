@@ -33,6 +33,7 @@ Open **ESC → Mods → RoadMind** (BeamNG.drive 0.39+). The bilingual settings 
 - A tracked-object list showing RoadMind IDs, track state, estimated speed, relative speed, data age, confidence and sensor-zone sources.
 - Green/yellow oriented vehicle-box outlines for visible and not-yet-verified vehicle candidates.
 - A session-only accumulated LiDAR map with a 500–10,000 point limit, vehicle-surface returns included, a clear button and pause-safe display.
+- A 3D RoadMind Perception view that triangulates nearby LiDAR points into a bounded spatial mesh, with a rear-follow camera, elevated top view, NavGraph road surface, tracked vehicle geometry and route overlay. The mesh is display-only and does not feed sensor fusion or planning.
 - Optional critically damped inertia for eligible world-space LiDAR returns and route/planner overlays; vehicle-mounted geometry and tracked vehicle-surface points stay body-locked.
 - A live estimate of scheduled scene-raycast queries per second.
 - Optional adaptive sensor quality with a desired FPS setting, plus speed-adaptive scan intervals.
