@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — NavGraph road surface and lane geometry
+
+- Build connected road strips from the local BeamNG NavGraph using shared miter joins at degree-two nodes and filled surface patches at graph junctions.
+- Render each physical road edge once even when the NavGraph exposes both travel directions; use the connected corner geometry so asphalt edges do not split into separate rectangular pieces.
+- Derive road width from available NavGraph node-radius data; when it is absent, estimate total width from the recorded lane count at approximately 3.5 m per lane plus a 0.6 m total allowance, and retain a conservative fallback when both sources are missing.
+- Generate separators for all lanes across both travel directions, distinguish the opposing-flow centre divider, and join marking endpoints across bends.
+- Keep confirmed traffic trajectories as a lower-confidence fallback for lane locations only when directional NavGraph lane metadata is unavailable.
+
 ## Unreleased — solid graphite scanned-surface rendering
 
 - Render reconstructed scan coverage as a uniform dark graphite surface instead of mint/teal triangles.

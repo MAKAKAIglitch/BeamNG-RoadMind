@@ -134,3 +134,16 @@ The limits reduce worst-case rendering and cache growth, but they are not proof 
 ## 11. Scanned surface appearance
 
 The local surface reconstruction still uses triangles internally to connect measured static points, but the RoadMind Map must not expose that triangulation visually. Faces are filled with a uniform opaque graphite-grey tone (#343a40) and are drawn without polygon outlines or mesh-edge strokes. Edge-only geometry is not generated, cached or submitted for drawing. This makes scanned coverage read as a continuous reconstructed surface against the darker unknown-area grid, rather than a mint wireframe.
+
+
+## 12. NavGraph road surface and lane rendering
+
+Road and lane geometry are sourced from the cached local NavGraph (map.getMap()), the same navigation graph BeamNG uses for AI and traffic routing. RoadMind does not scan every DecalRoad node on every update and does not add sensor raycasts for map rendering.
+
+- **Width priority:** use the available NavGraph node-radius values for the road edge. If radius is absent but directional lane counts are present, estimate total road width as lane count × 3.5 m + 0.6 m and use half of that as the edge half-width. If neither source exists, use the conservative planner-width fallback. The widthSource field preserves which path was used; a lane-count estimate is not presented as an exact measured road width.
+- **Connected road surface:** build one strip per physical NavGraph edge, share mitered corner offsets across degree-two nodes, and add bounded surface patches at nodes with three or more road connections. Degenerate or very sharp joins fall back to the local segment normal to avoid long spikes.
+- **Lane separators:** use NavGraph forward/reverse lane counts to position separators across the entire road, including the centre divider on two-way roads. Precompute their world-space endpoints from the same joined corner geometry so markings continue through bends.
+- **Traffic fallback:** confirmed, direction-aligned traffic trajectories can infer provisional lane centres only where NavGraph lane metadata is missing. Their boundaries retain a visually distinct provisional style and are not promoted to authoritative metadata.
+- **Bounds:** the map continues to use the configured local radius, the 96-segment graph cap, bounded branch traversal, and existing polygon/line budgets. Surface and lane geometry are generated from the already-cached graph; no per-frame full-level graph rebuild is introduced.
+
+These are static geometry and source-selection checks. Road width estimates and junction appearance still require visual validation on several BeamNG levels, especially roads with missing radius/lane metadata, unusual lane widths, and complex intersections.
