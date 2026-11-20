@@ -198,16 +198,16 @@
         function makeProjection(ego, width, height, mapSettings) {
           mapSettings = mapSettings || {};
           var speed = clamp(Number(ego.speedMps) || 0, 0, 45);
-          var distance = clamp((Number(mapSettings.cameraDistanceM) || 10.5) + speed * 0.15, 8, 40);
-          var cameraHeight = clamp((Number(mapSettings.cameraHeightM) || 7.5) + speed * 0.05, 4, 18);
-          var lookAhead = clamp((Number(mapSettings.cameraLookAheadM) || 13) + speed * 0.25, 6, 45);
+          var distance = clamp((Number(mapSettings.cameraDistanceM) || 20) + speed * 0.12, 16, 40);
+          var cameraHeight = clamp((Number(mapSettings.cameraHeightM) || 14) + speed * 0.04, 10, 22);
+          var lookAhead = clamp((Number(mapSettings.cameraLookAheadM) || 20) + speed * 0.12, 12, 48);
           var camera = {x: 0, y: -distance, z: cameraHeight};
-          var target = {x: 0, y: lookAhead, z: -0.3};
+          var target = {x: 0, y: lookAhead, z: -0.4};
           var forward = normalize(sub(target, camera));
           var right = normalize(cross(forward, {x: 0, y: 0, z: 1}));
           var up = right && normalize(cross(right, forward));
           if (!forward || !right || !up) return null;
-          var focal = Math.min(width, height) * 1.22 * clamp(11.5 / distance, 0.62, 1.24);
+          var focal = Math.min(width, height) * 1.30 * clamp(22 / distance, 0.72, 1.22);
           return function (point) {
             var relative = sub(point, camera);
             var depth = dot(relative, forward);
@@ -454,6 +454,22 @@
             addLine(points, color, width, alpha, dash);
           }
 
+          // Split long polylines at the camera near-plane so a point behind the
+          // virtual camera cannot hide the entire lane or road edge.
+          function drawVisiblePolyline(points, color, width, alpha, dash) {
+            if (!points || points.length < 2) return;
+            var run = [];
+            for (var i = 0; i < points.length; i++) {
+              if (project(points[i])) {
+                run.push(points[i]);
+              } else {
+                if (run.length >= 2) addLine(run, color, width, alpha, dash);
+                run = [];
+              }
+            }
+            if (run.length >= 2) addLine(run, color, width, alpha, dash);
+          }
+
           // A restrained ground plane and reference grid establish depth without
           // inventing road markings or revealing hidden level geometry.
           addPolygon([
@@ -472,11 +488,80 @@
           var road = snapshotData.road || {};
           var laneGraph = snapshotData.laneGraph || {};
           var graphSegments = asArray(laneGraph.segments);
+          var decalRoads = asArray(snapshotData.decalRoads);
           var corridor = asArray(road.corridor).map(function (point) {
             return localPoint(point, ego);
           }).filter(Boolean);
 
-          if (graphSegments.length > 0) {
+          if (decalRoads.length > 0) {
+            // DecalRoad spline samples are world-anchored and already smoothed.
+            // Construct one continuous ribbon with width interpolated per sample.
+            for (var dr = 0; dr < decalRoads.length; dr++) {
+              var decalRoad = decalRoads[dr];
+              var roadSamples = asArray(decalRoad.points);
+              if (roadSamples.length < 2) continue;
+              var centers = [];
+              var leftEdge = [];
+              var rightEdge = [];
+              var halfWidths = [];
+
+              for (var rp = 0; rp < roadSamples.length; rp++) {
+                var sample = roadSamples[rp];
+                var center = localPoint(sample, ego);
+                if (!center) continue;
+                var previous = localPoint(roadSamples[Math.max(0, rp - 1)], ego);
+                var next = localPoint(roadSamples[Math.min(roadSamples.length - 1, rp + 1)], ego);
+                if (!previous || !next) continue;
+                var tx = next.x - previous.x;
+                var ty = next.y - previous.y;
+                var tangentLength = Math.sqrt(tx * tx + ty * ty);
+                if (tangentLength < 0.08) continue;
+                var nx = -ty / tangentLength;
+                var ny = tx / tangentLength;
+                var halfWidth = clamp((Number(sample.width) || 8) * 0.5, 1.1, 30);
+                centers.push(center);
+                halfWidths.push(halfWidth);
+                leftEdge.push({x: center.x + nx * halfWidth, y: center.y + ny * halfWidth, z: center.z - 0.08});
+                rightEdge.push({x: center.x - nx * halfWidth, y: center.y - ny * halfWidth, z: center.z - 0.08});
+              }
+
+              if (centers.length < 2) continue;
+              var roadFill = decalRoad.drivability !== undefined
+                && Number(decalRoad.drivability) <= 0 ? "#202a32" : "#2b3944";
+              for (var rs = 0; rs < centers.length - 1; rs++) {
+                addPolygon([
+                  leftEdge[rs], rightEdge[rs],
+                  rightEdge[rs + 1], leftEdge[rs + 1]
+                ], roadFill, 0.98);
+              }
+              drawVisiblePolyline(leftEdge, "#81909b", 0.95, 0.58);
+              drawVisiblePolyline(rightEdge, "#81909b", 0.95, 0.58);
+
+              var laneFractions = asArray(decalRoad.laneFractions);
+              for (var lf = 0; lf < laneFractions.length; lf++) {
+                var fraction = clamp(Number(laneFractions[lf]), -1, 1);
+                if (!isFinite(fraction)) continue;
+                var lanePath = [];
+                for (var lp = 0; lp < centers.length; lp++) {
+                  var dx = leftEdge[lp].x - centers[lp].x;
+                  var dy = leftEdge[lp].y - centers[lp].y;
+                  lanePath.push({
+                    x: centers[lp].x + dx * fraction,
+                    y: centers[lp].y + dy * fraction,
+                    z: centers[lp].z - 0.035
+                  });
+                }
+                var isDivider = decalRoad.centerDividerFraction !== null
+                  && decalRoad.centerDividerFraction !== undefined
+                  && Math.abs(fraction - Number(decalRoad.centerDividerFraction)) < 0.001;
+                drawVisiblePolyline(lanePath,
+                  isDivider ? "#e2c36d" : "#d7e0e6",
+                  isDivider ? 1.15 : 0.88,
+                  isDivider ? 0.86 : 0.72,
+                  isDivider ? null : [6, 8]);
+              }
+            }
+          } else if (graphSegments.length > 0) {
             // Fill graph junctions first; connected segment strips overlap them.
             var surfaceJunctions = asArray(laneGraph.surfaceJunctions);
             for (var gj = 0; gj < Math.min(surfaceJunctions.length, 48); gj++) {
