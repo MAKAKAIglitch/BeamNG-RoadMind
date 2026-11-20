@@ -5659,6 +5659,7 @@ state._roadmindHelpers.evaluatePlannerCandidate = function(candidate, footprint,
       - math.abs(candidate.targetOffset) * 1.5
       - maximumCurvature * 8.0
       - curvatureChange * 3.0
+      - (candidate.laneChangeCost or 0)
   end
 end
 
@@ -5787,31 +5788,166 @@ updateLocalTrajectoryPlanner = function()
     end
   end
 
+  -- Prefer lane records from the connected local graph. Candidate lane changes
+  -- are limited to an immediately adjacent lane and only considered when the
+  -- current-lane localization is explicitly reliable.
   local candidateOffsets = {}
   local laneModel = state.roadState.laneModel or {}
-  local legalLaneOffsets = laneModel.forwardLaneOffsets
-  if laneModel.status == "metadata" and type(legalLaneOffsets) == "table" and #legalLaneOffsets > 0 then
-    local sortedOffsets = {}
-    for i = 1, #legalLaneOffsets do sortedOffsets[#sortedOffsets + 1] = tonumber(legalLaneOffsets[i]) end
-    table.sort(sortedOffsets, function(a, b)
-      return math.abs(a - currentOffset) < math.abs(b - currentOffset)
-    end)
-    for i = 1, math.min(PLANNER_MAX_CANDIDATES, #sortedOffsets) do
-      candidateOffsets[#candidateOffsets + 1] = sortedOffsets[i]
+  local laneGraph = state.roadState.laneGraph or {}
+  local laneLocalization = state.roadState.laneLocalization or {}
+  local roadStartNode = tostring(state.roadState.segmentStartNode or "")
+  local roadEndNode = tostring(state.roadState.segmentEndNode or "")
+  local graphSegment = nil
+  for i = 1, #(laneGraph.segments or {}) do
+    local segment = laneGraph.segments[i]
+    if tostring(segment.from or "") == roadStartNode
+        and tostring(segment.to or "") == roadEndNode then
+      graphSegment = segment
+      break
     end
-  else
+  end
+
+  -- Lane offsets are defined relative to the directed NavGraph edge. Convert
+  -- them into the route's local right-vector frame before building candidates.
+  local laneOffsetSign = 1
+  local graphForward = asVec3(state.roadState.roadDirection)
+  if graphForward then
+    local flatGraphForward = vec3(graphForward.x, graphForward.y, 0)
+    if flatGraphForward:length() > 0.1
+        and flatGraphForward:normalized():dot(routeForward) < 0 then
+      laneOffsetSign = -1
+    end
+  end
+
+  local laneRecords = {}
+  local function addLaneRecord(laneId, laneIndex, laneOffset, laneWidth)
+    laneIndex = tonumber(laneIndex)
+    laneOffset = tonumber(laneOffset)
+    laneWidth = tonumber(laneWidth)
+    if laneIndex and laneOffset then
+      laneRecords[#laneRecords + 1] = {
+        id = laneId and tostring(laneId) or nil,
+        index = laneIndex,
+        offset = laneOffset * laneOffsetSign,
+        width = laneWidth
+      }
+    end
+  end
+
+  if graphSegment and type(graphSegment.lanes) == "table" then
+    for i = 1, #graphSegment.lanes do
+      local lane = graphSegment.lanes[i]
+      if type(lane) == "table" then
+        addLaneRecord(lane.id, lane.index, lane.centerOffset, lane.width)
+      end
+    end
+  end
+  if #laneRecords == 0 and laneModel.status == "metadata"
+      and type(laneModel.forwardLaneOffsets) == "table" then
+    for i = 1, #laneModel.forwardLaneOffsets do
+      addLaneRecord(
+        tostring(state.roadState.segmentStartNode or "") .. ">"
+          .. tostring(state.roadState.segmentEndNode or "") .. ":lane:" .. tostring(i),
+        i, laneModel.forwardLaneOffsets[i], laneModel.laneWidth
+      )
+    end
+  end
+
+  local currentLaneId = laneGraph.currentLaneId or laneLocalization.laneId
+  local currentLaneIndex = tonumber(laneLocalization.laneIndex)
+  local closestLane, closestLaneError = nil, math.huge
+  for i = 1, #laneRecords do
+    local lane = laneRecords[i]
+    local laneError = math.abs(lane.offset - currentOffset)
+    if lane.id and currentLaneId and lane.id == tostring(currentLaneId) then
+      currentLaneIndex = lane.index
+      closestLane, closestLaneError = lane, laneError
+      break
+    end
+    if laneError < closestLaneError then
+      closestLane, closestLaneError = lane, laneError
+    end
+  end
+
+  local lanePositionVerified = laneGraph.currentLaneStatus == "localized"
+    or laneLocalization.status == "localized"
+  if currentLaneIndex == nil and closestLane then
+    local nearestWidth = closestLane.width or tonumber(laneModel.laneWidth) or 3.5
+    if closestLaneError <= math.max(0.75, nearestWidth * 0.75) then
+      currentLaneIndex = closestLane.index
+      currentLaneId = closestLane.id
+    end
+  end
+
+  if currentLaneIndex ~= nil then
+    for i = 1, #laneRecords do
+      local lane = laneRecords[i]
+      local laneDelta = math.abs(lane.index - currentLaneIndex)
+      local isCurrentLane = laneDelta == 0
+      local isAdjacentLane = laneDelta == 1
+      if isCurrentLane or (lanePositionVerified and isAdjacentLane) then
+        local laneChange = not isCurrentLane
+        candidateOffsets[#candidateOffsets + 1] = {
+          offset = lane.offset,
+          laneId = lane.id,
+          laneIndex = lane.index,
+          maneuver = laneChange and "adjacent-lane-change" or "keep-lane",
+          laneChange = laneChange,
+          laneChangeLegality = laneChange and "unverified" or "not-applicable",
+          laneWidth = lane.width
+        }
+      end
+    end
+  elseif closestLane then
+    -- Without a reliable lane localization, retain only the nearest plausible
+    -- lane as a stay-in-lane preview; do not suggest a lane change.
+    candidateOffsets[#candidateOffsets + 1] = {
+      offset = closestLane.offset,
+      laneId = closestLane.id,
+      laneIndex = closestLane.index,
+      maneuver = "keep-lane-unlocalized",
+      laneChange = false,
+      laneChangeLegality = "not-applicable",
+      laneWidth = closestLane.width
+    }
+  end
+
+  table.sort(candidateOffsets, function(a, b)
+    local aDistance = math.abs(a.offset - currentOffset)
+    local bDistance = math.abs(b.offset - currentOffset)
+    if aDistance == bDistance then
+      return (a.laneIndex or math.huge) < (b.laneIndex or math.huge)
+    end
+    return aDistance < bDistance
+  end)
+
+  if #candidateOffsets == 0 then
+    -- Preserve the conservative corridor-offset fallback when NavGraph lane
+    -- metadata is absent or cannot be associated with the current segment.
     for i = 1, #PLANNER_CANDIDATE_OFFSETS do
-      candidateOffsets[#candidateOffsets + 1] = PLANNER_CANDIDATE_OFFSETS[i]
+      candidateOffsets[#candidateOffsets + 1] = {
+        offset = PLANNER_CANDIDATE_OFFSETS[i],
+        maneuver = "corridor-offset-preview",
+        laneChange = false,
+        laneChangeLegality = "unknown"
+      }
     end
   end
 
   local candidates, selectedIndex, bestScore = {}, nil, -math.huge
   local reasons = {obstacle = 0, vehicle = 0, road_edge = 0, turning_radius = 0}
   for candidateIndex = 1, math.min(PLANNER_MAX_CANDIDATES, #candidateOffsets) do
-    local targetOffset = candidateOffsets[candidateIndex]
+    local laneChoice = candidateOffsets[candidateIndex]
+    local targetOffset = laneChoice.offset
+    local laneChange = laneChoice.laneChange == true
     local candidate = {
       index = candidateIndex, targetOffset = targetOffset, safe = true, path = {},
-      minimumClearance = 12.0, minimumRoadMargin = math.huge, pathProgress = 0
+      minimumClearance = 12.0, minimumRoadMargin = math.huge, pathProgress = 0,
+      laneId = laneChoice.laneId, laneIndex = laneChoice.laneIndex,
+      maneuver = laneChoice.maneuver or "corridor-offset-preview",
+      laneChange = laneChange,
+      laneChangeLegality = laneChoice.laneChangeLegality or "unknown",
+      laneChangeCost = laneChange and 4.0 or 0.0
     }
     for sampleIndex = 1, #centerlineSamples do
       local sample = centerlineSamples[sampleIndex]
@@ -5858,6 +5994,13 @@ updateLocalTrajectoryPlanner = function()
         minimumClearance = round2(selected.minimumClearance),
         minimumRoadMargin = round2(selected.minimumRoadMargin),
         selectedOffset = round2(selected.targetOffset),
+        selectedLaneId = selected.laneId,
+        selectedLaneIndex = selected.laneIndex,
+        selectedManeuver = selected.maneuver,
+        selectedLaneChange = selected.laneChange == true,
+        selectedLaneChangeLegality = selected.laneChangeLegality,
+        laneLocalizationStatus = laneLocalization.status or laneGraph.currentLaneStatus or "unknown",
+        laneGraphStatus = laneGraph.status or "unavailable",
         routeProjectionDistance = round2(distanceToPath),
         sampleCount = #selected.path
       })
