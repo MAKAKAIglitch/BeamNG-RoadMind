@@ -35,6 +35,7 @@
         var cachedSurfacePoints = [];
         var cachedSurfacePointByKey = Object.create(null);
         var cachedSurfacePointBuckets = Object.create(null);
+        var cachedSurfaceEdgeKeys = Object.create(null);
         var cachedSurfaceFaces = [];
         var cachedSurfaceEdges = [];
         var cachedSurfaceRenderBuckets = Object.create(null);
@@ -616,6 +617,7 @@
             cachedSurfacePoints = [];
             cachedSurfacePointByKey = Object.create(null);
             cachedSurfacePointBuckets = Object.create(null);
+            cachedSurfaceEdgeKeys = Object.create(null);
             cachedSurfaceFaces = [];
             cachedSurfaceEdges = [];
             cachedSurfaceRenderBuckets = Object.create(null);
@@ -739,14 +741,16 @@
                   var edgeNeighbor = neighbors[ei];
                   var edgeStable = point.confidence >= 0.42 &&
                     edgeNeighbor.point.confidence >= 0.42 &&
-                    point.support >= 1 && edgeNeighbor.point.support >= 1;
+                    (point.support >= 1 || point.hits >= 2) &&
+                    (edgeNeighbor.point.support >= 1 || edgeNeighbor.point.hits >= 2);
                   if (edgeNeighbor.distance > 3.15 &&
                       (edgeNeighbor.distance > 4.55 || !edgeStable || usedLongLinks >= 3)) continue;
                   if (edgeNeighbor.distance > 3.15) usedLongLinks++;
                   var edgeLow = Math.min(pointIndex, edgeNeighbor.index);
                   var edgeHigh = Math.max(pointIndex, edgeNeighbor.index);
                   var edgeKey = edgeLow + ":" + edgeHigh;
-                  if (!cachedSurfaceEdges.some(function (edge) { return edge.key === edgeKey; })) {
+                  if (!cachedSurfaceEdgeKeys[edgeKey]) {
+                    cachedSurfaceEdgeKeys[edgeKey] = true;
                     var edgeItem = {
                       key: edgeKey, kind: "edge",
                       a: point, b: edgeNeighbor.point
@@ -778,8 +782,10 @@
                   var longestEdge = Math.max(first.distance, second.distance, neighborEdge);
                   var stableBridge = longestEdge <= 4.55 &&
                     point.confidence >= 0.48 && first.point.confidence >= 0.48 &&
-                    second.point.confidence >= 0.48 && point.support >= 1 &&
-                    first.point.support >= 1 && second.point.support >= 1;
+                    second.point.confidence >= 0.48 &&
+                    (point.support >= 1 || point.hits >= 2) &&
+                    (first.point.support >= 1 || first.point.hits >= 2) &&
+                    (second.point.support >= 1 || second.point.hits >= 2);
                   if (angleGap > Math.PI * 0.92 || neighborEdge < 0.18 ||
                       heightDifference > 0.68 || area2 < 0.055 || area2 > 9.5 ||
                       (longestEdge > 3.35 && !stableBridge) ||
