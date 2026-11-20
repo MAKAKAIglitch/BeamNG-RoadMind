@@ -246,8 +246,21 @@ function t(key) {
 }
 function callRoadMind(method, args = []) {
   if (!methods.has(method)) return Promise.reject(new Error("Unsupported RoadMind method: " + method))
-  const command = "(function() extensions.load('roadmind'); return extensions.roadmind."
-    + method + "(" + args.map(value => serialize(value)).join(", ") + ") end)()"
+  const serializedArgs = args.map(value => serialize(value)).join(", ")
+  const command = "(function() " +
+    "local ext = extensions and extensions.roadmind; " +
+    "if type(ext) ~= 'table' then " +
+      "local loaded = pcall(function() extensions.load('roadmind') end); " +
+      "if not loaded then return {ok=false,error='RoadMind extension load failed'} end; " +
+      "ext = extensions and extensions.roadmind; " +
+    "end; " +
+    "if type(ext) ~= 'table' then return {ok=false,error='RoadMind extension unavailable'} end; " +
+    "local fn = ext[" + JSON.stringify(method) + "]; " +
+    "if type(fn) ~= 'function' then return {ok=false,error='RoadMind method unavailable'} end; " +
+    "local ok, result = pcall(function() return fn(" + serializedArgs + ") end); " +
+    "if not ok then return {ok=false,error=tostring(result)} end; " +
+    "return result " +
+  "end)()"
   return runRaw(command)
 }
 function accept(result) {
