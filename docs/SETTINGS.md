@@ -66,3 +66,19 @@ The current codebase contains experimental route-pilot and ADAS controls. They a
 - Mark unsupported sensors unavailable rather than showing a working but inert control.
 - Preserve the source and freshness of sensor data when quality adapts.
 - Keep optional debug drawing independent from data acquisition.
+
+
+## 8. RoadMind Map view
+
+The in-game RoadMind Map has separate view controls stored in the same settings file as the sensor configuration:
+
+| Setting | Default | Range |
+|---|---:|---:|
+| Camera height | 7.5 m | 4–18 m |
+| Camera follow distance | 10.5 m | 8–32 m |
+| Camera look-ahead | 13 m | 6–40 m |
+| Circular map-memory radius | 500 m | 100–500 m |
+| Polygon budget | 3,000 | 500–8,000 |
+| Map render cadence | 30 FPS | 15–60 FPS |
+
+Changing a map-view option does not switch the Economy/Balanced/High sensor preset. The map render limit is independent of the sensor scan rates and whole-game FPS. The circular memory prunes data outside the selected radius; a separate hard cell cap still protects memory use.

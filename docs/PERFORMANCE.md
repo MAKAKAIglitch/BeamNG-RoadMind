@@ -116,3 +116,16 @@ Do not conceal sensor failure, remove critical near-field coverage without repor
 - [ ] Economy/Balanced/High query counts are recalculated and labelled as estimates.
 - [ ] Before/after performance is measured on repeatable scenarios.
 - [ ] Reduced quality is reflected in sensor freshness/coverage state.
+
+
+## 10. RoadMind Map circular memory and render budgets
+
+The static surface cache is world-anchored inside a configurable circular radius around the active player vehicle (default 500 m, configurable 100–500 m). The backend prunes out-of-radius cells after approximately 12 m of ego movement instead of deleting the entire map after a fixed driven distance. The existing hard cap on stored cells remains in place; the compact map snapshot is limited to 4,000 static surface points.
+
+The UI cache independently prunes points, edges and faces outside the selected circle. It rebuilds spatial indexes only after the player has moved about 25 m or the radius has changed, and caps cached surface points at 12,000. This prevents the UI cache from growing forever while preserving nearby mapped areas.
+
+Map drawing uses a configurable polygon budget (default 3,000; range 500–8,000), with separately bounded lines and markers. Map render cadence defaults to 30 FPS and can be adjusted from 15 to 60 FPS. This is a widget rendering limit only; it does not change game FPS, sensor sampling frequency, world-model fusion or route planning cadence.
+
+Camera height, follow distance and look-ahead are configurable from RoadMind settings. Missing vehicle pose yields a dark perspective grid rather than fabricated road geometry. The player's car marker is drawn above map layers to remain visible when the polygon budget is reached.
+
+The limits reduce worst-case rendering and cache growth, but they are not proof of an FPS improvement. Validate with repeatable in-game before/after measurements and inspect road detail at several polygon budgets.

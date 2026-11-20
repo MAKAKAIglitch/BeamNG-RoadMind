@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — RoadMind Map circular memory and lane-aware rendering
+
+- Replace the whole-map reset after 1 km of driving with a moving circular world-space cache (default radius 500 m); remove out-of-radius cells incrementally as the player moves.
+- Extend the local directed NavGraph neighbourhood up to the configured map-memory radius while retaining segment, hop and branch caps.
+- Infer provisional lane centres from repeated, confirmed and direction-aligned traffic tracks when NavGraph lane metadata is unavailable; preserve evidence counts and source confidence.
+- Render inferred lane centres and boundaries with a separate dashed style so estimated lanes remain distinguishable from authoritative NavGraph metadata.
+- Add RoadMind Map camera height, follow distance, look-ahead, map radius, polygon budget and render FPS settings.
+- Keep a dark perspective grid available when vehicle pose is missing; distinguish the road surface from the grid and pin the player's vehicle marker above the geometry layers.
+- Bound polygon, line, marker and surface-point work; remove a duplicate map geometry rendering pass.
+- Set the map widget render cadence to 30 FPS by default, configurable from 15 to 60 FPS.
+
+
 ## Unreleased — camera priority and ADAS safety fixes
 
 - Give camera-frustum vehicle observations priority over overlapping LiDAR/radar/ultrasonic vehicle zones; retain camera-only provenance when a target is inside a camera frustum.

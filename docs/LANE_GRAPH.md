@@ -20,6 +20,18 @@ Segments expose endpoints, width provenance, direction status and forward lane c
 
 Connections join incoming/outgoing lane centres sharing a NavGraph node and satisfying geometric distance and heading checks. They are tagged `geometric-candidate` and `legality=unverified`; they are not permission to turn, change lanes or overtake. Turn restrictions, lane arrows, markings and signal-to-lane assignment remain future work.
 
+## Traffic-trajectory lane inference
+
+When directed NavGraph lane metadata is absent, RoadMind can form a provisional lane estimate from repeated, confirmed World Model vehicle tracks on that directed segment:
+
+- Tracks must be fresh and confirmed, have a usable heading and speed, and align with the segment's direction.
+- The vehicle centre is projected onto the segment's lateral axis. Samples from opposite-direction traffic are rejected.
+- Samples are accumulated per segment for a bounded 60-second evidence window and grouped by lateral offset.
+- A lane candidate requires at least three samples. Evidence from two or more distinct tracked vehicles raises the result to traffic-inferred; a single-track result remains traffic-provisional.
+- Lane records retain the evidence source, confidence, sample count and number of distinct tracks. The map draws inferred boundaries and lane centres with a separate dashed amber style.
+
+NavGraph metadata always takes precedence. Traffic inference is an estimate of where vehicles travel, not proof of painted markings, legal lane boundaries, lane arrows or permitted manoeuvres. Junction links remain geometric candidates and do not authorize a turn or lane change. Inferred lanes are not used to promote uncertain road localization to a safety-verified state.
+
 ## Preview planner integration
 
 The preview planner consumes the lane records on the vehicle's current directed segment. It keeps the localized lane as the baseline and may evaluate only the immediately adjacent lane on either side when lane localization is explicitly reliable. When localization is uncertain, it evaluates only the nearest plausible lane and does not propose a lane change.
