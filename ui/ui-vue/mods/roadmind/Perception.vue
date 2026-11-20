@@ -266,8 +266,8 @@ const camera = computed(() => {
   if (mode.value === "top") {
     return { r: 0, f: -10, u: 32, targetR: 0, targetF: 20, targetU: 0, focal: 300, horizon: 280 }
   }
-  // Further behind the ego car, with enough elevation to show road depth.
-  return { r: 0, f: -17.5, u: 8.5, targetR: 0, targetF: 26, targetU: 0, focal: 330, horizon: 300 }
+  // Slightly farther back and above the ego car, while keeping it prominent.
+  return { r: 0, f: -10, u: 5, targetR: 0, targetF: 26, targetU: 0, focal: 330, horizon: 300 }
 })
 
 function projectLocal(point) {
