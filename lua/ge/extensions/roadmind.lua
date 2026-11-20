@@ -3338,7 +3338,13 @@ buildLidarRenderPoints = function(lidar)
   local matchedOld = {}
   local pointCount = 0
   local inertiaEnabled = (state.settings or DEFAULT_SETTINGS).visualizationInertiaEnabled ~= false
-  for i = 1, #lidar.rays do
+
+  -- drawLidar already displays at most MAX_DRAWN_LIDAR_RAYS evenly spaced
+  -- returns. Smooth/associate that exact same sample instead of processing
+  -- every hit again in a visual-only pass. Sensor data and World Model retain
+  -- every return; this only avoids duplicate display-side work.
+  local rayStride = math.max(1, math.ceil(#lidar.rays / MAX_LIDAR_RENDER_POINTS))
+  for i = 1, #lidar.rays, rayStride do
     local rawPoint = lidar.rays[i]
     local rayIndex = tonumber(rawPoint.rayIndex)
     local worldPoint = asVec3(rawPoint)
@@ -3379,6 +3385,7 @@ buildLidarRenderPoints = function(lidar)
       elseif previous then
         state._roadmindHelpers.pushLidarFadePoint(previous)
       end
+
       pointCount = pointCount + 1
       if pointCount <= MAX_LIDAR_RENDER_POINTS then
         nextPoints[rayIndex] = {
@@ -3397,15 +3404,16 @@ buildLidarRenderPoints = function(lidar)
       end
     end
   end
+
+  -- Previous points outside the current visual sample are no longer rendered.
+  -- Fade them directly instead of rescanning the full LiDAR return array for
+  -- every old point.
   for rayIndex, previous in pairs(oldPoints) do
     if not matchedOld[rayIndex] and not nextPoints[rayIndex] then
-      local replaced = false
-      for i = 1, #lidar.rays do
-        if tonumber(lidar.rays[i].rayIndex) == rayIndex then replaced = true break end
-      end
-      if not replaced then state._roadmindHelpers.pushLidarFadePoint(previous) end
+      state._roadmindHelpers.pushLidarFadePoint(previous)
     end
   end
+
   state.lidarRenderPoints = nextPoints
   local origin = asVec3(lidar.origin)
   state.lidarRenderOriginTarget = origin and vectorToPlainTable(origin) or nil
