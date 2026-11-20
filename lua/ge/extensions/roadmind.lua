@@ -5084,6 +5084,9 @@ state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleF
   state._roadmindHelpers.loadLevelRoadGeometry(false)
   local roads = state.levelRoadCache or {}
   if #roads == 0 then return {}, state.levelRoadCacheStatus or "unavailable" end
+  if state.levelRoadLoadActive == true and not state.mapRoadGeometryCache then
+    return {}, "loading"
+  end
 
   local radiusM = math.max(100, math.min(500,
     tonumber(state.settings and state.settings.mapRadiusM) or 500))
@@ -8467,7 +8470,7 @@ function M.getWorldModel()
   return state._roadmindHelpers.cloneWorldModelValue(state.worldModel)
 end
 
-function M.getPerceptionSnapshot()
+function M.getPerceptionSnapshot(worldModelOverride)
   local latest = state.latestData or {}
   local pose = latest.vehiclePose or latest.localizationVehiclePose
   local position = pose and asVec3(pose.position) or nil
@@ -8497,7 +8500,8 @@ function M.getPerceptionSnapshot()
     }
   end
 
-  local model = M.getWorldModel()
+  local model = type(worldModelOverride) == "table"
+    and worldModelOverride or M.getWorldModel()
   local targets = {}
   local tracks = model and model.targets or latest.tracks or {}
   for i = 1, math.min(#tracks, 48) do
@@ -8573,8 +8577,15 @@ end
 
 
 function M.getMapSnapshot(lastRoadRevision, lastSurfaceRevision, includeSurface)
-  local perception = M.getPerceptionSnapshot()
-  local worldModel = M.getWorldModel()
+  -- This method only reads the GE-owned world model. Copy the small fields
+  -- returned below instead of deep-cloning every observation on every UI poll.
+  local worldModel = state.worldModel
+  if not worldModel and buildWorldModel then
+    worldModel = buildWorldModel()
+    state.worldModel = worldModel
+  end
+  worldModel = worldModel or {targets = {}, obstacles = {}, staticGeometry = {}}
+  local perception = M.getPerceptionSnapshot(worldModel)
   local routeState = M.getRouteState()
   local vehicle = perception and perception.vehicle or nil
   local vehiclePosition = vehicle and asVec3(vehicle.position) or nil
