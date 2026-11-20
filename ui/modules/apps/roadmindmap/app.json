@@ -1,7 +1,7 @@
 {
   "name": "RoadMind Map",
   "author": "RoadMind",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sensor-grounded local 3D driving map.",
   "directive": "roadmindMap",
   "domElement": "<roadmind-map></roadmind-map>",
@@ -11,5 +11,8 @@
     "top": "24px",
     "right": "24px"
   },
-  "preserveAspectRatio": true
+  "preserveAspectRatio": true,
+  "types": [
+    "ui.apps.categories.vehicle_info"
+  ]
 }

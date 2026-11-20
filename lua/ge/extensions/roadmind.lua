@@ -2655,7 +2655,8 @@ function M.setMapEnabled(enabled)
     }
   end
 
-  local stopSensors = state.mapStartedSensors == true and not state.routePilotEnabled
+  -- The HUD widget is a view, not the owner of sensor lifecycle.
+  local stopSensors = false
   state.mapModeEnabled = false
   state.mapPlanningEnabled = false
   state.mapStartedSensors = false
@@ -6974,7 +6975,7 @@ function M.onUpdate(dt)
     local trackingStarted = M.performanceProfiler.start()
     state._roadmindHelpers.updateVehicleDetection(dt)
     M.performanceProfiler.stop("vehicle_tracking", trackingStarted)
-    if visualFrameFresh and not state.mapModeEnabled then
+    if visualFrameFresh then
       state._roadmindHelpers.updateLidarRenderPoints(dt)
       state._roadmindHelpers.updateDetectedVehicleRenderStates(dt)
     end
@@ -6995,20 +6996,19 @@ function M.onUpdate(dt)
   state._roadmindHelpers.updateADAS(dt)
   M.performanceProfiler.stop("adas", adasStarted)
 
-  -- The map owns its own compact UI renderer. Keep the legacy 3D sensor
-  -- diagnostics independent so opening the map does not draw sensor overlays
-  -- into the game world or spend time updating their display-only state.
-  if not state.mapModeEnabled then
-    local visualStarted = M.performanceProfiler.start()
-    state._roadmindHelpers.updateVisualizationRenderState(dt)
-    M.performanceProfiler.stop("visualization", visualStarted)
-
-    local drawStarted = M.performanceProfiler.start()
-    drawFrame()
-    M.performanceProfiler.stop("debug_draw", drawStarted)
-  end
+  -- Prepare smoothed sensor geometry outside the render-critical hook.
+  local visualStarted = M.performanceProfiler.start()
+  state._roadmindHelpers.updateVisualizationRenderState(dt)
+  M.performanceProfiler.stop("visualization", visualStarted)
   M.performanceProfiler.stop("ge_update", geStarted)
   M.performanceProfiler.advance(dt)
+end
+
+-- debugDrawer queues primitives for the next render frame. Submitting them from
+-- onPreRender keeps sensor dots visible during live Freeroam rendering.
+function M.onPreRender(dtReal, dtSim, dtRaw)
+  if not state.visualizationEnabled then return end
+  drawFrame()
 end
 
 function M.onClientStartMission()

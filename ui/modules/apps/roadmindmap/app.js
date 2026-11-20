@@ -5,8 +5,6 @@
     var template =
       '<div class="roadmind-map-app" aria-label="RoadMind Map">' +
         '<canvas class="roadmind-map-canvas"></canvas>' +
-        '<div class="roadmind-map-mark"><span class="roadmind-map-dot"></span>ROAD MIND</div>' +
-        '<div class="roadmind-map-wait">WAITING FOR ROAD DATA</div>' +
       '</div>';
 
     return {
@@ -16,7 +14,6 @@
       link: function (scope, element) {
         var root = element[0];
         var canvas = root.querySelector("canvas");
-        var waitLabel = root.querySelector(".roadmind-map-wait");
         var ctx = canvas && canvas.getContext("2d");
         var snapshot = null;
         var pollTimer = null;
@@ -29,6 +26,10 @@
         var lastWidth = 0;
         var lastHeight = 0;
         var pixelRatio = 1;
+        var extensionReady = false;
+        var extensionLoading = false;
+        var extensionWaiters = [];
+        var renderErrorReported = false;
 
         function lua(command, callback) {
           if (!window.bngApi || typeof window.bngApi.engineLua !== "function") {
@@ -44,24 +45,59 @@
           }
         }
 
-        // engineLua callbacks are wrapped as a single Lua expression by BeamNG.
-        // Keep extension initialization and the actual API call in separate requests:
-        // statement separators (;) are invalid inside onBNGAPICallback arguments.
-        function roadmindLua(command, callback) {
-          lua("extensions.roadmind or extensions.load('roadmind')", function () {
-            lua(command, callback);
+        // engineLua wraps callback values as a single Lua expression.
+        // Load the GE extension once and return snapshots as explicit JSON strings.
+        function ensureRoadMind(callback) {
+          if (extensionReady) {
+            callback();
+            return;
+          }
+          extensionWaiters.push(callback);
+          if (extensionLoading) return;
+          extensionLoading = true;
+          lua("extensions.load('roadmind')", function () {
+            extensionLoading = false;
+            extensionReady = true;
+            var waiters = extensionWaiters.slice();
+            extensionWaiters.length = 0;
+            waiters.forEach(function (waiter) { waiter(); });
           });
         }
 
+        function roadmindLua(command, callback) {
+          ensureRoadMind(function () {
+            if (!destroyed) lua(command, callback);
+          });
+        }
+
+        function decodeLuaResult(value) {
+          for (var i = 0; i < 5; i++) {
+            if (typeof value === "string") {
+              try { value = JSON.parse(value); } catch (error) { return null; }
+              continue;
+            }
+            if (value && typeof value === "object" &&
+                value.schemaVersion === undefined && value.result !== undefined) {
+              value = value.result;
+              continue;
+            }
+            break;
+          }
+          return value;
+        }
+
+        function asArray(value) {
+          if (Array.isArray(value)) return value;
+          if (!value || typeof value !== "object") return [];
+          var keys = Object.keys(value).filter(function (key) {
+            return /^[0-9]+$/.test(key);
+          }).sort(function (a, b) { return Number(a) - Number(b); });
+          return keys.map(function (key) { return value[key]; });
+        }
+
         function unwrap(value) {
-          if (typeof value === "string") {
-            try { value = JSON.parse(value); } catch (error) { return null; }
-          }
-          if (value && !value.schemaVersion && value.result !== undefined) value = value.result;
-          if (typeof value === "string") {
-            try { value = JSON.parse(value); } catch (error) { return null; }
-          }
-          return value && value.schemaVersion ? value : null;
+          value = decodeLuaResult(value);
+          return value && Number(value.schemaVersion) === 2 ? value : null;
         }
 
         function schedulePoll(delay) {
@@ -78,7 +114,7 @@
             schedulePoll(700);
           }, 1400);
           roadmindLua(
-            "extensions.roadmind.getMapSnapshot()",
+            "jsonEncode(extensions.roadmind.getMapSnapshot())",
             function (result) {
               if (destroyed) return;
               if (pollWatchdog) $timeout.cancel(pollWatchdog);
@@ -87,21 +123,29 @@
               if (next) {
                 snapshot = next;
                 lastSnapshotAt = Date.now();
-                if (waitLabel) waitLabel.style.display = "none";
-              } else if (!snapshot && waitLabel) {
-                waitLabel.style.display = "block";
               }
               scope.$evalAsync();
-              schedulePoll(350);
+              schedulePoll(300);
             }
           );
         }
 
         function setMapEnabled(enabled) {
           roadmindLua(
-            "extensions.roadmind.setMapEnabled(" +
-              (enabled ? "true" : "false") + ")"
+            "jsonEncode(extensions.roadmind.setMapEnabled(" +
+              (enabled ? "true" : "false") + "))"
           );
+        }
+
+        function enableMap() {
+          if (destroyed) return;
+          roadmindLua("jsonEncode(extensions.roadmind.setMapEnabled(true))", function (result) {
+            if (destroyed) return;
+            var status = decodeLuaResult(result);
+            if (status && status.ok === false && status.error !== "No active player vehicle") {
+              $timeout(enableMap, 1200);
+            }
+          });
         }
 
         function clamp(value, min, max) {
@@ -181,7 +225,7 @@
           if (!ctx || !canvas) return;
           var cssWidth = Math.max(1, canvas.clientWidth || root.clientWidth || 360);
           var cssHeight = Math.max(1, canvas.clientHeight || root.clientHeight || 260);
-          pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+          pixelRatio = 1;
           var bufferWidth = Math.round(cssWidth * pixelRatio);
           var bufferHeight = Math.round(cssHeight * pixelRatio);
           if (bufferWidth !== lastWidth || bufferHeight !== lastHeight) {
@@ -201,7 +245,6 @@
 
           var ego = snapshotData && snapshotData.vehicle;
           if (!ego || !ego.position || !ego.forward || !ego.right || !ego.up) {
-            if (waitLabel) waitLabel.style.display = "block";
             return;
           }
 
@@ -209,6 +252,7 @@
           if (!project) return;
           var polygons = [];
           var lines = [];
+          var markers = [];
 
           function addPolygon(points, fill, alpha, stroke) {
             var projected = [];
@@ -248,6 +292,16 @@
             });
           }
 
+          function addMarker(point, color, radius, alpha) {
+            var projected = project(point);
+            if (!projected) return;
+            markers.push({
+              x: projected.x, y: projected.y, depth: projected.depth,
+              color: color, radius: clamp(radius * 42 / projected.depth, 1.1, 3.8),
+              alpha: alpha === undefined ? 0.9 : alpha
+            });
+          }
+
           function addBox(center, length, width, height, yaw, color, alpha) {
             var c = Math.cos(yaw || 0);
             var s = Math.sin(yaw || 0);
@@ -283,30 +337,16 @@
 
           function addVehicle(position, dimensions, yaw, isPlayer, visualState) {
             if (!position) return;
-            var length = clamp(Number(dimensions && dimensions.length) || (isPlayer ? 4.6 : 4.4), 2.2, 15);
-            var width = clamp(Number(dimensions && dimensions.width) || (isPlayer ? 1.9 : 1.85), 1.0, 3.2);
-            var height = clamp(Number(dimensions && dimensions.height) || 1.5, 0.8, 4.0);
+            var length = clamp(Number(dimensions && dimensions.length) || (isPlayer ? 4.6 : 4.4), 2.2, 12);
+            var width = clamp(Number(dimensions && dimensions.width) || (isPlayer ? 1.9 : 1.85), 1.0, 3.0);
+            var height = clamp(Number(dimensions && dimensions.height) || 1.5, 0.8, 3.4);
             var base = {x: position.x, y: position.y, z: position.z};
-            var bodyColor = isPlayer ? "#27838a" : (visualState === "predicted" ? "#9b8250" : "#8197a7");
+            var bodyColor = isPlayer ? "#278b9c" : (visualState === "predicted" ? "#9b8250" : "#8197a7");
             var glassColor = isPlayer ? "#20414a" : "#344b59";
             addBox({x: base.x, y: base.y, z: base.z - height * 0.13},
               length * 0.94, width * 0.96, height * 0.34, yaw, bodyColor, isPlayer ? 1 : 0.96);
-            addBox({x: base.x, y: base.y + length * 0.23, z: base.z - height * 0.035},
-              length * 0.25, width * 0.91, height * 0.18, yaw, shade(bodyColor, 1.12), 1);
-            addBox({x: base.x, y: base.y - length * 0.015, z: base.z + height * 0.20},
-              length * 0.43, width * 0.68, height * 0.42, yaw, glassColor, isPlayer ? 0.98 : 0.88);
-            var wheelLength = clamp(length * 0.18, 0.48, 0.82);
-            var wheelWidth = clamp(width * 0.16, 0.24, 0.42);
-            var wheelHeight = clamp(height * 0.24, 0.28, 0.52);
-            [-1, 1].forEach(function (side) {
-              [-1, 1].forEach(function (axle) {
-                addBox({
-                  x: base.x + side * width * 0.43,
-                  y: base.y + axle * length * 0.29,
-                  z: base.z - height * 0.29
-                }, wheelLength, wheelWidth, wheelHeight, yaw, "#101820", 1);
-              });
-            });
+            addBox({x: base.x, y: base.y + length * 0.10, z: base.z + height * 0.17},
+              length * 0.43, width * 0.68, height * 0.34, yaw, glassColor, isPlayer ? 0.98 : 0.88);
           }
 
           function drawPolyline(points, color, width, alpha, dash) {
@@ -330,7 +370,7 @@
           }
 
           var road = snapshotData.road || {};
-          var corridor = (road.corridor || []).map(function (point) {
+          var corridor = asArray(road.corridor).map(function (point) {
             return localPoint(point, ego);
           }).filter(Boolean);
           var halfWidth = clamp(Number(road.roadHalfWidth) || 3.5, 2.2, 18);
@@ -377,13 +417,13 @@
             }
           }
 
-          var routeWorld = snapshotData.selectedTrajectory;
-          if (!routeWorld || routeWorld.length < 2) routeWorld = snapshotData.route || [];
-          var routeLocal = (routeWorld || []).map(function (point) {
+          var routeWorld = asArray(snapshotData.selectedTrajectory);
+          if (routeWorld.length < 2) routeWorld = asArray(snapshotData.route);
+          var routeLocal = routeWorld.map(function (point) {
             return localPoint(point, ego);
           }).filter(Boolean);
 
-          if (snapshotData.selectedTrajectory && snapshotData.selectedTrajectory.length >= 2) {
+          if (asArray(snapshotData.selectedTrajectory).length >= 2) {
             var leftSide = [];
             var rightSide = [];
             var halfVehicleWidth = clamp(Number(ego.dimensions && ego.dimensions.width) || 1.9, 1, 3.2) * 0.5 + 0.24;
@@ -405,51 +445,59 @@
           }
           drawPolyline(routeLocal, "#48a8ff", 2.5, 0.96);
 
-          // Fused, recent scene-raycast points are drawn as small spatial returns.
-          (snapshotData.geometry || []).forEach(function (item) {
-            var point = localPoint(item.position, ego);
-            if (!point || item.age > 2.5) return;
-            var marker = clamp(0.11 + (Number(item.observationCount) || 1) * 0.025, 0.11, 0.24);
-            addBox({x: point.x, y: point.y, z: point.z}, marker, marker, marker, 0,
-              "#829ba8", clamp(0.9 - Number(item.age || 0) * 0.18, 0.36, 0.88));
-          });
+          // Spatial returns are a bounded point cloud, not per-return 3D boxes.
+          var geometry = asArray(snapshotData.geometry);
+          for (var gi = 0; gi < Math.min(geometry.length, 120); gi++) {
+            var geometryItem = geometry[gi];
+            var geometryPoint = localPoint(geometryItem.position, ego);
+            var geometryAge = Number(geometryItem.age);
+            if (!geometryPoint || !isFinite(geometryAge) || geometryAge > 2.5) continue;
+            addMarker(geometryPoint, "#91aeba",
+              0.10 + (Number(geometryItem.observationCount) || 1) * 0.018,
+              clamp(0.92 - geometryAge * 0.18, 0.38, 0.9));
+          }
 
-          // Session geometry is retained only after repeated spatially stable LiDAR hits.
-          (snapshotData.staticGeometry || []).forEach(function (item) {
-            var point = localPoint(item.position, ego);
-            if (!point || Number(item.hitCount || 0) < 2) return;
-            var age = Number(item.dataAge) || 0;
-            var size = clamp(0.12 + Math.min(8, Number(item.hitCount) || 0) * 0.012, 0.12, 0.22);
-            addBox(point, size, size, size, 0, "#617d89", clamp(0.82 - age / 2400, 0.38, 0.82));
-          });
+          var staticGeometry = asArray(snapshotData.staticGeometry);
+          for (var si = 0; si < Math.min(staticGeometry.length, 140); si++) {
+            var staticItem = staticGeometry[si];
+            var staticPoint = localPoint(staticItem.position, ego);
+            if (!staticPoint || Number(staticItem.hitCount || 0) < 2) continue;
+            var staticAge = Number(staticItem.dataAge) || 0;
+            addMarker(staticPoint, "#718d9b",
+              0.12 + Math.min(8, Number(staticItem.hitCount) || 0) * 0.012,
+              clamp(0.82 - staticAge / 2400, 0.38, 0.82));
+          }
 
-          // Nearby level POIs and traffic signals are level/runtime metadata,
-          // never inferred from GPS or guessed from geometry.
-          (snapshotData.poi && snapshotData.poi.items || []).forEach(function (item) {
-            var point = localPoint(item.position, ego);
-            if (!point) return;
-            var color = item.kind === "fuel" ? "#b88b4b"
-              : item.kind === "charging" ? "#55a5a0"
-              : item.kind === "parking" ? "#7297c1" : "#8b83b5";
-            addBox({x: point.x, y: point.y, z: point.z + 0.45}, 0.72, 0.72, 0.34, 0, color, 0.9);
-          });
-          (snapshotData.signals && snapshotData.signals.items || []).forEach(function (signal) {
-            var point = localPoint(signal.position, ego);
-            if (!point) return;
-            var lamp = signal.color === "red" ? "#d94f54"
-              : signal.color === "amber" ? "#d5aa4d"
-              : signal.color === "green" ? "#50b88d" : "#75818a";
-            var signalAlpha = signal.relevantToCurrentSegment ? 0.98 : 0.55;
-            addBox({x: point.x, y: point.y, z: point.z + 1.7}, 0.26, 0.26, 2.8, 0, "#53616a", signalAlpha);
-            addBox({x: point.x, y: point.y, z: point.z + 3.15}, 0.72, 0.38, 0.9, 0, "#17212a", signalAlpha);
-            addBox({x: point.x, y: point.y, z: point.z + 3.18}, 0.27, 0.24, 0.25, 0, lamp, signal.live ? signalAlpha : 0.42);
-          });
+          var poiItems = asArray(snapshotData.poi && snapshotData.poi.items);
+          for (var poiIndex = 0; poiIndex < Math.min(poiItems.length, 16); poiIndex++) {
+            var poi = poiItems[poiIndex];
+            var poiPoint = localPoint(poi.position, ego);
+            if (!poiPoint) continue;
+            var poiColor = poi.kind === "fuel" ? "#d4a14f"
+              : poi.kind === "charging" ? "#55bba5"
+              : poi.kind === "parking" ? "#7eaae1" : "#9c91c9";
+            addMarker({x: poiPoint.x, y: poiPoint.y, z: poiPoint.z + 0.45}, poiColor, 0.25, 0.9);
+          }
+
+          var signalItems = asArray(snapshotData.signals && snapshotData.signals.items);
+          for (var signalIndex = 0; signalIndex < Math.min(signalItems.length, 10); signalIndex++) {
+            var signal = signalItems[signalIndex];
+            var signalPoint = localPoint(signal.position, ego);
+            if (!signalPoint) continue;
+            var signalColor = signal.color === "red" ? "#e05b62"
+              : signal.color === "amber" ? "#e2b65b"
+              : signal.color === "green" ? "#5bca98" : "#8b969e";
+            addMarker({x: signalPoint.x, y: signalPoint.y, z: signalPoint.z + 3.0},
+              signalColor, 0.32, signal.relevantToCurrentSegment ? 1 : 0.55);
+          }
 
           // Vehicle meshes are deliberately simple low-poly silhouettes, not OBB rectangles.
           addVehicle({x: 0, y: 0, z: 0}, ego.dimensions || {}, 0, true, "confirmed");
-          (snapshotData.vehicles || []).forEach(function (track) {
-            var age = Number(track.dataAge);
-            if (!track || !track.position || !isFinite(age) || age > 1.25) return;
+          var traffic = asArray(snapshotData.vehicles);
+          for (var vehicleIndex = 0; vehicleIndex < Math.min(traffic.length, 6); vehicleIndex++) {
+            var track = traffic[vehicleIndex];
+            var age = Number(track && track.dataAge);
+            if (!track || !track.position || !isFinite(age) || age > 1.25) continue;
             var point = localPoint(track.predictedPosition || track.position, ego);
             if (!point) return;
             var heading = track.orientation && track.orientation.forward;
@@ -462,9 +510,11 @@
               };
               yaw = Math.atan2(localHeading.x, localHeading.y);
             }
-            addVehicle(point, track.dimensions || {}, yaw, false,
-              track.status === "confirmed" && age < 0.6 ? "confirmed" : "predicted");
-          });
+            if (point.y > -30 && point.y < 120 && Math.abs(point.x) < 50) {
+              addVehicle(point, track.dimensions || {}, yaw, false,
+                track.status === "confirmed" && age < 0.6 ? "confirmed" : "predicted");
+            }
+          }
 
           polygons.sort(function (a, b) { return b.depth - a.depth; });
           for (var pi = 0; pi < polygons.length; pi++) {
@@ -502,6 +552,15 @@
             ctx.stroke();
           }
           ctx.setLineDash([]);
+          markers.sort(function (a, b) { return b.depth - a.depth; });
+          for (var mi = 0; mi < markers.length; mi++) {
+            var marker = markers[mi];
+            ctx.globalAlpha = marker.alpha;
+            ctx.fillStyle = marker.color;
+            ctx.beginPath();
+            ctx.arc(marker.x, marker.y, marker.radius, 0, Math.PI * 2);
+            ctx.fill();
+          }
           ctx.globalAlpha = 1;
 
           // A small forward glow keeps the map readable without adding telemetry panels.
@@ -512,24 +571,26 @@
           ctx.fillStyle = glow;
           ctx.fillRect(0, 0, cssWidth, cssHeight);
 
-          if (waitLabel) {
-            var ageMs = Date.now() - lastSnapshotAt;
-            waitLabel.style.display = ageMs > 2500 ? "block" : "none";
-            waitLabel.textContent = ageMs > 2500 ? "WAITING FOR ROAD DATA" : "";
-          }
         }
 
         function frame(timestamp) {
           if (destroyed) return;
-          if (!lastRenderedAt || timestamp - lastRenderedAt >= 33) {
+          if (!lastRenderedAt || timestamp - lastRenderedAt >= 83) {
             lastRenderedAt = timestamp;
-            draw(snapshot);
+            try {
+              draw(snapshot);
+              renderErrorReported = false;
+            } catch (error) {
+              if (!renderErrorReported && window.console && window.console.error) {
+                window.console.error("RoadMind Map render error:", error);
+                renderErrorReported = true;
+              }
+            }
           }
           rafId = window.requestAnimationFrame(frame);
         }
 
-        setMapEnabled(true);
-        schedulePoll(250);
+        enableMap();
         rafId = window.requestAnimationFrame(frame);
 
         scope.$on("$destroy", function () {
@@ -537,7 +598,7 @@
           if (pollTimer) $timeout.cancel(pollTimer);
           if (pollWatchdog) $timeout.cancel(pollWatchdog);
           if (rafId) window.cancelAnimationFrame(rafId);
-          setMapEnabled(false);
+          if (extensionReady) lua("jsonEncode(extensions.roadmind.setMapEnabled(false))");
         });
       }
     };
