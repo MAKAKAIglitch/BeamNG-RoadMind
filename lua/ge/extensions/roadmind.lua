@@ -73,15 +73,20 @@ local MAX_PERSISTENT_LIDAR_POINTS = 10000
 local MIN_PERSISTENT_LIDAR_POINTS = 500
 local DEFAULT_PERSISTENT_LIDAR_POINTS = 5000
 local PERSISTENT_POINT_CELL_SIZE = 0.35
-local MAX_LIDAR_RENDER_POINTS = 99
-local MAX_LIDAR_FADE_POINTS = 198
+-- These are debugDrawer presentation limits only. Sensor measurements and
+-- World Model inputs keep their full configured ray/observation budgets.
+local MAX_LIDAR_RENDER_POINTS = 32
+local MAX_LIDAR_FADE_POINTS = 32
+local MAX_DRAWN_LIDAR_RAYS = 32
+local MAX_PERSISTENT_LIDAR_DRAW_POINTS = 128
+local VEHICLE_RENDER_POSE_UPDATE_INTERVAL = 0.10
 local LIDAR_RENDER_SMOOTHING_SECONDS = 0.18
 local LIDAR_POINT_FADE_SECONDS = 0.40
 local LIDAR_RENDER_POINT_MAX_AGE = 2.25
 local LIDAR_STATIC_MATCH_DISTANCE = 0.75
 local LIDAR_OBJECT_MATCH_DISTANCE = 8.0
 local LIDAR_TRACK_LOCAL_MATCH_DISTANCE = 1.75
-local MAX_RENDERED_VEHICLE_BOXES = 64
+local MAX_RENDERED_VEHICLE_BOXES = 8
 local VEHICLE_BOX_CORNER_SIGNS = {
   {-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
   {-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}
@@ -230,6 +235,7 @@ local state = {
   lidarRenderOriginVelocity = nil,
   lidarRenderScanTimestamp = 0,
   vehicleRenderStates = {},
+  vehicleRenderPoseTimer = 0,
   visualizationRenderFrame = nil,
   visualizationRenderOverlays = nil,
   visualizationVectorStates = {},
@@ -1005,6 +1011,7 @@ state._roadmindHelpers.resetTrackingState = function(resetClock)
   state.lidarTrackGrid = {}
   state.trackCount = 0
   state.vehicleRenderStates = {}
+  state.vehicleRenderPoseTimer = 0
   state.worldModel = nil
   state.worldModelDirty = true
   state.worldModelUpdateTimer = 0
@@ -1365,6 +1372,7 @@ state._roadmindHelpers.resetFrame = function()
   state.worldModelDirty = true
   state.worldModelUpdateTimer = 0
   state.visualizationRenderFrame = nil
+  state.vehicleRenderPoseTimer = 0
   state.visualizationRenderOverlays = nil
   state.visualizationVectorStates = {}
   state.visualizationRenderClock = 0
@@ -1695,7 +1703,8 @@ local function drawLidar(drawer, lidar, hoverCandidates)
   local beamColor = ColorF(0.10, 0.76, 1.0, 0.72)
   drawSphere(drawer, origin, 0.075, beamColor)
   addSensorHoverPoint(hoverCandidates, origin, "lidar", "Forward LiDAR", 0.15)
-  for i = 1, #lidar.rays do
+  local rayStride = math.max(1, math.ceil(#lidar.rays / MAX_DRAWN_LIDAR_RAYS))
+  for i = 1, #lidar.rays, rayStride do
     local ray = lidar.rays[i]
     if ray.hit == true then
       local renderPoint = state.lidarRenderPoints[tonumber(ray.rayIndex)]
@@ -1802,7 +1811,9 @@ local function drawPersistentLidarCloud(drawer)
     persistentLidarCloudColor = ColorF(0.95, 0.72, 0.20, 0.82)
   end
   local color = persistentLidarCloudColor
-  for i = 1, (state.lidarPointCount or #state.lidarPointCloud) do
+  local pointCount = state.lidarPointCount or #state.lidarPointCloud
+  local pointStride = math.max(1, math.ceil(pointCount / MAX_PERSISTENT_LIDAR_DRAW_POINTS))
+  for i = 1, pointCount, pointStride do
     local point = state.lidarPointCloud[i]
     if point then
       -- Persistent cloud points never move after insertion, so keep their
@@ -8308,7 +8319,13 @@ function M.onUpdate(dt)
     end
     if visualFrameFresh then
       state._roadmindHelpers.updateLidarRenderPoints(dt)
-      state._roadmindHelpers.updateDetectedVehicleRenderStates(dt)
+      state.vehicleRenderPoseTimer = (state.vehicleRenderPoseTimer or 0) + dt
+      if state.vehicleRenderPoseTimer >= VEHICLE_RENDER_POSE_UPDATE_INTERVAL then
+        state.vehicleRenderPoseTimer = state.vehicleRenderPoseTimer % VEHICLE_RENDER_POSE_UPDATE_INTERVAL
+        state._roadmindHelpers.updateDetectedVehicleRenderStates(dt)
+      end
+    else
+      state.vehicleRenderPoseTimer = 0
     end
     if state.mapPlanningEnabled and visualFrameFresh then
       local mapPlannerStarted = M.performanceProfiler.start()
