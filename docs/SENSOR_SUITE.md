@@ -77,6 +77,8 @@ The renderer keeps a separate point state:
 
 The optional accumulated scan map stores every accepted world-space LiDAR hit, including vehicle surfaces. Moving vehicles therefore leave a spatial scan trail in the map; it is not a live deforming mesh. The render layer separately smooths moving returns and vehicle OBB outlines. The shared display filter also smooths every other moving overlay while keeping the accumulated LiDAR map fixed in world coordinates. This visual layer performs no raycasts and never feeds interpolated coordinates back into raw sensor measurements, World Model fusion or safety/planning.
 
+The RoadMind Perception panel consumes a separate bounded point-cloud snapshot for its 3D map. The GE API returns up to 1,400 nearby world-space points, using the accumulated map when persistence is enabled and the latest raw scan as a fallback. The Vue view spatially samples at most 420 points and builds a Delaunay triangle mesh in vehicle-local ground coordinates. Faces with long edges, large height differences or degenerate area are discarded to reduce bridges across empty space. Camera projection, mesh triangles and OBB outlines are display-only; they do not create new sensor observations, raycasts or planner inputs.
+
 ## LiDAR
 
 The Vehicle Lua scheduler spreads LiDAR, radar, ultrasonic, pose and detection-zone work over successive graphics frames, with at most one due job executed per frame. Vehicle speed optionally changes scan intervals: 1.5× slower below 5 m/s and 0.75× faster at or above 25 m/s.
