@@ -108,6 +108,9 @@ local VEHICLE_DETECTION_INTERVAL = 0.15
 local VEHICLE_SLOW_UPDATE_INTERVAL = 0.30
 local VEHICLE_FAST_UPDATE_INTERVAL = 0.10
 local MAX_REGISTRY_VEHICLES = 256
+-- Spread expensive vehicle pose/OBB snapshots across several GE frames.
+-- The live registry is swapped only after the complete snapshot is ready.
+local VEHICLE_REGISTRY_BATCH_SIZE = 64
 local MAX_OCCLUSION_CHECKS_PER_CYCLE = 8
 local OCCLUSION_CACHE_MAX_AGE = 0.75
 local CAMERA_OCCLUSION_CACHE_MAX_AGE = 0.36
@@ -206,6 +209,9 @@ local state = {
   vehicleRegistry = {},
   vehicleRegistryById = {},
   vehicleBoundsCacheById = {},
+  vehicleRegistryWork = nil,
+  vehicleRegistryBuildBuffer = nil,
+  vehicleRegistryBuildById = nil,
   vehicleRegistrySnapshotValid = false,
   vehicleRegistryTimestamp = nil,
   vehicleIteratorContext = {},
@@ -1027,6 +1033,7 @@ state._roadmindHelpers.clearPersistentLidarPoints = function()
 end
 
 state._roadmindHelpers.resetTrackingState = function(resetClock)
+  state.vehicleRegistryWork = nil
   state.tracks = {}
   state.tracksBySourceId = {}
   state.lidarTrackGrid = {}
@@ -7204,57 +7211,42 @@ updateLocalTrajectoryPlanner = function()
       sampleCount = #centerlineSamples
     })
 end
-state._roadmindHelpers.refreshVehicleRegistry = function()
-  -- Reuse the registry tables across updates. The previous snapshot is only
-  -- consumed synchronously by this extension, so clearing in place avoids
-  -- allocating two new tables for every traffic refresh.
-  local registry = state.vehicleRegistry or {}
+state._roadmindHelpers.beginVehicleRegistryRefresh = function()
+  if state.vehicleRegistryWork then return true end
+
+  -- Build into the spare buffers while readers continue using the last
+  -- complete registry snapshot. This avoids exposing partially scanned traffic.
+  local registry = state.vehicleRegistryBuildBuffer or {}
   for i = #registry, 1, -1 do registry[i] = nil end
-  local registryById = state.vehicleRegistryById or {}
+  local registryById = state.vehicleRegistryBuildById or {}
   for key in pairs(registryById) do registryById[key] = nil end
 
-  local examined = 0
-  local truncated = false
-  local iteratorAvailable = false
+  local work = {
+    registry = registry,
+    registryById = registryById,
+    examined = 0,
+    truncated = false,
+    complete = false,
+    failed = false,
+    mode = nil,
+    control = nil,
+    index = 1
+  }
 
-  local function addVehicle(vehicleId, vehicle)
-    examined = examined + 1
-    if examined > MAX_REGISTRY_VEHICLES * 4 then
-      truncated = true
-      return false
-    end
-
-    vehicleId = vehicleId or getVehicleId(vehicle)
-    if vehicleId and tostring(vehicleId) ~= tostring(state.activeVehicleId)
-        and safeCall(vehicle, "isDeleted") ~= true
-        and safeCall(vehicle, "isDestroyed") ~= true then
-      local entry = state._roadmindHelpers.snapshotVehicleBounds(vehicle, vehicleId)
-      if entry then
-        registry[#registry + 1] = entry
-        if #registry >= MAX_REGISTRY_VEHICLES then
-          truncated = true
-          return false
-        end
-      end
-    end
-    return true
-  end
-
-  -- BeamNG's iterator reuses the engine vehicle cache and avoids creating a
-  -- temporary list/table for every registry refresh.
+  -- BeamNG's iterator avoids allocating a temporary all-vehicles list. Save
+  -- its generic-for control value so the iterator can be resumed next frame.
   if type(vehiclesIterator) == "function" then
     local okIterator, iterator, context = pcall(vehiclesIterator, state.vehicleIteratorContext)
     if okIterator and type(iterator) == "function" then
-      state.vehicleIteratorContext = context or state.vehicleIteratorContext
-      iteratorAvailable = true
-      for vehicleId, vehicle in iterator, state.vehicleIteratorContext do
-        if not addVehicle(vehicleId, vehicle) then break end
-      end
+      work.mode = "iterator"
+      work.iterator = iterator
+      work.context = context or state.vehicleIteratorContext
+      state.vehicleIteratorContext = work.context
     end
   end
 
-  -- Compatibility paths for older/custom game environments.
-  if not iteratorAvailable then
+  -- Compatibility paths for older/custom environments.
+  if not work.mode then
     local vehicles = nil
     if type(getAllVehicles) == "function" then
       local ok, result = pcall(getAllVehicles)
@@ -7262,54 +7254,155 @@ state._roadmindHelpers.refreshVehicleRegistry = function()
     end
 
     if type(vehicles) == "table" then
-      for i = 1, #vehicles do
-        if not addVehicle(nil, vehicles[i]) then break end
-      end
-      iteratorAvailable = true
+      work.mode = "array"
+      work.collection = vehicles
+      work.total = #vehicles
     elseif be and type(be.getObjectCount) == "function"
         and type(be.getObject) == "function" then
       local okCount, count = pcall(be.getObjectCount, be)
       if okCount and type(count) == "number" then
-        iteratorAvailable = true
-        for index = 0, math.min(count - 1, MAX_REGISTRY_VEHICLES * 2) do
-          local okObject, vehicle = pcall(be.getObject, be, index)
-          if okObject and vehicle and not addVehicle(nil, vehicle) then
-            truncated = true
-            break
-          end
-        end
+        work.mode = "be"
+        work.objectCount = math.min(math.max(0, count), MAX_REGISTRY_VEHICLES * 2)
+        work.index = 0
       end
     end
   end
 
-  if not iteratorAvailable then
-    state.vehicleRegistry = registry
-    state.vehicleRegistryById = registryById
+  if not work.mode then
+    work.failed = true
+    work.complete = true
+  end
+
+  state.vehicleRegistryWork = work
+  return true
+end
+
+state._roadmindHelpers.stepVehicleRegistryRefresh = function(maxItems)
+  local work = state.vehicleRegistryWork
+  if not work then return false, false end
+
+  local budget = math.max(1, math.floor(tonumber(maxItems) or VEHICLE_REGISTRY_BATCH_SIZE))
+  local processed = 0
+
+  local function addVehicle(vehicleId, vehicle)
+    work.examined = work.examined + 1
+    if work.examined > MAX_REGISTRY_VEHICLES * 4 then
+      work.truncated = true
+      work.complete = true
+      return false
+    end
+
+    if vehicle then
+      vehicleId = vehicleId or getVehicleId(vehicle)
+      if vehicleId and tostring(vehicleId) ~= tostring(state.activeVehicleId)
+          and safeCall(vehicle, "isDeleted") ~= true
+          and safeCall(vehicle, "isDestroyed") ~= true then
+        local entry = state._roadmindHelpers.snapshotVehicleBounds(vehicle, vehicleId)
+        if entry then
+          work.registry[#work.registry + 1] = entry
+          if #work.registry >= MAX_REGISTRY_VEHICLES then
+            work.truncated = true
+            work.complete = true
+            return false
+          end
+        end
+      end
+    end
+    return true
+  end
+
+  if work.mode == "iterator" then
+    while processed < budget and not work.complete do
+      local vehicleId, vehicle = work.iterator(work.context, work.control)
+      if vehicleId == nil then
+        work.complete = true
+        break
+      end
+      work.control = vehicleId
+      processed = processed + 1
+      addVehicle(vehicleId, vehicle)
+    end
+  elseif work.mode == "array" then
+    while processed < budget and not work.complete do
+      if work.index > work.total then
+        work.complete = true
+        break
+      end
+      local vehicle = work.collection[work.index]
+      work.index = work.index + 1
+      processed = processed + 1
+      addVehicle(nil, vehicle)
+    end
+  elseif work.mode == "be" then
+    while processed < budget and not work.complete do
+      if work.index >= work.objectCount then
+        work.complete = true
+        break
+      end
+      local okObject, vehicle = pcall(be.getObject, be, work.index)
+      work.index = work.index + 1
+      processed = processed + 1
+      if okObject and vehicle then
+        addVehicle(nil, vehicle)
+      end
+    end
+  else
+    work.failed = true
+    work.complete = true
+  end
+
+  if not work.complete then return false, false end
+
+  if work.failed then
+    -- Preserve the old failure semantics: mark the registry unavailable and
+    -- clear the visible snapshot rather than presenting stale traffic as fresh.
+    local oldRegistry = state.vehicleRegistry or {}
+    for i = #oldRegistry, 1, -1 do oldRegistry[i] = nil end
+    local oldById = state.vehicleRegistryById or {}
+    for key in pairs(oldById) do oldById[key] = nil end
+    state.vehicleRegistry = oldRegistry
+    state.vehicleRegistryById = oldById
     state.vehicleRegistrySnapshotValid = false
     state.vehicleRegistryTimestamp = nil
     state.vehicleRegistryTruncated = false
     state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
-    return false
+    state.vehicleRegistryBuildBuffer = work.registry
+    state.vehicleRegistryBuildById = work.registryById
+    state.vehicleRegistryWork = nil
+    return true, false
   end
 
-  for i = 1, #registry do
-    registryById[tostring(registry[i].id)] = true
+  for i = 1, #work.registry do
+    work.registryById[tostring(work.registry[i].id)] = true
   end
 
-  -- Drop cached geometry for vehicles that left the live registry.
+  -- Drop cached OBB geometry only after the complete replacement snapshot
+  -- exists, so an in-progress scan cannot evict objects still in the live set.
   for cacheKey in pairs(state.vehicleBoundsCacheById) do
-    if not registryById[cacheKey] then
+    if not work.registryById[cacheKey] then
       state.vehicleBoundsCacheById[cacheKey] = nil
     end
   end
 
-  state.vehicleRegistry = registry
-  state.vehicleRegistryById = registryById
+  local previousRegistry = state.vehicleRegistry or {}
+  local previousRegistryById = state.vehicleRegistryById or {}
+  state.vehicleRegistry = work.registry
+  state.vehicleRegistryById = work.registryById
+  state.vehicleRegistryBuildBuffer = previousRegistry
+  state.vehicleRegistryBuildById = previousRegistryById
   state.vehicleRegistrySnapshotValid = true
   state.vehicleRegistryTimestamp = state.simulationTime
-  state.vehicleRegistryTruncated = truncated
+  state.vehicleRegistryTruncated = work.truncated
   state.vehicleRegistryGeneration = state.vehicleRegistryGeneration + 1
-  return true
+  state.vehicleRegistryWork = nil
+  return true, true
+end
+
+state._roadmindHelpers.refreshVehicleRegistry = function()
+  if not state.vehicleRegistryWork then
+    state._roadmindHelpers.beginVehicleRegistryRefresh()
+  end
+  return state._roadmindHelpers.stepVehicleRegistryRefresh(VEHICLE_REGISTRY_BATCH_SIZE)
 end
 
 state._roadmindHelpers.projectedBoxRadius = function(target, axis)
@@ -7751,9 +7844,14 @@ state._roadmindHelpers.updateVehicleDetection = function(dt)
   end
 
   state.vehicleRegistryTimer = state.vehicleRegistryTimer + elapsed
-  if state.vehicleRegistryTimer >= updateInterval then
+  if not state.vehicleRegistryWork and state.vehicleRegistryTimer >= updateInterval then
     state.vehicleRegistryTimer = state.vehicleRegistryTimer % updateInterval
-    state._roadmindHelpers.refreshVehicleRegistry()
+    state._roadmindHelpers.beginVehicleRegistryRefresh()
+  end
+  -- Keep advancing a single registry build in small pieces on consecutive GE
+  -- frames. Detection below continues against the previous complete snapshot.
+  if state.vehicleRegistryWork then
+    state._roadmindHelpers.stepVehicleRegistryRefresh(VEHICLE_REGISTRY_BATCH_SIZE)
   end
 
   state.vehicleDetectionTimer = state.vehicleDetectionTimer + elapsed
