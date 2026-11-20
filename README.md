@@ -58,9 +58,11 @@ The map must show what RoadMind has observed or what a clearly identified struct
 
 The in-game UI app lives in `ui/modules/apps/roadmindmap/`. Add **RoadMind Map** from the in-game UI Apps library. Opening it starts the configured sensor suite only when it is not already running; closing it releases scanning only when the map started it.
 
-The map consumes a compact snapshot from the Game Engine Lua World Model. It renders the current vehicle and tracked traffic as low-poly meshes, recent fused raycast returns as spatial points, the NavGraph corridor as a road-surface prior, and the selected safe local trajectory in blue. The preview planner runs without enabling the vehicle controller.
+The map consumes a compact snapshot from the Game Engine Lua World Model. It renders the current vehicle and tracked traffic as low-poly meshes, fresh fused raycast returns, repeatedly confirmed static LiDAR geometry accumulated for the current level session, the NavGraph road corridor, nearby level POIs, and the selected safe local trajectory in blue. The preview planner runs without enabling vehicle actuation.
 
-Road width falls back to a clearly tagged conservative NavGraph heuristic when no edge-width metadata exists. Lane markings are drawn only when lane metadata is present; no lane boundaries are fabricated from a centreline. RGB semantics, live signal phases, and level POIs remain explicitly unavailable until their regular-Drive adapters are implemented and validated. The map has not yet passed repeatable in-game visual or performance tests.
+Road width is taken from NavGraph node radii when available, with an explicitly labelled conservative fallback. Directed lane data is decoded from NavGraph edge lane strings and incoming-node metadata. The preview planner evaluates actual forward lane centres when those metadata are available; otherwise it falls back to a conservative corridor and does not invent lane markings. POIs are loaded through the level sites manager and scene POI objects. Traffic lights use the current `core_trafficSignals` instance state when available; `signals.json` alone is treated as position/identity metadata, never as proof of a live phase.
+
+Regular BeamNG.drive camera mounts remain geometric coverage models, not RGB/semantic recognition. The map has not yet passed repeatable in-game visual, behaviour, or performance tests.
 
 ## Development scope
 

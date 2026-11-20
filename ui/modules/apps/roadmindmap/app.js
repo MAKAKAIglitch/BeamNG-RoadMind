@@ -22,6 +22,7 @@
         var pollTimer = null;
         var pollWatchdog = null;
         var rafId = 0;
+        var lastRenderedAt = 0;
         var destroyed = false;
         var polling = false;
         var lastSnapshotAt = 0;
@@ -345,14 +346,11 @@
           // Lane hints are shown only when the active NavGraph edge exposes
           // lane-count and lane-width metadata; otherwise lane markings stay absent.
           var laneModel = road.laneModel || {};
-          if (laneModel.status === "metadata" && Number(laneModel.laneWidth) > 2.3) {
-            var laneWidth = Number(laneModel.laneWidth);
-            var leftCount = clamp(Number(laneModel.lanesLeft) || 0, 0, 8);
-            var rightCount = clamp(Number(laneModel.lanesRight) || 0, 0, 8);
-            var laneMin = -rightCount * laneWidth;
-            var laneMax = leftCount * laneWidth;
-            for (var li = 1; li < leftCount + rightCount; li++) {
-              var laneOffset = laneMin + li * laneWidth;
+          var laneBoundaries = laneModel.laneBoundaryOffsets || [];
+          if (laneModel.status === "metadata" && laneBoundaries.length > 0) {
+            for (var li = 0; li < laneBoundaries.length; li++) {
+              var laneOffset = Number(laneBoundaries[li]);
+              if (!isFinite(laneOffset)) continue;
               for (var ls = 0; ls < corridor.length - 1; ls++) {
                 var la = corridor[ls];
                 var lb = corridor[ls + 1];
@@ -365,7 +363,7 @@
                 addLine([
                   {x: la.x + lnx * laneOffset, y: la.y + lny * laneOffset, z: la.z - 0.055},
                   {x: lb.x + lnx * laneOffset, y: lb.y + lny * laneOffset, z: lb.z - 0.055}
-                ], "#77838c", 0.8, 0.42, [5, 7]);
+                ], "#77838c", 0.85, 0.52, [5, 7]);
               }
             }
           }
@@ -405,6 +403,37 @@
             var marker = clamp(0.11 + (Number(item.observationCount) || 1) * 0.025, 0.11, 0.24);
             addBox({x: point.x, y: point.y, z: point.z}, marker, marker, marker, 0,
               "#829ba8", clamp(0.9 - Number(item.age || 0) * 0.18, 0.36, 0.88));
+          });
+
+          // Session geometry is retained only after repeated spatially stable LiDAR hits.
+          (snapshotData.staticGeometry || []).forEach(function (item) {
+            var point = localPoint(item.position, ego);
+            if (!point || Number(item.hitCount || 0) < 2) return;
+            var age = Number(item.dataAge) || 0;
+            var size = clamp(0.12 + Math.min(8, Number(item.hitCount) || 0) * 0.012, 0.12, 0.22);
+            addBox(point, size, size, size, 0, "#617d89", clamp(0.82 - age / 2400, 0.38, 0.82));
+          });
+
+          // Nearby level POIs and traffic signals are level/runtime metadata,
+          // never inferred from GPS or guessed from geometry.
+          (snapshotData.poi && snapshotData.poi.items || []).forEach(function (item) {
+            var point = localPoint(item.position, ego);
+            if (!point) return;
+            var color = item.kind === "fuel" ? "#b88b4b"
+              : item.kind === "charging" ? "#55a5a0"
+              : item.kind === "parking" ? "#7297c1" : "#8b83b5";
+            addBox({x: point.x, y: point.y, z: point.z + 0.45}, 0.72, 0.72, 0.34, 0, color, 0.9);
+          });
+          (snapshotData.signals && snapshotData.signals.items || []).forEach(function (signal) {
+            var point = localPoint(signal.position, ego);
+            if (!point) return;
+            var lamp = signal.color === "red" ? "#d94f54"
+              : signal.color === "amber" ? "#d5aa4d"
+              : signal.color === "green" ? "#50b88d" : "#75818a";
+            var signalAlpha = signal.relevantToCurrentSegment ? 0.98 : 0.55;
+            addBox({x: point.x, y: point.y, z: point.z + 1.7}, 0.26, 0.26, 2.8, 0, "#53616a", signalAlpha);
+            addBox({x: point.x, y: point.y, z: point.z + 3.15}, 0.72, 0.38, 0.9, 0, "#17212a", signalAlpha);
+            addBox({x: point.x, y: point.y, z: point.z + 3.18}, 0.27, 0.24, 0.25, 0, lamp, signal.live ? signalAlpha : 0.42);
           });
 
           // Vehicle meshes are deliberately simple low-poly silhouettes, not OBB rectangles.
@@ -481,9 +510,12 @@
           }
         }
 
-        function frame() {
+        function frame(timestamp) {
           if (destroyed) return;
-          draw(snapshot);
+          if (!lastRenderedAt || timestamp - lastRenderedAt >= 33) {
+            lastRenderedAt = timestamp;
+            draw(snapshot);
+          }
           rafId = window.requestAnimationFrame(frame);
         }
 
