@@ -170,21 +170,27 @@
       <p class="roadmind-note">{{ t("mapViewNote") }}</p>
       <BngRow :vertical="true">
         <template #label>{{ t("mapCameraHeight") }}: {{ settings.mapCameraHeightM }} m</template>
-        <BngSlider :min="4" :max="18" :step="0.5" :modelValue="settings.mapCameraHeightM"
+        <BngSlider :min="10" :max="20" :step="0.5" :modelValue="settings.mapCameraHeightM"
           :with-input="true" :disabled="busy"
           @update:modelValue="value => setSetting('mapCameraHeightM', Number(value))" />
       </BngRow>
       <BngRow :vertical="true">
         <template #label>{{ t("mapCameraDistance") }}: {{ settings.mapCameraDistanceM }} m</template>
-        <BngSlider :min="8" :max="32" :step="1" :modelValue="settings.mapCameraDistanceM"
+        <BngSlider :min="14" :max="36" :step="1" :modelValue="settings.mapCameraDistanceM"
           :with-input="true" :disabled="busy"
           @update:modelValue="value => setSetting('mapCameraDistanceM', Number(value))" />
       </BngRow>
       <BngRow :vertical="true">
         <template #label>{{ t("mapCameraLookAhead") }}: {{ settings.mapCameraLookAheadM }} m</template>
-        <BngSlider :min="6" :max="40" :step="1" :modelValue="settings.mapCameraLookAheadM"
+        <BngSlider :min="12" :max="48" :step="1" :modelValue="settings.mapCameraLookAheadM"
           :with-input="true" :disabled="busy"
           @update:modelValue="value => setSetting('mapCameraLookAheadM', Number(value))" />
+      </BngRow>
+      <BngRow :vertical="true">
+        <template #label>{{ t("mapForwardRange") }}: {{ settings.mapForwardRangeM }} m</template>
+        <BngSlider :min="100" :max="180" :step="10" :modelValue="settings.mapForwardRangeM"
+          :with-input="true" :disabled="busy"
+          @update:modelValue="value => setSetting('mapForwardRangeM', Number(value))" />
       </BngRow>
       <BngRow :vertical="true">
         <template #label>{{ t("mapRadius") }}: {{ settings.mapRadiusM }} m</template>
@@ -399,10 +405,11 @@ const EN = {
   performance: "Performance",
   performanceNote: "Economy runs only the forward LiDAR. Radar and ultrasonic start off; Balanced enables all three sensor groups. Changing a setting switches to Custom.",
   mapView: "RoadMind Map",
-  mapViewNote: "The map uses a moving circular memory area. Roads from NavGraph are preferred; traffic-inferred lanes are shown as estimates until enough independent vehicles confirm them. Polygon and FPS limits apply only to map drawing.",
+  mapViewNote: "FSD-style view builds a smooth 3D road preview from DecalRoad splines (120 m by default). NavGraph is the fallback; sensor hits and coverage are shown separately. Polygon and FPS limits affect only map drawing.",
   mapCameraHeight: "Camera height",
   mapCameraDistance: "Camera follow distance",
   mapCameraLookAhead: "Camera look-ahead",
+  mapForwardRange: "Road preview ahead",
   mapRadius: "Map memory radius",
   mapPolygonLimit: "Maximum map polygons",
   mapRenderFps: "Map render limit",
@@ -593,10 +600,11 @@ const RU = {
   performance: "Производительность",
   performanceNote: "В режиме «Экономный» работает только передний LiDAR. Радар и ультразвук выключены; «Сбалансированный» включает все три группы. Изменение параметра переключает профиль на свои настройки.",
   mapView: "Карта RoadMind",
-  mapViewNote: "Карта хранит данные в движущемся круге вокруг машины. Приоритет у NavGraph; полосы, выведенные по траекториям трафика, помечаются как оценочные. Лимиты полигонов и FPS относятся только к отрисовке карты.",
+  mapViewNote: "FSD-вид строит гладкую 3D-дорогу по сплайнам DecalRoad (120 м вперёд по умолчанию). NavGraph — резерв; точки и зоны сенсоров отображаются отдельно. Лимиты полигонов и FPS относятся только к карте.",
   mapCameraHeight: "Высота камеры",
   mapCameraDistance: "Дистанция камеры",
   mapCameraLookAhead: "Смещение камеры вперёд",
+  mapForwardRange: "Дальность дороги вперёд",
   mapRadius: "Радиус памяти карты",
   mapPolygonLimit: "Максимум полигонов",
   mapRenderFps: "Лимит FPS карты",
@@ -821,9 +829,10 @@ const settings = ref({
   visualizationInertiaEnabled: true,
   adaptiveFpsEnabled: false,
   targetFps: 60,
-  mapCameraHeightM: 7.5,
-  mapCameraDistanceM: 10.5,
-  mapCameraLookAheadM: 13,
+  mapCameraHeightM: 14,
+  mapCameraDistanceM: 20,
+  mapCameraLookAheadM: 20,
+  mapForwardRangeM: 120,
   mapRadiusM: 500,
   mapMaxPolygons: 3000,
   mapRenderFps: 30,
