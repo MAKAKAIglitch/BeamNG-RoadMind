@@ -98,6 +98,7 @@
 
         <text x="15" y="22" class="overlay-label">{{ t("view") }}: {{ mode === "follow" ? "3D FOLLOW" : "3D TOP" }}</text>
         <text x="465" y="22" text-anchor="end" class="overlay-label">{{ t("road") }}: {{ roadQuality }}</text>
+        <text x="15" y="39" class="overlay-label">{{ diagnosticLine }}</text>
         <text x="15" y="505" class="overlay-label">{{ t("cloud") }}: {{ meshPoints.length }} / {{ pointSourceLabel }}</text>
         <text x="465" y="505" text-anchor="end" class="overlay-label">{{ t("ego") }}</text>
       </svg>
@@ -275,7 +276,8 @@ function worldToLocal(point) {
 
 const camera = computed(() => {
   if (mode.value === "top") {
-    return { r: 0, f: -10, u: 32, targetR: 0, targetF: 20, targetU: 0, focal: 300, horizon: 280 }
+    // A high vertical camera shows the full 360-degree sensor neighbourhood.
+    return { r: 0, f: 0, u: 48, targetR: 0, targetF: 0, targetU: 0, focal: 190, horizon: 260 }
   }
   // Pull the camera back and slightly higher to expose more surrounding geometry.
   return { r: 0, f: -21.5, u: 9.2, targetR: 0, targetF: 27, targetU: 0, focal: 320, horizon: 302 }
@@ -770,6 +772,17 @@ const vehicles = computed(() => {
   }
   return result.sort((a, b) => Number(b.distance) - Number(a.distance))
 })
+
+const diagnosticLine = computed(() => {
+  const data = snapshot.value.diagnostics || {}
+  const value = key => Number(data[key]) || 0
+  return "REG " + value("registryCount")
+    + " · Z " + value("cameraZoneCount")
+    + " · CAM " + value("cameraCandidateCount")
+    + " · TRK " + value("trackedTargetCount")
+    + " · DRAW " + vehicles.value.length
+})
+
 const obstacles = computed(() => (snapshot.value.obstacles || []).map(obstacle => {
   const p = projectWorld(obstacle.position)
   if (!p || p.x < -30 || p.x > 510 || p.y < -30 || p.y > 550) return null
