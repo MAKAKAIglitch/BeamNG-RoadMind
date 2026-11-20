@@ -435,10 +435,15 @@ local function safeField(object, key)
   return nil
 end
 
-local function safeCall(object, methodName, ...)
-  local method = safeField(object, methodName)
+local function invokeObjectMethod(object, methodName, ...)
+  local method = object[methodName]
   if type(method) ~= "function" then return nil end
-  local ok, value = pcall(method, object, ...)
+  return method(object, ...)
+end
+
+local function safeCall(object, methodName, ...)
+  if object == nil then return nil end
+  local ok, value = pcall(invokeObjectMethod, object, methodName, ...)
   if ok then return value end
   return nil
 end
