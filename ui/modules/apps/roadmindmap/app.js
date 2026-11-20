@@ -1052,10 +1052,12 @@
             if (!zoneOrigin || !farLeft || !farRight) continue;
             var zoneColor = zone.sensor === "camera" ? "#4c9ce2"
               : (zone.sensor === "lidar" ? "#58cbdc"
-                : (zone.sensor === "radar" ? "#e8a451" : "#8fcf9c"));
+                : (zone.sensor === "radar" ? "#e8a451"
+                  : (zone.sensor === "ultrasonic" ? "#8fcf9c" : "#71818d")));
             var zoneAlpha = zone.sensor === "camera" ? 0.105
               : (zone.sensor === "lidar" ? 0.075
-                : (zone.sensor === "radar" ? 0.085 : 0.10));
+                : (zone.sensor === "radar" ? 0.085
+                  : (zone.sensor === "ultrasonic" ? 0.10 : 0.07)));
             var zoneEnabled = zone.enabled !== false;
             if (!zoneEnabled) {
               zoneColor = "#71818d";
