@@ -285,8 +285,8 @@ const camera = computed(() => {
     // A high vertical camera shows the full 360-degree sensor neighbourhood.
     return { r: 0, f: 0, u: 48, targetR: 0, targetF: 0, targetU: 0, focal: 190, horizon: 260 }
   }
-  // Pull the camera back and slightly higher to expose more surrounding geometry.
-  return { r: 0, f: -21.5, u: 9.2, targetR: 0, targetF: 27, targetU: 0, focal: 320, horizon: 302 }
+  // A modest rearward offset keeps the ego car prominent while revealing more road.
+  return { r: 0, f: -13.5, u: 6.5, targetR: 0, targetF: 27, targetU: 0, focal: 325, horizon: 302 }
 })
 
 function projectLocal(point) {
