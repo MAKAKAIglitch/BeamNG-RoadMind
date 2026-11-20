@@ -5134,10 +5134,34 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
   local rightHandDrive = state.levelRoadRules
     and state.levelRoadRules.rightHandDrive == true or false
 
-  local function roadEdgeHalfWidth(fromNode, toNode)
-    local radiusA, radiusB = tonumber(safeField(fromNode, "radius")), tonumber(safeField(toNode, "radius"))
-    if radiusA and radiusB and radiusA >= 1 and radiusA <= 30 and radiusB >= 1 and radiusB <= 30 then
+  local function countNavGraphLanes(edge)
+    local laneString = type(edge) == "table" and safeField(edge, "lanes") or nil
+    if type(laneString) ~= "string" or laneString == "" then return 0 end
+    local _, forward = string.gsub(laneString, "%+a", "")
+    local _, reverse = string.gsub(laneString, "%-a", "")
+    return forward + reverse
+  end
+
+  local function roadEdgeHalfWidth(fromNode, toNode, edge)
+    local radiusA = tonumber(safeField(fromNode, "radius"))
+    local radiusB = tonumber(safeField(toNode, "radius"))
+    local validA = radiusA and radiusA >= 1 and radiusA <= 30
+    local validB = radiusB and radiusB >= 1 and radiusB <= 30
+    if validA and validB then
       return (radiusA + radiusB) * 0.5, "navgraph-node-radius"
+    elseif validA then
+      return radiusA, "navgraph-node-radius"
+    elseif validB then
+      return radiusB, "navgraph-node-radius"
+    end
+
+    -- NavGraph lane counts are authoritative even when node radius is absent.
+    -- Use a conservative standard lane width plus a small total edge allowance.
+    local laneCount = countNavGraphLanes(edge)
+    if laneCount > 0 then
+      local estimatedFullWidth = laneCount * 3.5 + 0.6
+      return math.max(2.2, math.min(18, estimatedFullWidth * 0.5)),
+        "navgraph-lane-count-estimate"
     end
     return PLANNER_ROAD_HALF_WIDTH_M, "conservative-navgraph-heuristic"
   end
@@ -5188,19 +5212,21 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
         offsets[#offsets + 1] = rightHandDrive and (-halfWidth + (i + 0.5) * laneWidth)
           or (halfWidth - (i + 0.5) * laneWidth)
       end
-      for i = 1, forward - 1 do
-        boundaries[#boundaries + 1] = rightHandDrive and (-halfWidth + i * laneWidth)
-          or (halfWidth - i * laneWidth)
-      end
     else
       local divider = rightHandDrive and (-halfWidth + reverse * laneWidth)
         or (halfWidth - reverse * laneWidth)
+      result.centerDividerOffset = divider
       for i = 0, forward - 1 do
         offsets[#offsets + 1] = rightHandDrive and (divider + (i + 0.5) * laneWidth)
           or (divider - (i + 0.5) * laneWidth)
-        boundaries[#boundaries + 1] = rightHandDrive and (divider + i * laneWidth)
-          or (divider - i * laneWidth)
       end
+    end
+
+    -- Draw every physical lane separator across both directions, not just
+    -- the separators belonging to the current directed edge.
+    for i = 1, result.laneCount - 1 do
+      boundaries[#boundaries + 1] = rightHandDrive and (-halfWidth + i * laneWidth)
+        or (halfWidth - i * laneWidth)
     end
     result.status, result.directionAllowed = "metadata", true
     result.source = "NavGraph processed DecalRoad/map.json lane data"
@@ -5228,7 +5254,7 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
   end
 
   local firstEdge = readRoadEdge(nodeAId, nodeBId)
-  roadHalfWidth, widthSource = roadEdgeHalfWidth(nodeA, nodeB)
+  roadHalfWidth, widthSource = roadEdgeHalfWidth(nodeA, nodeB, firstEdge)
   laneModel = buildDirectedLaneModel(firstEdge, nodeAId, nodeBId, roadHalfWidth)
   if not edgeAllowsTravel(firstEdge, nodeAId, laneModel) then
     laneModel.status, laneModel.directionAllowed = "direction-restricted", false
@@ -5298,7 +5324,7 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
     if not p1 or not p2 then return end
     if (p1-position):length()>maxDistance and (p2-position):length()>maxDistance then return end
     local edge=readRoadEdge(fromId,toId)
-    local width=roadEdgeHalfWidth(fromNode,toNode)
+    local width=roadEdgeHalfWidth(fromNode,toNode,edge)
     local info=buildDirectedLaneModel(edge,fromId,toId,width)
     if not edgeAllowsTravel(edge,fromId,info) then return end
     queuedEdges[key]=true
@@ -5322,7 +5348,7 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
         local delta=p2-p1
         local flat=vec3(delta.x,delta.y,0)
         local length=flat:length()
-        local halfWidth,widthSource=roadEdgeHalfWidth(fromNode,toNode)
+        local halfWidth,widthSource=roadEdgeHalfWidth(fromNode,toNode,edge)
         local laneInfo=buildDirectedLaneModel(edge,fromId,toId,halfWidth)
         local drivability=tonumber(safeField(edge,"drivability"))
         if length>0.5 and (drivability==nil or drivability>0) and safeField(edge,"hiddenInNavi")~=true then
@@ -5366,7 +5392,7 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
                   if candidatePosition and (candidatePosition-position):length()<=maxDistance then
                     local candidateEdge=readRoadEdge(toId,candidateId)
                     if candidateEdge then
-                      local nextWidth=roadEdgeHalfWidth(toNode,candidateNode)
+                      local nextWidth=roadEdgeHalfWidth(toNode,candidateNode,candidateEdge)
                       local nextInfo=buildDirectedLaneModel(candidateEdge,toId,candidateId,nextWidth)
                       local allowed=edgeAllowsTravel(candidateEdge,toId,nextInfo)
                       local nextDrive=tonumber(safeField(candidateEdge,"drivability"))
@@ -5395,6 +5421,116 @@ state._roadmindHelpers.updateRoadUnderstanding = function()
   end
 
   laneGraph.segmentCount=#laneGraph.segments
+
+  -- Build joined road-surface corners from the same NavGraph topology used by AI.
+  -- Degree-two nodes receive a shared miter join; real graph junctions get a
+  -- compact surface patch so separate road strips do not leave holes.
+  local surfaceNodes = {}
+  local function registerSurfaceNeighbor(nodeId, neighborId, nodePosition, neighborPosition, halfWidth)
+    local key, neighborKey = tostring(nodeId), tostring(neighborId)
+    local entry = surfaceNodes[key]
+    if not entry then
+      entry = {
+        position = asVec3(nodePosition), neighbors = {}, byNeighbor = {},
+        maxHalfWidth = tonumber(halfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+      }
+      surfaceNodes[key] = entry
+    end
+    entry.maxHalfWidth = math.max(entry.maxHalfWidth or 0,
+      tonumber(halfWidth) or PLANNER_ROAD_HALF_WIDTH_M)
+    local neighbor = entry.byNeighbor[neighborKey]
+    if not neighbor then
+      neighbor = {
+        id = neighborKey, position = asVec3(neighborPosition),
+        halfWidth = tonumber(halfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+      }
+      entry.byNeighbor[neighborKey] = neighbor
+      entry.neighbors[#entry.neighbors + 1] = neighbor
+    else
+      neighbor.halfWidth = math.max(neighbor.halfWidth or 0,
+        tonumber(halfWidth) or PLANNER_ROAD_HALF_WIDTH_M)
+    end
+  end
+
+  for i = 1, #laneGraph.segments do
+    local segment = laneGraph.segments[i]
+    local p1, p2 = asVec3(segment.start), asVec3(segment.finish)
+    if p1 and p2 then
+      local halfWidth = tonumber(segment.roadHalfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+      registerSurfaceNeighbor(segment.from, segment.to, p1, p2, halfWidth)
+      registerSurfaceNeighbor(segment.to, segment.from, p2, p1, halfWidth)
+    end
+  end
+
+  local function roadSurfaceOffset(nodeId, otherId, travelDirection, atStart, halfWidth)
+    local segmentNormal = vec3(-travelDirection.y, travelDirection.x, 0)
+    local fallbackOffset = segmentNormal * halfWidth
+    local entry = surfaceNodes[tostring(nodeId)]
+    if not entry or #entry.neighbors ~= 2 then return fallbackOffset end
+
+    local otherNeighbor = nil
+    for i = 1, #entry.neighbors do
+      local candidate = entry.neighbors[i]
+      if candidate.id ~= tostring(otherId) then
+        otherNeighbor = candidate
+        break
+      end
+    end
+    local otherPosition = otherNeighbor and otherNeighbor.position
+    if not otherPosition or not entry.position then return fallbackOffset end
+
+    local toOther = vec3(
+      otherPosition.x - entry.position.x,
+      otherPosition.y - entry.position.y, 0
+    )
+    if toOther:length() < 0.1 then return fallbackOffset end
+    toOther = toOther:normalized()
+
+    local joinTangent = atStart and (travelDirection - toOther)
+      or (travelDirection + toOther)
+    if joinTangent:length() < 0.1 then return fallbackOffset end
+    joinTangent = joinTangent:normalized()
+    local miterNormal = vec3(-joinTangent.y, joinTangent.x, 0)
+    local denominator = miterNormal:dot(segmentNormal)
+    if denominator <= 0.45 then return fallbackOffset end
+
+    local joinHalfWidth = (halfWidth + (tonumber(otherNeighbor.halfWidth) or halfWidth)) * 0.5
+    local miterLength = joinHalfWidth / denominator
+    if miterLength > joinHalfWidth * 2.25 then return fallbackOffset end
+    return miterNormal * miterLength
+  end
+
+  laneGraph.surfaceJunctions = {}
+  for nodeId, entry in pairs(surfaceNodes) do
+    if #entry.neighbors >= 3 and entry.position then
+      laneGraph.surfaceJunctions[#laneGraph.surfaceJunctions + 1] = {
+        id = nodeId, position = vectorToPlainTable(entry.position),
+        radius = round2(math.max(2.2, entry.maxHalfWidth or PLANNER_ROAD_HALF_WIDTH_M)),
+        connections = #entry.neighbors
+      }
+    end
+  end
+  table.sort(laneGraph.surfaceJunctions, function(a, b) return a.id < b.id end)
+
+  for i = 1, #laneGraph.segments do
+    local segment = laneGraph.segments[i]
+    local p1, p2 = asVec3(segment.start), asVec3(segment.finish)
+    local delta = p1 and p2 and vec3(p2.x - p1.x, p2.y - p1.y, 0) or nil
+    if delta and delta:length() > 0.5 then
+      local direction = delta:normalized()
+      local halfWidth = tonumber(segment.roadHalfWidth) or PLANNER_ROAD_HALF_WIDTH_M
+      local startOffset = roadSurfaceOffset(segment.from, segment.to, direction, true, halfWidth)
+      local finishOffset = roadSurfaceOffset(segment.to, segment.from, direction, false, halfWidth)
+      segment.surfaceStartLeft = vectorToPlainTable(p1 + startOffset)
+      segment.surfaceStartRight = vectorToPlainTable(p1 - startOffset)
+      segment.surfaceFinishLeft = vectorToPlainTable(p2 + finishOffset)
+      segment.surfaceFinishRight = vectorToPlainTable(p2 - finishOffset)
+      local firstId, secondId = tostring(segment.from), tostring(segment.to)
+      if firstId > secondId then firstId, secondId = secondId, firstId end
+      segment.surfaceId = firstId .. "<>" .. secondId
+    end
+  end
+  laneGraph.surfaceGeometryStatus = "mitered-navgraph-edges-with-junction-patches"
 
   -- Infer lane centres from repeated, confirmed traffic trajectories when
   -- NavGraph does not publish lane metadata. Direction alignment prevents
