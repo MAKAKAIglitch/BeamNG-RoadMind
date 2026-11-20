@@ -838,8 +838,10 @@ const egoGeometry = computed(() => {
 function withRollingCloud(frame) {
   if (!frame || !Array.isArray(frame.lidarPoints)) return frame
 
-  const scanTime = Number(frame.lidarTimestamp)
-  const simulationTime = Number(frame.timestamp)
+  const scanTime = Number.isFinite(frame.lidarTimestamp)
+    ? Number(frame.lidarTimestamp) : Number.NaN
+  const simulationTime = Number.isFinite(frame.timestamp)
+    ? Number(frame.timestamp) : Number.NaN
 
   // The persistent world cloud is already accumulated by GE; do not duplicate it.
   if (frame.lidarPointSource === "accumulated") {
