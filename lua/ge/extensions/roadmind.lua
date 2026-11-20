@@ -21,9 +21,9 @@ local DEFAULT_SETTINGS = {
   adaptiveFpsEnabled = false,
   performanceProfilerEnabled = false,
   targetFps = 60,
-  mapCameraHeightM = 12,
-  mapCameraDistanceM = 22,
-  mapCameraLookAheadM = 36,
+  mapCameraHeightM = 14,
+  mapCameraDistanceM = 20,
+  mapCameraLookAheadM = 20,
   mapForwardRangeM = 120,
   mapRadiusM = 500,
   mapMaxPolygons = 3000,
@@ -2189,9 +2189,9 @@ state._roadmindHelpers.normalizeSettings = function(source)
     result.targetFps = math.floor((source.targetFps - 30) / 5 + 0.5) * 5 + 30
   end
   local mapNumericSettings = {
-    mapCameraHeightM = {8, 20, 0.5},
+    mapCameraHeightM = {10, 20, 0.5},
     mapCameraDistanceM = {14, 36, 1},
-    mapCameraLookAheadM = {24, 70, 1},
+    mapCameraLookAheadM = {12, 48, 1},
     mapForwardRangeM = {100, 180, 10},
     mapRadiusM = {100, 500, 25},
     mapMaxPolygons = {500, 8000, 500},
@@ -8562,6 +8562,8 @@ function M.getMapSnapshot()
           sensorReturns[#sensorReturns + 1] = {
             sensor = sensorName,
             position = vectorToPlainTable(point),
+            origin = asVec3(row.origin) and vectorToPlainTable(asVec3(row.origin)) or nil,
+            direction = asVec3(row.direction) and vectorToPlainTable(asVec3(row.direction)) or nil,
             age = round2(sensorAge),
             distance = round2(distance),
             name = row.name
@@ -8702,9 +8704,9 @@ function M.getMapSnapshot()
       coordinateFrame = "beamng-world"
     },
     mapSettings = {
-      cameraHeightM = tonumber(state.settings and state.settings.mapCameraHeightM) or 12,
-      cameraDistanceM = tonumber(state.settings and state.settings.mapCameraDistanceM) or 22,
-      cameraLookAheadM = tonumber(state.settings and state.settings.mapCameraLookAheadM) or 36,
+      cameraHeightM = tonumber(state.settings and state.settings.mapCameraHeightM) or 14,
+      cameraDistanceM = tonumber(state.settings and state.settings.mapCameraDistanceM) or 20,
+      cameraLookAheadM = tonumber(state.settings and state.settings.mapCameraLookAheadM) or 20,
       forwardRangeM = forwardRangeM,
       radiusM = tonumber(state.settings and state.settings.mapRadiusM) or 500,
       maxPolygons = tonumber(state.settings and state.settings.mapMaxPolygons) or 3000,
