@@ -793,11 +793,16 @@ local function refreshAttachedVisuals(frame, selectedJob)
       state.frame.cameras = buildCameras(frame)
     end
 
-    -- Calibration jobs already create these. Preserve the normal sensor-mount
-    -- and vehicle-geometry display without rebuilding it on every scan job.
-    if selectedJob ~= 4 or not sensorSettings.calibrationDebugEnabled then
-      state.frame.mounts = buildSensorMountDebug(frame)
-      state.frame.geometryDebug = buildGeometryDebug(frame)
+    -- Calibration diagnostics are optional. Avoid constructing their
+    -- sensor-mount arrays and vehicle geometry when the overlay is disabled.
+    if sensorSettings.calibrationDebugEnabled then
+      if selectedJob ~= 4 then
+        state.frame.mounts = buildSensorMountDebug(frame)
+        state.frame.geometryDebug = buildGeometryDebug(frame)
+      end
+    else
+      state.frame.mounts = {}
+      state.frame.geometryDebug = nil
     end
   end
 
