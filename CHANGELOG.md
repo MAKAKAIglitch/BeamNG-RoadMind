@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — solid graphite scanned-surface rendering
+
+- Render reconstructed scan coverage as a uniform dark graphite surface instead of mint/teal triangles.
+- Hide every triangle border and mesh edge so the internal tessellation is not visible in the map.
+- Remove edge-only geometry generation, cache storage, spatial reindexing and draw submission; retain only the face data required for the filled surface.
+
+
 ## Unreleased — RoadMind Map circular memory and lane-aware rendering
 
 - Replace the whole-map reset after 1 km of driving with a moving circular world-space cache (default radius 500 m); remove out-of-radius cells incrementally as the player moves.

@@ -129,3 +129,8 @@ Map drawing uses a configurable polygon budget (default 3,000; range 500–8,000
 Camera height, follow distance and look-ahead are configurable from RoadMind settings. Missing vehicle pose yields a dark perspective grid rather than fabricated road geometry. The player's car marker is drawn above map layers to remain visible when the polygon budget is reached.
 
 The limits reduce worst-case rendering and cache growth, but they are not proof of an FPS improvement. Validate with repeatable in-game before/after measurements and inspect road detail at several polygon budgets.
+
+
+## 11. Scanned surface appearance
+
+The local surface reconstruction still uses triangles internally to connect measured static points, but the RoadMind Map must not expose that triangulation visually. Faces are filled with a uniform opaque graphite-grey tone (#343a40) and are drawn without polygon outlines or mesh-edge strokes. Edge-only geometry is not generated, cached or submitted for drawing. This makes scanned coverage read as a continuous reconstructed surface against the darker unknown-area grid, rather than a mint wireframe.

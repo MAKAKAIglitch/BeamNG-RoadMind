@@ -35,9 +35,7 @@
         var cachedSurfacePoints = [];
         var cachedSurfacePointByKey = Object.create(null);
         var cachedSurfacePointBuckets = Object.create(null);
-        var cachedSurfaceEdgeKeys = Object.create(null);
         var cachedSurfaceFaces = [];
-        var cachedSurfaceEdges = [];
         var cachedSurfaceRenderBuckets = Object.create(null);
         var cachedSurfacePruneCenter = null;
         var cachedSurfacePruneRadius = null;
@@ -635,9 +633,7 @@
             cachedSurfacePoints = [];
             cachedSurfacePointByKey = Object.create(null);
             cachedSurfacePointBuckets = Object.create(null);
-            cachedSurfaceEdgeKeys = Object.create(null);
             cachedSurfaceFaces = [];
-            cachedSurfaceEdges = [];
             cachedSurfaceRenderBuckets = Object.create(null);
           }
 
@@ -654,10 +650,9 @@
           function addSurfaceRenderItem(item, x, y) {
             var key = surfaceRenderBucket(x, y);
             if (!cachedSurfaceRenderBuckets[key]) {
-              cachedSurfaceRenderBuckets[key] = {faces: [], edges: []};
+              cachedSurfaceRenderBuckets[key] = {faces: []};
             }
-            if (item.kind === "face") cachedSurfaceRenderBuckets[key].faces.push(item);
-            else cachedSurfaceRenderBuckets[key].edges.push(item);
+            cachedSurfaceRenderBuckets[key].faces.push(item);
           }
 
           function nearbySurfaceIndices(point, radius) {
@@ -701,15 +696,6 @@
               if (!cachedSurfacePointBuckets[keptBucketKey]) cachedSurfacePointBuckets[keptBucketKey] = [];
               cachedSurfacePointBuckets[keptBucketKey].push(cp);
             }
-            cachedSurfaceEdges = cachedSurfaceEdges.filter(function (edgeItem) {
-              if (!edgeItem || !edgeItem.a || !edgeItem.b) return false;
-              var adx = edgeItem.a.position.x - cacheCenterX;
-              var ady = edgeItem.a.position.y - cacheCenterY;
-              var bdx = edgeItem.b.position.x - cacheCenterX;
-              var bdy = edgeItem.b.position.y - cacheCenterY;
-              return adx * adx + ady * ady <= radiusSquared
-                && bdx * bdx + bdy * bdy <= radiusSquared;
-            });
             cachedSurfaceFaces = cachedSurfaceFaces.filter(function (faceItem) {
               if (!faceItem || !faceItem.a || !faceItem.b || !faceItem.c) return false;
               var vertices = [faceItem.a.position, faceItem.b.position, faceItem.c.position];
@@ -720,15 +706,7 @@
               }
               return true;
             });
-            cachedSurfaceEdgeKeys = Object.create(null);
             cachedSurfaceRenderBuckets = Object.create(null);
-            for (var ce = 0; ce < cachedSurfaceEdges.length; ce++) {
-              var keptEdge = cachedSurfaceEdges[ce];
-              cachedSurfaceEdgeKeys[keptEdge.key] = true;
-              addSurfaceRenderItem(keptEdge,
-                (keptEdge.a.position.x + keptEdge.b.position.x) * 0.5,
-                (keptEdge.a.position.y + keptEdge.b.position.y) * 0.5);
-            }
             for (var cf = 0; cf < cachedSurfaceFaces.length; cf++) {
               var keptFace = cachedSurfaceFaces[cf];
               addSurfaceRenderItem(keptFace,
@@ -818,33 +796,8 @@
               // Build the local graph once per newly discovered world point.
               // Old points and their links stay in memory until the 1 km segment rolls over.
               if (!point.airborne) {
-                var usedLongLinks = 0;
-                var maxEdges = Math.min(neighbors.length, 18);
-                for (var ei = 0; ei < maxEdges; ei++) {
-                  var edgeNeighbor = neighbors[ei];
-                  var edgeStable = point.confidence >= 0.42 &&
-                    edgeNeighbor.point.confidence >= 0.42 &&
-                    (point.support >= 1 || point.hits >= 2) &&
-                    (edgeNeighbor.point.support >= 1 || edgeNeighbor.point.hits >= 2);
-                  if (edgeNeighbor.distance > 3.15 &&
-                      (edgeNeighbor.distance > 4.55 || !edgeStable || usedLongLinks >= 3)) continue;
-                  if (edgeNeighbor.distance > 3.15) usedLongLinks++;
-                  var edgeLow = Math.min(pointIndex, edgeNeighbor.index);
-                  var edgeHigh = Math.max(pointIndex, edgeNeighbor.index);
-                  var edgeKey = edgeLow + ":" + edgeHigh;
-                  if (!cachedSurfaceEdgeKeys[edgeKey]) {
-                    cachedSurfaceEdgeKeys[edgeKey] = true;
-                    var edgeItem = {
-                      key: edgeKey, kind: "edge",
-                      a: point, b: edgeNeighbor.point
-                    };
-                    cachedSurfaceEdges.push(edgeItem);
-                    addSurfaceRenderItem(edgeItem,
-                      (point.position.x + edgeNeighbor.point.position.x) * 0.5,
-                      (point.position.y + edgeNeighbor.point.position.y) * 0.5);
-                  }
-                }
-
+                // Triangle faces are the only rendered surface primitive.
+                // No per-edge wireframe is built or submitted to the renderer.
                 var angularNeighbors = neighbors.slice(0, 9).slice().sort(function (a, b) {
                   return a.angle - b.angle;
                 });
@@ -901,7 +854,6 @@
           // Query only world-space buckets intersecting the current view. Geometry
           // remains global; only its projection is recalculated around the ego car.
           var visibleSurfaceFaces = [];
-          var visibleSurfaceEdges = [];
           var viewMinX = ego.position.x - 145;
           var viewMaxX = ego.position.x + 145;
           var viewMinY = ego.position.y - 145;
@@ -915,7 +867,6 @@
               var renderBucket = cachedSurfaceRenderBuckets[rx + ":" + ry];
               if (!renderBucket) continue;
               visibleSurfaceFaces = visibleSurfaceFaces.concat(renderBucket.faces);
-              visibleSurfaceEdges = visibleSurfaceEdges.concat(renderBucket.edges);
             }
           }
 
@@ -928,19 +879,10 @@
             if (Math.abs(faceA.x) > 58 || Math.abs(faceB.x) > 58 || Math.abs(faceC.x) > 58 ||
                 faceA.y < -45 || faceA.y > 130 || faceB.y < -45 || faceB.y > 130 ||
                 faceC.y < -45 || faceC.y > 130) continue;
-            addPolygon([faceA, faceB, faceC],
-              face.gapBridge ? "#315d70" : "#397786",
-              clamp(0.20 + face.confidence * 0.30, 0.20, 0.48),
-              face.gapBridge ? "#6c9eaa" : "#75b9c2");
-          }
-          for (var ve = 0; ve < visibleSurfaceEdges.length; ve++) {
-            var edge = visibleSurfaceEdges[ve];
-            var edgeA = localPoint(edge.a.position, ego);
-            var edgeB = localPoint(edge.b.position, ego);
-            if (!edgeA || !edgeB) continue;
-            if (Math.abs(edgeA.x) > 58 || Math.abs(edgeB.x) > 58 ||
-                edgeA.y < -45 || edgeA.y > 130 || edgeB.y < -45 || edgeB.y > 130) continue;
-            addLine([edgeA, edgeB], "#5ca3ad", 0.65, 0.30);
+            // The internal triangle mesh is only a fill tessellation. Use one
+            // opaque graphite tone and no borders so the scanned area reads as a
+            // completed continuous surface rather than a mint wireframe.
+            addPolygon([faceA, faceB, faceC], "#343a40", 0.96);
           }
 
           var poiItems = asArray(snapshotData.poi && snapshotData.poi.items);
