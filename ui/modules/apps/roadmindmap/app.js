@@ -381,10 +381,13 @@
             var width = clamp(Number(dimensions && dimensions.width) || (isPlayer ? 1.9 : 1.85), 1.0, 3.0);
             var height = clamp(Number(dimensions && dimensions.height) || 1.5, 0.8, 3.4);
             var base = {x: position.x, y: position.y, z: position.z};
-            var bodyColor = isPlayer ? "#278b9c" : (visualState === "predicted" ? "#9b8250" : "#8197a7");
-            var glassColor = isPlayer ? "#20414a" : "#344b59";
+            var cameraConfirmed = !isPlayer && visualState === "camera-confirmed";
+            var bodyColor = isPlayer ? "#278b9c"
+              : (cameraConfirmed ? "#69b8ce"
+                : (visualState === "predicted" ? "#9b8250" : "#8197a7"));
+            var glassColor = isPlayer ? "#20414a" : (cameraConfirmed ? "#1f5363" : "#344b59");
             var trimColor = "#111820";
-            var lightColor = isPlayer ? "#b7f4ff" : "#d8e7ee";
+            var lightColor = isPlayer || cameraConfirmed ? "#b7f4ff" : "#d8e7ee";
             function vehiclePoint(x, y, z) {
               var cosine = Math.cos(yaw || 0);
               var sine = Math.sin(yaw || 0);
@@ -754,7 +757,11 @@
             var staticPoint = localPoint(staticItem.position, ego);
             if (!staticPoint) continue;
             var staticAge = Number(staticItem.dataAge) || 0;
-            addMarker(staticPoint, "#718d9b",
+            var staticSources = asArray(staticItem.sourceSensors);
+            var staticColor = staticSources.indexOf("lidar") >= 0 ? "#6abfce"
+              : (staticSources.indexOf("radar") >= 0 ? "#bd986c"
+                : (staticSources.indexOf("ultrasonic") >= 0 ? "#91b77d" : "#718d9b"));
+            addMarker(staticPoint, staticColor,
               0.12 + Math.min(8, Number(staticItem.hitCount) || 0) * 0.012,
               clamp(0.82 - staticAge / 2400, 0.38, 0.82));
           }
@@ -1019,6 +1026,70 @@
             addPolygon([faceA, faceB, faceC], "#343a40", 1);
           }
 
+          // Sensor coverage cones: blue camera volumes, cyan LiDAR, amber radar,
+          // and green ultrasonic proximity fields. These are geometric sensor
+          // frustums, not fabricated camera pixels or semantic segmentation.
+          var sensorZones = asArray(snapshotData.sensorZones);
+          for (var zoneIndex = 0; zoneIndex < Math.min(sensorZones.length, 40); zoneIndex++) {
+            var zone = sensorZones[zoneIndex];
+            if (!zone || !zone.origin || !zone.forward || !zone.right) continue;
+            var zoneRange = clamp(Number(zone.range) || 0, 1, 140);
+            var horizontalFov = clamp(Number(zone.horizontalFov) || 35, 5, 170);
+            var halfSpread = zoneRange * Math.tan(horizontalFov * Math.PI / 360);
+            var farLeftWorld = {
+              x: zone.origin.x + zone.forward.x * zoneRange - zone.right.x * halfSpread,
+              y: zone.origin.y + zone.forward.y * zoneRange - zone.right.y * halfSpread,
+              z: zone.origin.z + zone.forward.z * zoneRange
+            };
+            var farRightWorld = {
+              x: zone.origin.x + zone.forward.x * zoneRange + zone.right.x * halfSpread,
+              y: zone.origin.y + zone.forward.y * zoneRange + zone.right.y * halfSpread,
+              z: zone.origin.z + zone.forward.z * zoneRange
+            };
+            var zoneOrigin = localPoint(zone.origin, ego);
+            var farLeft = localPoint(farLeftWorld, ego);
+            var farRight = localPoint(farRightWorld, ego);
+            if (!zoneOrigin || !farLeft || !farRight) continue;
+            var zoneColor = zone.sensor === "camera" ? "#4c9ce2"
+              : (zone.sensor === "lidar" ? "#58cbdc"
+                : (zone.sensor === "radar" ? "#e8a451" : "#8fcf9c"));
+            var zoneAlpha = zone.sensor === "camera" ? 0.105
+              : (zone.sensor === "lidar" ? 0.075
+                : (zone.sensor === "radar" ? 0.085 : 0.10));
+            addPolygon([zoneOrigin, farLeft, farRight], zoneColor, zoneAlpha);
+            addLine([zoneOrigin, farLeft], zoneColor, 0.75, 0.28, [3, 5]);
+            addLine([zoneOrigin, farRight], zoneColor, 0.75, 0.28, [3, 5]);
+            addLine([farLeft, farRight], zoneColor, 0.85, 0.34, [3, 5]);
+          }
+
+          // Actual sensor returns use their own layer and source colour.
+          // LiDAR returns are point-cloud samples; radar and ultrasonic returns
+          // retain their individual mount-to-hit direction where available.
+          var sensorReturns = asArray(snapshotData.sensorReturns);
+          for (var returnIndex = 0; returnIndex < Math.min(sensorReturns.length, 280); returnIndex++) {
+            var sensorReturn = sensorReturns[returnIndex];
+            if (!sensorReturn || !sensorReturn.position) continue;
+            var returnPoint = localPoint(sensorReturn.position, ego);
+            if (!returnPoint) continue;
+            var returnSensor = sensorReturn.sensor;
+            var returnColor = returnSensor === "lidar" ? "#66d3e2"
+              : (returnSensor === "radar" ? "#f0a958" : "#b7df92");
+            var returnAge = Number(sensorReturn.age) || 0;
+            var returnAlpha = clamp(0.88 - returnAge * 0.34, 0.30, 0.88);
+            if (sensorReturn.origin && returnSensor !== "lidar") {
+              var sensorOrigin = localPoint(sensorReturn.origin, ego);
+              if (sensorOrigin) {
+                addLine([sensorOrigin, returnPoint], returnColor,
+                  returnSensor === "ultrasonic" ? 1.0 : 0.75,
+                  returnAlpha * 0.48,
+                  returnSensor === "ultrasonic" ? null : [2, 4]);
+              }
+            }
+            addMarker(returnPoint, returnColor,
+              returnSensor === "lidar" ? 0.13 : (returnSensor === "radar" ? 0.22 : 0.28),
+              returnAlpha);
+          }
+
           var poiItems = asArray(snapshotData.poi && snapshotData.poi.items);
           for (var poiIndex = 0; poiIndex < Math.min(poiItems.length, 16); poiIndex++) {
             var poi = poiItems[poiIndex];
@@ -1062,8 +1133,11 @@
               yaw = Math.atan2(localHeading.x, localHeading.y);
             }
             if (point.y > -30 && point.y < 120 && Math.abs(point.x) < 50) {
-              addVehicle(point, track.dimensions || {}, yaw, false,
-                track.status === "confirmed" && age < 0.6 ? "confirmed" : "predicted");
+              var confirmedTraffic = track.status === "confirmed" && age < 0.6;
+              var visualState = confirmedTraffic
+                ? (track.cameraVisible === true ? "camera-confirmed" : "confirmed")
+                : "predicted";
+              addVehicle(point, track.dimensions || {}, yaw, false, visualState);
             }
           }
 
