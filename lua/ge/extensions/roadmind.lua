@@ -13,6 +13,7 @@ local DEFAULT_SETTINGS = {
   radarEnabled = false, radarDensity = "low", radarHz = 1,
   ultrasonicEnabled = false, ultrasonicDensity = "single", ultrasonicHz = 1,
   cameraDetectionEnabled = true,
+  autoScanOnVehicleSpawn = false,
   poseHz = 2,
   lidarPersistenceEnabled = false,
   lidarPointCloudLimit = 5000,
@@ -1407,12 +1408,23 @@ state._roadmindHelpers.attachVehicle = function(vehicle, id)
   state._roadmindHelpers.setVehicleSensorState(vehicle, state.visualizationEnabled, id)
 end
 
-state._roadmindHelpers.syncPlayerVehicle = function()
+state._roadmindHelpers.syncPlayerVehicle = function(allowStartOnChange)
   local vehicle = state._roadmindHelpers.getPlayerVehicle()
   local id = getVehicleId(vehicle)
 
   if id == state.activeVehicleId then
     return
+  end
+
+  local hadPreviousVehicle = state.activeVehicleId ~= nil
+  local wasScanning = state.visualizationEnabled
+  local autoResume = state.settings and state.settings.autoScanOnVehicleSpawn == true
+
+  -- A manually requested start is always allowed. Otherwise, a running
+  -- sensor suite only follows a replacement player vehicle when the opt-in
+  -- setting is enabled. Traffic vehicles are never given their own scanners.
+  if hadPreviousVehicle and wasScanning and not autoResume and allowStartOnChange ~= true then
+    state.visualizationEnabled = false
   end
 
   state._roadmindHelpers.detachPreviousVehicle()
@@ -2119,7 +2131,7 @@ state._roadmindHelpers.normalizeSettings = function(source)
 
   local booleanKeys = {
     "lidarEnabled", "radarEnabled", "ultrasonicEnabled", "cameraDetectionEnabled",
-    "driverTakeoverEnabled",
+    "autoScanOnVehicleSpawn", "driverTakeoverEnabled",
     "lidarPersistenceEnabled", "visualizationInertiaEnabled",
     "showLidar", "showRadar", "showUltrasonic", "showCameras",
     "showLocalization", "showDetectedVehicles", "showCalibration",
@@ -2565,7 +2577,7 @@ function M.setVisualizationEnabled(enabled)
     state.occlusionRaycastsLastCycle = 0
     state.occlusionRaycastsPerSecond = 0
     state._roadmindHelpers.resetFrame()
-    state._roadmindHelpers.syncPlayerVehicle()
+    state._roadmindHelpers.syncPlayerVehicle(true)
     if state.activeVehicle and state.activeVehicleId == previousId then
       state._roadmindHelpers.setVehicleSensorState(state.activeVehicle, true, state.activeVehicleId)
     end
@@ -7396,13 +7408,16 @@ function M.onUpdate(dt)
   local visualFrameFresh = state.frameAge <= MAX_FRAME_AGE
   local routePilotActive = state.routePilotEnabled
 
+  checkTimer = checkTimer + dt
+  if checkTimer >= CHECK_INTERVAL then
+    checkTimer = 0
+    state._roadmindHelpers.syncPlayerVehicle()
+  end
+
+  if not state.activeVehicle then return end
+
   if visualFrameFresh or routePilotActive then
     state.simulationTime = state.simulationTime + dt
-    checkTimer = checkTimer + dt
-    if checkTimer >= CHECK_INTERVAL then
-      checkTimer = 0
-      state._roadmindHelpers.syncPlayerVehicle()
-    end
     -- The route-safety clock continues while sensors are stale, so stale data
     -- can trigger a stop. The visual clock freezes when scanning is paused.
     state.roadUpdateTimer = (state.roadUpdateTimer or 0) + dt
@@ -7494,7 +7509,11 @@ end
 
 function M.onVehicleDestroyed(vehicleId)
   if vehicleId == state.activeVehicleId then
+    local autoResume = state.settings and state.settings.autoScanOnVehicleSpawn == true
     state._roadmindHelpers.detachPreviousVehicle()
+    if not autoResume then
+      state.visualizationEnabled = false
+    end
     state._roadmindHelpers.resetFrame()
     return
   end

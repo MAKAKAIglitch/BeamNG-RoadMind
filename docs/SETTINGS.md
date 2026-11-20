@@ -10,6 +10,8 @@ The target user-facing application for this branch is RoadMind Map. Sensor diagn
 
 The current prototype starts sensor scanning disabled. Acquisition is started explicitly from the RoadMind settings page or the existing Controls binding. Keep this fail-idle behavior unless a deliberate design change is validated.
 
+The `autoScanOnVehicleSpawn` setting defaults to `false`. When the active player vehicle is destroyed, replaced or respawned, a running sensor suite stops and stays stopped until the user starts it again. When the setting is enabled, RoadMind may resume scanning on the replacement player vehicle, but only if scanning was already active before the vehicle change. It does not start separate scanners on newly spawned traffic vehicles. An explicit manual start always takes precedence over this setting.
+
 Hiding a debug overlay is not the same as stopping a sensor:
 - disabling a sensor group stops its acquisition and reduces its query work;
 - hiding a 3D overlay only hides its debug rendering;
@@ -38,7 +40,8 @@ The existing prototype includes controls for:
 - sensor/debug overlay visibility;
 - optional adaptive sensor quality and speed-adaptive cadence;
 - optional detailed RoadMind Lua profiling;
-- vehicle-geometry status, manual recalibration and calibration overlay.
+- vehicle-geometry status, manual recalibration and calibration overlay;
+- optional automatic scan resumption after a player-vehicle spawn/replacement (off by default).
 
 The exact control set and ranges are defined by the current runtime implementation. Do not document a control as available unless it exists in the branch code.
 
@@ -58,6 +61,7 @@ The current codebase contains experimental route-pilot and ADAS controls. They a
 
 - Keep per-vehicle sensor mounts and calibration state separate from global performance profiles.
 - Do not reset a user's sensor selections when the active vehicle changes.
+- Keep automatic scan resumption after a player-vehicle replacement opt-in and disabled by default.
 - Revalidate mount transforms when the vehicle/configuration changes.
 - Mark unsupported sensors unavailable rather than showing a working but inert control.
 - Preserve the source and freshness of sensor data when quality adapts.

@@ -35,6 +35,12 @@
         >{{ status.visualizationEnabled ? t("stop") : t("start") }}</BngButton>
       </div>
       <p class="roadmind-note">{{ t("runtimeNote") }}</p>
+      <BngRow>
+        <template #label>{{ t("autoScanOnVehicleSpawn") }}</template>
+        <BngSwitch :modelValue="settings.autoScanOnVehicleSpawn" :disabled="busy"
+          @update:modelValue="value => setSetting('autoScanOnVehicleSpawn', value)" />
+      </BngRow>
+      <p class="roadmind-note">{{ t("autoScanOnVehicleSpawnNote") }}</p>
       <p v-if="status.currentFps !== undefined" class="roadmind-budget">
         {{ t("currentFps") }}: {{ status.currentFps.toFixed(0) }} / {{ settings.targetFps }} FPS
         · {{ t("sensorQuality") }}: {{ (status.adaptiveQualityTier || 0) + 1 }}/5
@@ -347,6 +353,8 @@ const EN = {
   start: "Start scanning",
   stop: "Stop scanning",
   runtimeNote: "The estimate counts scheduled scene raycasts. It is not a measured FPS or CPU result.",
+  autoScanOnVehicleSpawn: "Automatically resume scanning for a new player vehicle",
+  autoScanOnVehicleSpawnNote: "Off by default. When enabled, scanning resumes after the active player vehicle is replaced or respawned, but only if scanning was already running. Newly spawned traffic vehicles are not given separate scanners.",
   performance: "Performance",
   performanceNote: "Economy runs only the forward LiDAR. Radar and ultrasonic start off; Balanced enables all three sensor groups. Changing a setting switches to Custom.",
   adaptivePerformance: "Experimental load control",
@@ -531,6 +539,8 @@ const RU = {
   start: "Запустить сканирование",
   stop: "Остановить сканирование",
   runtimeNote: "Показано расчётное число запросов к сцене. Это не замер FPS или загрузки процессора.",
+  autoScanOnVehicleSpawn: "Автоматически возобновлять сканирование для новой машины игрока",
+  autoScanOnVehicleSpawnNote: "По умолчанию выключено. При включении сканирование возобновится после смены или повторного спавна активной машины игрока, только если до этого оно уже работало. Для новых машин трафика отдельные сканеры не запускаются.",
   performance: "Производительность",
   performanceNote: "В режиме «Экономный» работает только передний LiDAR. Радар и ультразвук выключены; «Сбалансированный» включает все три группы. Изменение параметра переключает профиль на свои настройки.",
   adaptivePerformance: "Экспериментальная подстройка нагрузки",
@@ -739,6 +749,7 @@ const settings = ref({
   preset: "economy",
   lidarEnabled: true,
   cameraDetectionEnabled: true,
+  autoScanOnVehicleSpawn: false,
   lidarQuality: "low",
   lidarHz: 1,
   radarEnabled: false,
