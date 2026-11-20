@@ -448,8 +448,15 @@ end
 local queueVehicleCommand
 
 local function asVec3(value)
-  local x, y, z = safeField(value, "x"), safeField(value, "y"), safeField(value, "z")
-  if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then return nil end
+  if value == nil then return nil end
+  -- Read the three components in one protected access instead of creating
+  -- three separate pcall closures for every vector conversion.
+  local ok, x, y, z = pcall(function()
+    return value.x, value.y, value.z
+  end)
+  if not ok or type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" then
+    return nil
+  end
   return vec3(x, y, z)
 end
 
