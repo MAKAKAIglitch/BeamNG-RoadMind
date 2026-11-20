@@ -171,7 +171,7 @@ const EN = {
   measured: "MEASURED",
   empty: "No current objects in the World Model.",
   waiting: "Waiting for RoadMind sensor data",
-  noCloud: "Waiting for LiDAR points · enable point accumulation for a persistent map",
+  noCloud: "Waiting for recent LiDAR returns to build the rolling 3D scene",
   visible: "visible",
   predicted: "predicted",
   stale: "stale",
@@ -200,7 +200,7 @@ const RU = {
   measured: "ИЗМЕРЕНО",
   empty: "В World Model пока нет объектов.",
   waiting: "Ожидание данных RoadMind",
-  noCloud: "Ожидание точек LiDAR · включи накопление облака для постоянной карты",
+  noCloud: "Ожидание отражений LiDAR для построения локальной 3D-карты",
   visible: "виден",
   predicted: "прогноз",
   stale: "устарел",
@@ -216,6 +216,11 @@ const mode = ref("follow")
 const loading = ref(false)
 const snapshot = ref({ vehicle: null, targets: [], candidates: [], obstacles: [], lidarPoints: [], road: {}, route: [] })
 let timer = null
+let lastLidarTimestamp = null
+const rollingCloud = new Map()
+const ROLLING_CLOUD_CELL_METERS = 0.42
+const ROLLING_CLOUD_TTL_SECONDS = 14
+const ROLLING_CLOUD_MAX_POINTS = 1800
 
 const BOX_EDGES = [
   [0, 1], [1, 2], [2, 3], [3, 0],
@@ -240,6 +245,7 @@ const pointSourceLabel = computed(() => {
   const source = snapshot.value.lidarPointSource
   if (source === "accumulated") return String(locale.value).toLowerCase().startsWith("ru") ? "накоплено" : "accumulated"
   if (source === "live") return String(locale.value).toLowerCase().startsWith("ru") ? "скан" : "live scan"
+  if (source === "rolling") return String(locale.value).toLowerCase().startsWith("ru") ? "окно сканирования" : "rolling window"
   return "—"
 })
 
@@ -829,6 +835,68 @@ const egoGeometry = computed(() => {
   return { top: topPoints, side, outline, roof }
 })
 
+function withRollingCloud(frame) {
+  if (!frame || !Array.isArray(frame.lidarPoints)) return frame
+
+  const scanTime = Number(frame.lidarTimestamp)
+  const simulationTime = Number(frame.timestamp)
+
+  // The persistent world cloud is already accumulated by GE; do not duplicate it.
+  if (frame.lidarPointSource === "accumulated") {
+    rollingCloud.clear()
+    lastLidarTimestamp = Number.isFinite(scanTime) ? scanTime : null
+    return frame
+  }
+
+  // Ingest each actual sensor scan once. UI polling does not create fake samples.
+  if (Number.isFinite(scanTime) && scanTime !== lastLidarTimestamp) {
+    if (lastLidarTimestamp !== null && scanTime < lastLidarTimestamp) {
+      rollingCloud.clear()
+    }
+    lastLidarTimestamp = scanTime
+
+    for (const sourcePoint of frame.lidarPoints) {
+      const x = Number(sourcePoint && sourcePoint.x)
+      const y = Number(sourcePoint && sourcePoint.y)
+      const z = Number(sourcePoint && sourcePoint.z)
+      if (![x, y, z].every(Number.isFinite)) continue
+
+      const cell = ROLLING_CLOUD_CELL_METERS
+      const key = Math.floor(x / cell) + ":"
+        + Math.floor(y / cell) + ":" + Math.floor(z / cell)
+      rollingCloud.delete(key)
+      rollingCloud.set(key, {
+        point: { x, y, z },
+        timestamp: scanTime
+      })
+    }
+  }
+
+  // Expire points in simulation time so stopped or stale scans do not linger.
+  if (Number.isFinite(simulationTime)) {
+    for (const [key, entry] of rollingCloud) {
+      const age = simulationTime - entry.timestamp
+      if (age > ROLLING_CLOUD_TTL_SECONDS || age < -0.5) {
+        rollingCloud.delete(key)
+      }
+    }
+  }
+
+  while (rollingCloud.size > ROLLING_CLOUD_MAX_POINTS) {
+    const oldestKey = rollingCloud.keys().next().value
+    if (oldestKey === undefined) break
+    rollingCloud.delete(oldestKey)
+  }
+
+  const lidarPoints = Array.from(rollingCloud.values(), entry => entry.point)
+  return {
+    ...frame,
+    lidarPoints,
+    lidarPointSource: lidarPoints.length ? "rolling" : frame.lidarPointSource,
+    lidarPointTotal: lidarPoints.length
+  }
+}
+
 async function refresh() {
   if (loading.value) return
   loading.value = true
@@ -837,7 +905,7 @@ async function refresh() {
     const result = await runRaw(cmd)
     if (result && result.ok === false) throw new Error(result.error || "RoadMind error")
     if (result && result.language) locale.value = result.language
-    if (result) snapshot.value = result
+    if (result) snapshot.value = withRollingCloud(result)
   } catch (e) {
     console.warn("RoadMind perception snapshot unavailable", e)
   } finally {
