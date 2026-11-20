@@ -882,7 +882,7 @@
             // The internal triangle mesh is only a fill tessellation. Use one
             // opaque graphite tone and no borders so the scanned area reads as a
             // completed continuous surface rather than a mint wireframe.
-            addPolygon([faceA, faceB, faceC], "#343a40", 0.96);
+            addPolygon([faceA, faceB, faceC], "#343a40", 1);
           }
 
           var poiItems = asArray(snapshotData.poi && snapshotData.poi.items);
