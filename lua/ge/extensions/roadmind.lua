@@ -6552,7 +6552,11 @@ end
 
 updateLocalTrajectoryPlanner = function()
   local previous = state.localPlanner or {}
-  if previous.timestamp and state.simulationTime - previous.timestamp < PLANNER_INTERVAL then
+  -- The map-only trajectory is a visual preview, not a control loop. Keep it
+  -- at 2 Hz while the map is open; Route Pilot retains its 5 Hz planning rate.
+  local updateInterval = state.routePilotEnabled and PLANNER_INTERVAL
+    or math.max(PLANNER_INTERVAL, 0.50)
+  if previous.timestamp and state.simulationTime - previous.timestamp < updateInterval then
     return previous
   end
   if not state.routePilotEnabled and not state.mapPlanningEnabled then
