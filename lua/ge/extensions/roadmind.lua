@@ -11,7 +11,7 @@ local DEFAULT_SETTINGS = {
   preset = "economy",
   lidarEnabled = true, lidarQuality = "low", lidarPointCount = 9, lidarHz = 1, lidarRange = 45,
   radarEnabled = false, radarDensity = "low", radarHz = 1,
-  ultrasonicEnabled = false, ultrasonicDensity = "single", ultrasonicHz = 1,
+  ultrasonicEnabled = true, ultrasonicDensity = "single", ultrasonicHz = 1,
   cameraDetectionEnabled = true,
   autoScanOnVehicleSpawn = false,
   poseHz = 2,
