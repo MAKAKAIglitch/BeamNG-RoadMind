@@ -804,7 +804,6 @@ local function buildPredictedTrajectory(frame, updateDt)
   local frontSin, frontCos, frontCount = 0, 0, 0
   local rearSin, rearCos, rearCount = 0, 0, 0
   local frontLongitudinal, rearLongitudinal = nil, nil
-  local rearLateral = nil
 
   if wheelCount >= 2 and maximumLongitudinal - minimumLongitudinal > 0.65 then
     local frontLimit = maximumLongitudinal - 0.30
@@ -835,7 +834,6 @@ local function buildPredictedTrajectory(frame, updateDt)
         rearCos = rearCos + math.cos(steeringAngle)
         rearCount = rearCount + 1
         rearLongitudinal = (rearLongitudinal or 0) + wheel.longitudinal
-        rearLateral = (rearLateral or 0) + wheel.lateral
       end
     end
   end
@@ -873,7 +871,8 @@ local function buildPredictedTrajectory(frame, updateDt)
 
   local bodyCenterLongitudinal = geometryValid
     and (geometry.forwardMin + geometry.forwardMax) * 0.5
-    or ((maximumLongitudinal + minimumLongitudinal) * 0.5)
+    or (frontCount > 0 and rearCount > 0
+      and (frontLongitudinal / frontCount + rearLongitudinal / rearCount) * 0.5 or 0)
   local rearToCenter = bodyCenterLongitudinal - rearY
   local curvature = (math.tan(frontAngle) - math.tan(rearAngle)) / wheelbase
   curvature = math.max(-0.75, math.min(0.75, curvature))
@@ -935,7 +934,8 @@ local function buildPredictedTrajectory(frame, updateDt)
     wheelbaseM = wheelbase,
     vehicleLengthM = vehicleLength,
     vehicleWidthM = vehicleWidth,
-    source = wheelCount >= 2 and "measured-wheel-axles" or "steering-input-estimate"
+    source = frontCount > 0 and rearCount > 0
+      and "measured-wheel-axles" or "steering-input-estimate"
   }
 end
 
