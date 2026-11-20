@@ -477,8 +477,28 @@
           }).filter(Boolean);
 
           if (graphSegments.length > 0) {
-            // Render the bounded connected road network, including branches.
-            // Lane marks appear only where NavGraph lane metadata exists.
+            // Fill graph junctions first; connected segment strips overlap them.
+            var surfaceJunctions = asArray(laneGraph.surfaceJunctions);
+            for (var gj = 0; gj < Math.min(surfaceJunctions.length, 48); gj++) {
+              var junction = surfaceJunctions[gj];
+              var junctionCenter = localPoint(junction.position, ego);
+              if (!junctionCenter) continue;
+              var junctionRadius = clamp(Number(junction.radius) || 3.5, 2.0, 18);
+              var junctionPolygon = [];
+              for (var jp = 0; jp < 10; jp++) {
+                var junctionAngle = Math.PI * 2 * jp / 10;
+                junctionPolygon.push({
+                  x: junctionCenter.x + Math.cos(junctionAngle) * junctionRadius,
+                  y: junctionCenter.y + Math.sin(junctionAngle) * junctionRadius,
+                  z: junctionCenter.z - 0.10
+                });
+              }
+              addPolygon(junctionPolygon, "#202a34", 0.98);
+            }
+
+            // A road surface is rendered once per physical edge, while directional
+            // lane data is kept on the corresponding NavGraph segment.
+            var renderedSurfaceIds = Object.create(null);
             for (var gs = 0; gs < Math.min(graphSegments.length, 96); gs++) {
               var graphSegment = graphSegments[gs];
               var graphStart = localPoint(graphSegment.start, ego);
@@ -491,48 +511,59 @@
               var gnx = -gy / gl;
               var gny = gx / gl;
               var ghw = clamp(Number(graphSegment.roadHalfWidth) || 3.5, 2.0, 18);
-              var gLeftA = {x: graphStart.x + gnx * ghw, y: graphStart.y + gny * ghw, z: graphStart.z - 0.10};
-              var gRightA = {x: graphStart.x - gnx * ghw, y: graphStart.y - gny * ghw, z: graphStart.z - 0.10};
-              var gLeftB = {x: graphFinish.x + gnx * ghw, y: graphFinish.y + gny * ghw, z: graphFinish.z - 0.10};
-              var gRightB = {x: graphFinish.x - gnx * ghw, y: graphFinish.y - gny * ghw, z: graphFinish.z - 0.10};
-              addPolygon([gLeftA, gRightA, gRightB, gLeftB],
-                graphSegment.current ? "#263644" : "#202a34", graphSegment.current ? 0.99 : 0.94,
-                graphSegment.current ? "#657e8d" : "#50616e");
-              addLine([gLeftA, gLeftB], "#667b89", graphSegment.current ? 1.25 : 1.0, 0.78);
-              addLine([gRightA, gRightB], "#667b89", graphSegment.current ? 1.25 : 1.0, 0.78);
+              var gLeftA = localPoint(graphSegment.surfaceStartLeft, ego);
+              var gRightA = localPoint(graphSegment.surfaceStartRight, ego);
+              var gLeftB = localPoint(graphSegment.surfaceFinishLeft, ego);
+              var gRightB = localPoint(graphSegment.surfaceFinishRight, ego);
+              if (!gLeftA || !gRightA || !gLeftB || !gRightB) {
+                gLeftA = {x: graphStart.x + gnx * ghw, y: graphStart.y + gny * ghw, z: graphStart.z - 0.10};
+                gRightA = {x: graphStart.x - gnx * ghw, y: graphStart.y - gny * ghw, z: graphStart.z - 0.10};
+                gLeftB = {x: graphFinish.x + gnx * ghw, y: graphFinish.y + gny * ghw, z: graphFinish.z - 0.10};
+                gRightB = {x: graphFinish.x - gnx * ghw, y: graphFinish.y - gny * ghw, z: graphFinish.z - 0.10};
+              }
 
-              var graphLaneModel = graphSegment.laneModel || {};
-              var graphBoundaries = asArray(graphLaneModel.laneBoundaryOffsets);
-              var laneModelKnown = graphLaneModel.status === "metadata";
-              var laneModelInferred = graphLaneModel.status === "traffic-inferred"
-                || graphLaneModel.status === "traffic-provisional";
-              if (laneModelKnown || laneModelInferred) {
-                for (var gb = 0; gb < graphBoundaries.length; gb++) {
-                  var boundaryOffset = Number(graphBoundaries[gb]);
-                  if (!isFinite(boundaryOffset)) continue;
-                  addLine([
-                    {x: graphStart.x + gnx * boundaryOffset, y: graphStart.y + gny * boundaryOffset, z: graphStart.z - 0.055},
-                    {x: graphFinish.x + gnx * boundaryOffset, y: graphFinish.y + gny * boundaryOffset, z: graphFinish.z - 0.055}
-                  ], laneModelKnown ? "#8799a7" : "#b18b56",
-                    graphSegment.current ? 1.05 : 0.85,
-                    laneModelKnown ? (graphSegment.current ? 0.72 : 0.54) : 0.65,
-                    laneModelKnown ? [5, 7] : [2, 5]);
+              var surfaceId = String(graphSegment.surfaceId || graphSegment.id || gs);
+              if (!renderedSurfaceIds[surfaceId]) {
+                renderedSurfaceIds[surfaceId] = true;
+                addPolygon([gLeftA, gRightA, gRightB, gLeftB],
+                  graphSegment.current ? "#2b3945" : "#222d37",
+                  graphSegment.current ? 0.99 : 0.96);
+                addLine([gLeftA, gLeftB], "#667b89", graphSegment.current ? 1.15 : 0.9, 0.64);
+                addLine([gRightA, gRightB], "#667b89", graphSegment.current ? 1.15 : 0.9, 0.64);
+
+                var graphLaneModel = graphSegment.laneModel || {};
+                var graphBoundaries = asArray(graphLaneModel.laneBoundaryOffsets);
+                var laneModelKnown = graphLaneModel.status === "metadata";
+                var laneModelInferred = graphLaneModel.status === "traffic-inferred"
+                  || graphLaneModel.status === "traffic-provisional";
+                if (laneModelKnown || laneModelInferred) {
+                  var centerDivider = Number(graphLaneModel.centerDividerOffset);
+                  var hasCenterDivider = isFinite(centerDivider);
+                  for (var gb = 0; gb < graphBoundaries.length; gb++) {
+                    var boundaryOffset = Number(graphBoundaries[gb]);
+                    if (!isFinite(boundaryOffset)) continue;
+                    var isCenterDivider = hasCenterDivider && Math.abs(boundaryOffset - centerDivider) < 0.05;
+                    addLine([
+                      {x: graphStart.x + gnx * boundaryOffset, y: graphStart.y + gny * boundaryOffset, z: graphStart.z - 0.055},
+                      {x: graphFinish.x + gnx * boundaryOffset, y: graphFinish.y + gny * boundaryOffset, z: graphFinish.z - 0.055}
+                    ], isCenterDivider ? "#c5aa78" : (laneModelKnown ? "#8799a7" : "#b18b56"),
+                      isCenterDivider ? 1.1 : (graphSegment.current ? 0.95 : 0.78),
+                      isCenterDivider ? 0.76 : (laneModelKnown ? (graphSegment.current ? 0.68 : 0.48) : 0.62),
+                      isCenterDivider ? null : (laneModelKnown ? [5, 7] : [2, 5]));
+                  }
                 }
               }
 
+              // Keep only the active lane highlight; ordinary lanes are represented
+              // by their physical separators, not artificial center stripes.
               var graphLanes = asArray(graphSegment.lanes);
               for (var gli = 0; gli < graphLanes.length; gli++) {
                 var graphLane = graphLanes[gli];
+                if (graphLane.id !== laneGraph.currentLaneId) continue;
                 var laneStart = localPoint(graphLane.start, ego);
                 var laneFinish = localPoint(graphLane.finish, ego);
                 if (laneStart && laneFinish) {
-                  var currentLane = graphLane.id === laneGraph.currentLaneId;
-                  var inferredLane = graphLane.source === "tracked-traffic-trajectories";
-                  addLine([laneStart, laneFinish],
-                    currentLane ? "#55b4f3" : (inferredLane ? "#b18b56" : "#718896"),
-                    currentLane ? 1.45 : 0.95,
-                    currentLane ? 0.88 : (inferredLane ? 0.56 : 0.46),
-                    inferredLane ? [3, 5] : [7, 8]);
+                  addLine([laneStart, laneFinish], "#55b4f3", 1.35, 0.82);
                 }
               }
             }
