@@ -167,6 +167,11 @@ local state = {
   levelRoadCacheFile = nil,
   levelRoadCacheStatus = "unavailable",
   levelRoadCacheNodeCount = 0,
+  mapRoadGeometryCache = nil,
+  mapRoadGeometryCacheTime = -math.huge,
+  mapRoadGeometryCachePosition = nil,
+  mapRoadGeometryCacheForward = nil,
+  mapRoadGeometryCacheRange = nil,
   navGraphCache = nil,
   navGraphGeneration = 0,
   levelRoadRules = {rightHandDrive = false, turnOnRed = false},
@@ -4993,6 +4998,12 @@ state._roadmindHelpers.loadLevelRoadGeometry = function(force)
         end
 
         if #nodes >= 2 then
+          local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+          for nodeIndex = 1, #nodes do
+            local node = nodes[nodeIndex]
+            minX, minY = math.min(minX, node.x), math.min(minY, node.y)
+            maxX, maxY = math.max(maxX, node.x), math.max(maxY, node.y)
+          end
           totalRoadNodes = totalRoadNodes + #nodes
           local name = tostring(safeField(item, "name")
             or safeField(item, "persistentId") or ("DecalRoad-" .. tostring(#roads + 1)))
@@ -5000,6 +5011,7 @@ state._roadmindHelpers.loadLevelRoadGeometry = function(force)
             id = tostring(safeField(item, "persistentId") or name),
             name = name,
             nodes = nodes,
+            minX = minX, minY = minY, maxX = maxX, maxY = maxY,
             lanesLeft = tonumber(safeField(item, "lanesLeft")),
             lanesRight = tonumber(safeField(item, "lanesRight")),
             autoLanes = safeField(item, "autoLanes"),
@@ -5038,6 +5050,23 @@ state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleF
   local right = vec3(flatForward.y, -flatForward.x, 0)
   local rangeAhead = math.max(100, math.min(180, tonumber(forwardRange) or 120))
   local rangeBehind, sideRange = 32, 78
+
+  -- The map is polled several times per second. Keep world-space samples until
+  -- the vehicle moves, turns, changes look-ahead, or the short cache expires.
+  local previousPosition = state.mapRoadGeometryCachePosition
+  local previousForward = state.mapRoadGeometryCacheForward
+  local movedEnough = not previousPosition
+  if previousPosition then
+    local dx, dy = vehiclePosition.x - previousPosition.x, vehiclePosition.y - previousPosition.y
+    movedEnough = dx * dx + dy * dy >= 25
+  end
+  local turnedEnough = not previousForward or flatForward:dot(previousForward) < 0.97
+  local rangeChanged = tonumber(state.mapRoadGeometryCacheRange) ~= rangeAhead
+  if state.mapRoadGeometryCache and not movedEnough and not turnedEnough and not rangeChanged
+      and state.simulationTime - (tonumber(state.mapRoadGeometryCacheTime) or -math.huge) < 0.8 then
+    return state.mapRoadGeometryCache, "cached-" .. tostring(state.levelRoadCacheStatus or "available")
+  end
+
   local maxRuns, maxSamples = 128, 1800
   local output, totalSamples = {}, 0
 
@@ -5140,11 +5169,16 @@ state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleF
     }
   end
 
+  local reachX = rangeAhead + rangeBehind + sideRange
+  local reachY = rangeAhead + rangeBehind + sideRange
   for roadIndex = 1, #roads do
     if #output >= maxRuns or totalSamples >= maxSamples then break end
     local road = roads[roadIndex]
+    local roadMayIntersect = not road.minX
+      or (road.maxX >= vehiclePosition.x - reachX and road.minX <= vehiclePosition.x + reachX
+        and road.maxY >= vehiclePosition.y - reachY and road.minY <= vehiclePosition.y + reachY)
     local nodes = road.nodes or {}
-    if #nodes >= 2 then
+    if roadMayIntersect and #nodes >= 2 then
       local averageWidth = 0
       for nodeIndex = 1, #nodes do averageWidth = averageWidth + nodes[nodeIndex].width end
       averageWidth = averageWidth / #nodes
@@ -5200,6 +5234,11 @@ state._roadmindHelpers.buildMapRoadGeometry = function(vehiclePosition, vehicleF
     end
   end
 
+  state.mapRoadGeometryCache = output
+  state.mapRoadGeometryCacheTime = state.simulationTime
+  state.mapRoadGeometryCachePosition = {x = vehiclePosition.x, y = vehiclePosition.y, z = vehiclePosition.z}
+  state.mapRoadGeometryCacheForward = vec3(flatForward.x, flatForward.y, 0)
+  state.mapRoadGeometryCacheRange = rangeAhead
   return output, state.levelRoadCacheStatus or "available"
 end
 
@@ -8182,6 +8221,11 @@ function M.onClientStartMission()
   state.levelRoadCacheFile = nil
   state.levelRoadCacheStatus = "unavailable"
   state.levelRoadCacheNodeCount = 0
+  state.mapRoadGeometryCache = nil
+  state.mapRoadGeometryCacheTime = -math.huge
+  state.mapRoadGeometryCachePosition = nil
+  state.mapRoadGeometryCacheForward = nil
+  state.mapRoadGeometryCacheRange = nil
   state.navGraphCache = nil
   state.levelPOICache = {}
   state.levelSignalCache = {status = "unavailable", items = {}}
@@ -8205,6 +8249,11 @@ function M.onClientEndMission()
   state.levelRoadCacheFile = nil
   state.levelRoadCacheStatus = "unavailable"
   state.levelRoadCacheNodeCount = 0
+  state.mapRoadGeometryCache = nil
+  state.mapRoadGeometryCacheTime = -math.huge
+  state.mapRoadGeometryCachePosition = nil
+  state.mapRoadGeometryCacheForward = nil
+  state.mapRoadGeometryCacheRange = nil
   state.navGraphCache = nil
   state.levelPOICache = {}
   state.levelSignalCache = {status = "unavailable", items = {}}
@@ -8375,6 +8424,12 @@ function M.getPerceptionSnapshot()
         dimensions = state._roadmindHelpers.cloneWorldModelValue(track.dimensions),
         orientation = state._roadmindHelpers.cloneWorldModelValue(track.orientation),
         sourceSensors = state._roadmindHelpers.copySensorSources(track.sourceSensors),
+        cameraVisible = (function()
+          for sourceIndex = 1, #(track.sourceSensors or {}) do
+            if track.sourceSensors[sourceIndex].sensor == "camera" then return true end
+          end
+          return false
+        end)(),
         dataAge = track.dataAge,
         visibilityAge = track.visibilityAge,
         confidence = track.confidence,
@@ -8477,6 +8532,80 @@ function M.getMapSnapshot()
   })
   road.laneGraph = nil
 
+  local forwardRangeM = tonumber(state.settings and state.settings.mapForwardRangeM) or 120
+  local decalRoads, decalRoadStatus = state._roadmindHelpers.buildMapRoadGeometry(
+    vehiclePosition, vehicle and vehicle.forward or nil, forwardRangeM)
+
+  local latest = state.latestData or {}
+  local sensorTimestamps = latest.sensorTimestamps or {}
+  local sensorSettings = state.settings or DEFAULT_SETTINGS
+  local sensorReturns, sensorZones, sensorStatus = {}, {}, {}
+  local sensorRows = {
+    lidar = latest.lidar and latest.lidar.rays or {},
+    radar = latest.radar and latest.radar.returns or {},
+    ultrasonic = latest.ultrasonic and latest.ultrasonic.returns or {}
+  }
+  local sensorLimits = {lidar = 180, radar = 64, ultrasonic = 32}
+  for _, sensorName in ipairs({"lidar", "radar", "ultrasonic"}) do
+    local enabled = sensorSettings[sensorName .. "Enabled"] == true
+    local sensorTimestamp = tonumber(sensorTimestamps[sensorName])
+    local sensorAge = sensorTimestamp and math.max(0, state.simulationTime - sensorTimestamp) or math.huge
+    local fresh = enabled and sensorAge <= 1.6
+    local count = 0
+    if fresh then
+      local rows = sensorRows[sensorName] or {}
+      for rowIndex = 1, math.min(#rows, sensorLimits[sensorName]) do
+        local row = rows[rowIndex]
+        local point = asVec3(row and (row.position or row))
+        local distance = vehiclePosition and point and (point - vehiclePosition):length() or math.huge
+        if point and distance <= math.max(140, forwardRangeM + 20) then
+          sensorReturns[#sensorReturns + 1] = {
+            sensor = sensorName,
+            position = vectorToPlainTable(point),
+            age = round2(sensorAge),
+            distance = round2(distance),
+            name = row.name
+          }
+          count = count + 1
+        end
+      end
+    end
+    sensorStatus[sensorName] = {
+      enabled = enabled,
+      fresh = fresh,
+      age = sensorAge < math.huge and round2(sensorAge) or nil,
+      returnCount = count
+    }
+  end
+
+  local zoneTimestamp = tonumber(sensorTimestamps.detectionZones)
+  local zonesFresh = zoneTimestamp ~= nil and state.simulationTime - zoneTimestamp <= 1.6
+  if zonesFresh and state._roadmindHelpers.buildSensorZones then
+    local zones = state._roadmindHelpers.buildSensorZones(latest, sensorSettings)
+    for zoneIndex = 1, math.min(#zones, 40) do
+      local zone = zones[zoneIndex]
+      if zone and zone.origin and zone.forward and zone.right then
+        sensorZones[#sensorZones + 1] = {
+          name = zone.name,
+          sensor = zone.sensor,
+          origin = vectorToPlainTable(zone.origin),
+          forward = vectorToPlainTable(zone.forward),
+          right = vectorToPlainTable(zone.right),
+          up = zone.up and vectorToPlainTable(zone.up) or nil,
+          range = zone.range,
+          minRange = zone.minRange,
+          horizontalFov = zone.horizontalFov,
+          verticalFov = zone.verticalFov
+        }
+      end
+    end
+  end
+  sensorStatus.camera = {
+    enabled = sensorSettings.cameraDetectionEnabled == true,
+    fresh = zonesFresh and sensorSettings.cameraDetectionEnabled == true,
+    mode = "geometric-frustum-and-vehicle-visibility"
+  }
+
   local routePath = routeState and routeState.route and routeState.route.path or {}
   local route = {}
   for i = 1, math.min(#routePath, 180) do
@@ -8550,7 +8679,18 @@ function M.getMapSnapshot()
     vehicle = state._roadmindHelpers.cloneWorldModelValue(vehicle),
     road = road,
     laneGraph = laneGraph,
+    decalRoads = decalRoads,
+    roadGeometryStatus = {
+      source = "items.level.json DecalRoad nodes",
+      status = decalRoadStatus,
+      roadCount = #decalRoads,
+      cacheRoadCount = #(state.levelRoadCache or {}),
+      cacheNodeCount = state.levelRoadCacheNodeCount or 0
+    },
     geometry = geometry,
+    sensorReturns = sensorReturns,
+    sensorZones = sensorZones,
+    sensorStatus = sensorStatus,
     vehicles = state._roadmindHelpers.cloneWorldModelValue(perception.targets or {}),
     staticGeometry = state._roadmindHelpers.cloneWorldModelValue(worldModel.staticGeometry or {}),
     sessionMap = {
@@ -8562,9 +8702,10 @@ function M.getMapSnapshot()
       coordinateFrame = "beamng-world"
     },
     mapSettings = {
-      cameraHeightM = tonumber(state.settings and state.settings.mapCameraHeightM) or 7.5,
-      cameraDistanceM = tonumber(state.settings and state.settings.mapCameraDistanceM) or 10.5,
-      cameraLookAheadM = tonumber(state.settings and state.settings.mapCameraLookAheadM) or 13,
+      cameraHeightM = tonumber(state.settings and state.settings.mapCameraHeightM) or 12,
+      cameraDistanceM = tonumber(state.settings and state.settings.mapCameraDistanceM) or 22,
+      cameraLookAheadM = tonumber(state.settings and state.settings.mapCameraLookAheadM) or 36,
+      forwardRangeM = forwardRangeM,
       radiusM = tonumber(state.settings and state.settings.mapRadiusM) or 500,
       maxPolygons = tonumber(state.settings and state.settings.mapMaxPolygons) or 3000,
       renderFps = tonumber(state.settings and state.settings.mapRenderFps) or 30
@@ -8602,6 +8743,11 @@ function M.getMapSnapshot()
       laneGraphLanes = laneGraph.laneCount or 0,
       laneGraphJunctions = laneGraph.junctionCount or 0,
       laneGraphConnections = laneGraph.connectionCount or 0,
+      decalRoadStatus = decalRoadStatus,
+      decalRoadSegments = #decalRoads,
+      lidarReturns = sensorStatus.lidar and sensorStatus.lidar.returnCount or 0,
+      radarReturns = sensorStatus.radar and sensorStatus.radar.returnCount or 0,
+      ultrasonicReturns = sensorStatus.ultrasonic and sensorStatus.ultrasonic.returnCount or 0,
       plannerStatus = planner.status or "waiting",
       plannerReason = planner.reason or nil,
       sessionMapCells = state.sessionStaticMapCount or 0,
