@@ -4271,6 +4271,7 @@ buildWorldModel = function()
 
       model.targets[#model.targets + 1] = {
         trackId = track.trackId,
+        sourceVehicleId = track.sourceVehicleId,
         status = track.status,
         position = position,
         predictedPosition = state._roadmindHelpers.finiteWorldVector(track.predictedPosition),
@@ -6498,12 +6499,17 @@ function M.getPerceptionSnapshot()
 
   local model = M.getWorldModel()
   local targets = {}
+  local trackedVehicleIds = {}
   local tracks = model and model.targets or latest.tracks or {}
   for i = 1, math.min(#tracks, 48) do
     local track = tracks[i]
     if type(track) == "table" and type(track.position) == "table" then
+      if track.sourceVehicleId ~= nil then
+        trackedVehicleIds[tostring(track.sourceVehicleId)] = true
+      end
       targets[#targets + 1] = {
         trackId = track.trackId,
+        sourceVehicleId = track.sourceVehicleId,
         status = track.status,
         position = state._roadmindHelpers.cloneWorldModelValue(track.position),
         predictedPosition = state._roadmindHelpers.cloneWorldModelValue(track.predictedPosition),
@@ -6516,6 +6522,66 @@ function M.getPerceptionSnapshot()
         estimatedSpeed = track.estimatedSpeed,
         estimatedRelativeSpeed = track.estimatedRelativeSpeed
       }
+    end
+  end
+
+  -- Candidates are a display-only feed. Keep in-frustum/near-sensor vehicles
+  -- visible in Perception even before a bounded occlusion ray confirms them.
+  -- They never enter the World Model, ADAS or planner until confirmed.
+  local candidates = {}
+  local candidateIds = {}
+  for i = 1, math.min(#(state.vehicleCandidates or {}), 64) do
+    local candidate = state.vehicleCandidates[i]
+    if type(candidate) == "table" then
+      local sourceVehicleId = candidate.sourceVehicleId or candidate.id
+      local key = sourceVehicleId ~= nil and tostring(sourceVehicleId) or nil
+      local visibility = candidate.visibility or "unverified"
+      local observedAt = tonumber(candidate.observationTimestamp or candidate.registryTimestamp)
+      local dataAge = observedAt and math.max(0, state.simulationTime - observedAt) or math.huge
+      local position = state._roadmindHelpers.finiteWorldVector(candidate.position)
+      local dimensions = candidate.dimensions
+      local orientation = candidate.orientation
+      local validDimensions = type(dimensions) == "table"
+        and state._roadmindHelpers.isFiniteNumber(dimensions.length)
+        and dimensions.length > 0 and dimensions.length <= 30
+        and state._roadmindHelpers.isFiniteNumber(dimensions.width)
+        and dimensions.width > 0 and dimensions.width <= 30
+        and state._roadmindHelpers.isFiniteNumber(dimensions.height)
+        and dimensions.height > 0 and dimensions.height <= 10
+      local validOrientation = type(orientation) == "table"
+        and state._roadmindHelpers.finiteWorldVector(orientation.forward) ~= nil
+        and state._roadmindHelpers.finiteWorldVector(orientation.right) ~= nil
+        and state._roadmindHelpers.finiteWorldVector(orientation.up) ~= nil
+
+      if key and not trackedVehicleIds[key] and not candidateIds[key]
+          and visibility ~= "occluded" and dataAge <= 1.0
+          and position and validDimensions and validOrientation then
+        candidateIds[key] = true
+        candidates[#candidates + 1] = {
+          candidateId = "candidate-" .. key,
+          sourceVehicleId = sourceVehicleId,
+          status = visibility == "visible" and "confirmed" or "unverified",
+          visibility = visibility,
+          position = position,
+          predictedPosition = position,
+          dimensions = {
+            length = dimensions.length,
+            width = dimensions.width,
+            height = dimensions.height
+          },
+          orientation = {
+            forward = state._roadmindHelpers.finiteWorldVector(orientation.forward),
+            right = state._roadmindHelpers.finiteWorldVector(orientation.right),
+            up = state._roadmindHelpers.finiteWorldVector(orientation.up)
+          },
+          sourceSensors = state._roadmindHelpers.copySensorSources(candidate.sensorSources),
+          dataAge = round2(dataAge),
+          visibilityAge = candidate.visibilityAge,
+          confidence = visibility == "visible" and 0.62 or 0.28,
+          distance = candidate.distance,
+          isCandidate = true
+        }
+      end
     end
   end
 
@@ -6600,6 +6666,7 @@ function M.getPerceptionSnapshot()
     frameAge = state.frameAge,
     vehicle = vehicle,
     targets = targets,
+    candidates = candidates,
     obstacles = obstacles,
     lidarPoints = lidarPoints,
     lidarPointSource = pointCloudSource,
