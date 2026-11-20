@@ -6539,7 +6539,7 @@ function M.getPerceptionSnapshot()
   local lidarPointLimit = 1400
   local pointCloudSource = "none"
   local function appendPerceptionPoint(point)
-    if type(point) ~= "table" or not position then return end
+    if type(point) ~= "table" or not position or not forward or not right then return end
     local x, y, z = tonumber(point.x), tonumber(point.y), tonumber(point.z)
     if not x or not y or not z
         or x ~= x or y ~= y or z ~= z
@@ -6571,7 +6571,7 @@ function M.getPerceptionSnapshot()
   end
 
   -- A live scan still gives the view useful geometry when point accumulation is off.
-  if #lidarCandidates == 0 and position and type(latest.lidar) == "table"
+  if #lidarCandidates == 0 and position and forward and right and type(latest.lidar) == "table"
       and type(latest.lidar.rays) == "table" then
     for i = 1, #latest.lidar.rays do
       local ray = latest.lidar.rays[i]
@@ -6595,7 +6595,7 @@ function M.getPerceptionSnapshot()
   end
 
   return {
-    schemaVersion = 1,
+    schemaVersion = 2,
     timestamp = state.simulationTime,
     frameAge = state.frameAge,
     vehicle = vehicle,
